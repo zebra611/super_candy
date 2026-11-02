@@ -27,6 +27,7 @@ import sys
 import threading
 import time
 import uuid
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -318,15 +319,33 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    """启动服务。端口优先取命令行参数，其次环境变量 PORT，默认 8000。"""
+    """启动服务。端口优先取命令行参数，其次环境变量 PORT，默认 8000。
+
+    服务起来后自动用默认浏览器打开页面，省得手动复制地址。
+    不想自动打开就设环境变量 NO_BROWSER=1（自动化测试时用）。
+    """
     events.init_db()
     port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+
+    url = "http://127.0.0.1:%d" % port
     print("super_candy 哑链路已启动")
     print("  场景：%s" % config_loader.scene_name())
-    print("  打开：http://127.0.0.1:%d" % port)
+    print("  打开：%s" % url)
     print("  事件库：%s" % events.DB_PATH)
     print("  停止：Ctrl+C")
+
+    # 延后 1.5 秒再开浏览器：服务已经在监听，页面一打开就能拿到数据，
+    # 不会出现"连不上服务"的假报错。用守护线程，不影响主线程阻塞。
+    if os.environ.get("NO_BROWSER") != "1":
+        def _open():
+            time.sleep(1.5)
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass   # 打不开浏览器不算错误，用户手动点地址即可
+        threading.Thread(target=_open, daemon=True).start()
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:
