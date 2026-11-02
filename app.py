@@ -321,23 +321,32 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     """启动服务。端口优先取命令行参数，其次环境变量 PORT，默认 8000。
 
-    服务起来后自动用默认浏览器打开页面，省得手动复制地址。
-    不想自动打开就设环境变量 NO_BROWSER=1（自动化测试时用）。
+    绑定地址的选择规则（部署到云端时必须监听 0.0.0.0，否则外部访问不到）：
+        - 显式给了 HOST 环境变量 → 用它；
+        - 否则如果存在 PORT 环境变量（说明跑在托管沙箱里）→ 0.0.0.0；
+        - 否则（本地自己跑）→ 127.0.0.1，只对本机开放，更安全。
+
+    本地跑会自动打开浏览器；部署环境不打开（没有显示器，也没必要）。
+    不想自动打开就设 NO_BROWSER=1。
     """
     events.init_db()
     port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", "8000"))
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    deployed = "PORT" in os.environ
+    host = os.environ.get("HOST") or ("0.0.0.0" if deployed else "127.0.0.1")
+
+    server = ThreadingHTTPServer((host, port), Handler)
 
     url = "http://127.0.0.1:%d" % port
     print("super_candy 哑链路已启动")
     print("  场景：%s" % config_loader.scene_name())
-    print("  打开：%s" % url)
+    print("  监听：%s:%d" % (host, port))
+    print("  本地地址：%s" % url)
     print("  事件库：%s" % events.DB_PATH)
     print("  停止：Ctrl+C")
 
     # 延后 1.5 秒再开浏览器：服务已经在监听，页面一打开就能拿到数据，
     # 不会出现"连不上服务"的假报错。用守护线程，不影响主线程阻塞。
-    if os.environ.get("NO_BROWSER") != "1":
+    if not deployed and os.environ.get("NO_BROWSER") != "1":
         def _open():
             time.sleep(1.5)
             try:
