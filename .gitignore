@@ -1,0 +1,29 @@
+# 运行时生成，不进仓库
+data/
+*.db
+*.db-journal
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 密钥与本地配置（绝对不能提交）
+.env
+.env.*
+config.local.json
+
+# 音频与模型（大文件，别进 git）
+*.wav
+*.mp3
+*.webm
+*.onnx
+*.pt
+*.bin
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
