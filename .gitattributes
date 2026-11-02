@@ -1,0 +1,8 @@
+# 统一换行符，避免 Windows 协作时满仓库显示"改了一整行"
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.wav binary
+*.webm binary

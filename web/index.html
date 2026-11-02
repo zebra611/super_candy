@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>super_candy · 哑链路</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --card: #ffffff; --line: #e3e2dd;
+    --ink: #1f1f1d; --muted: #6b6a65; --blue: #185fa5; --blue-bg: #e6f1fb;
+    --amber: #854f0b; --amber-bg: #faeeda; --gray-bg: #f1efe8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    font-size: 14px; line-height: 1.6;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font-size: 18px; font-weight: 500; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button {
+    font: inherit; padding: 8px 16px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: #fff; color: var(--ink);
+  }
+  button:hover { border-color: #c9c8c2; }
+  button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+  button.danger { background: #fff; border-color: #e0b4b4; color: #a32d2d; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input[type=text] {
+    flex: 1; min-width: 200px; font: inherit; padding: 8px 12px;
+    border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink);
+  }
+  #log { min-height: 220px; max-height: 420px; overflow-y: auto; }
+  .msg { display: flex; gap: 8px; margin-bottom: 10px; }
+  .who { flex: 0 0 46px; color: var(--muted); font-size: 12px; padding-top: 2px; }
+  .bubble { flex: 1; padding: 8px 12px; border-radius: 8px; background: var(--gray-bg); }
+  .bubble.agent { background: var(--blue-bg); color: #0c447c; }
+  .bubble.sys { background: #fff; border: 1px dashed var(--line); color: var(--muted); font-size: 12px; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--amber-bg); color: var(--amber); margin-left: 6px; }
+  .meters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .meter { background: var(--gray-bg); border-radius: 8px; padding: 10px 12px; }
+  .meter .k { font-size: 11px; color: var(--muted); }
+  .meter .v { font-size: 17px; font-weight: 500; }
+  #events { font-family: Consolas, monospace; font-size: 11px; color: var(--muted); white-space: pre-wrap; max-height: 240px; overflow-y: auto; }
+  .hint { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>super_candy · 外呼数字员工哑链路</h1>
+  <div class="sub" id="sceneLine">正在连接服务…</div>
+
+  <div class="card">
+    <div class="row">
+      <button id="btnStart" class="primary">开始通话</button>
+      <button id="btnRec" disabled>按下说话</button>
+      <button id="btnEnd" disabled class="danger">挂断</button>
+      <span class="hint" id="sessionLine">未开始</span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="textInput" placeholder="没有麦克风就打字（调试用）" disabled>
+      <button id="btnSend" disabled>发送</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="log"></div>
+  </div>
+
+  <div class="card">
+    <div class="meters">
+      <div class="meter"><div class="k">本轮总耗时</div><div class="v" id="mTotal">—</div></div>
+      <div class="meter"><div class="k">识别 / 编排 / 合成</div><div class="v" id="mSplit" style="font-size:13px">—</div></div>
+      <div class="meter"><div class="k">P50 / P95（全部轮次）</div><div class="v" id="mPct" style="font-size:13px">—</div></div>
+      <div class="meter"><div class="k">闭环通话数</div><div class="v" id="mClosed">—</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <strong style="font-weight:500">事件链（这通电话到底发生了什么）</strong>
+      <button id="btnEvents" disabled>刷新</button>
+    </div>
+    <div id="events">还没有事件。</div>
+  </div>
+</div>
+
+<script>
+// 全部状态放这里，避免到处找变量。
+const S = { sessionId: null, recorder: null, chunks: [], recording: false, busy: false };
+
+const $ = (id) => document.getElementById(id);
+
+function log(who, text, tag) {
+  const box = document.createElement("div");
+  box.className = "msg";
+  const cls = who === "客服" ? "bubble agent" : (who === "系统" ? "bubble sys" : "bubble");
+  box.innerHTML = '<div class="who">' + who + '</div><div class="' + cls + '">' +
+                  escapeHtml(text) + (tag ? '<span class="tag">' + escapeHtml(tag) + '</span>' : '') + '</div>';
+  $("log").appendChild(box);
+  $("log").scrollTop = $("log").scrollHeight;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+// 启动时拉一次健康检查，确认后端活着
+async function boot() {
+  try {
+    const r = await fetch("/api/health");
+    const d = await r.json();
+    $("sceneLine").textContent = "场景：" + d.scene + " · 服务已就绪";
+  } catch (e) {
+    $("sceneLine").textContent = "连不上服务，确认 python app.py 是否在跑";
+  }
+}
+
+// 开始通话：拿 session_id，之后每一轮都要带它
+async function startCall() {
+  const r = await fetch("/api/call/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  const d = await r.json();
+  S.sessionId = d.session_id;
+  $("sessionLine").textContent = "会话 " + d.session_id;
+  $("btnStart").disabled = true;
+  $("btnRec").disabled = false;
+  $("btnEnd").disabled = false;
+  $("textInput").disabled = false;
+  $("btnSend").disabled = false;
+  $("btnEvents").disabled = false;
+  log("系统", "通话已建立，可以说话了。状态机从 GREETING 开始，每说一轮推进一格。");
+}
+
+// 录音：点一次开始、再点一次结束（半双工，骨架阶段够用）
+async function toggleRec() {
+  if (S.busy) return;
+  if (!S.recording) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      S.recorder = new MediaRecorder(stream);
+      S.chunks = [];
+      S.recorder.ondataavailable = (e) => { if (e.data.size) S.chunks.push(e.data); };
+      S.recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());   // 及时释放麦克风
+        const blob = new Blob(S.chunks, { type: "audio/webm" });
+        const b64 = await blobToBase64(blob);
+        $("btnRec").textContent = "按下说话";
+        log("系统", "录音结束，已上传 " + Math.round(blob.size / 1024) + " KB，开始走假识别链路…");
+        sendTurn({ audio_b64: b64 });
+      };
+      S.recorder.start();
+      S.recording = true;
+      $("btnRec").textContent = "停止并发送";
+    } catch (e) {
+      log("系统", "拿不到麦克风：" + e.message + "（改用下面打字）");
+    }
+  } else {
+    S.recorder.stop();
+    S.recording = false;
+  }
+}
+
+function blobToBase64(blob) {
+  return new Promise((res) => {
+    const fr = new FileReader();
+    fr.onload = () => res(String(fr.result).split(",")[1] || "");
+    fr.readAsDataURL(blob);
+  });
+}
+
+// 一轮对话：把音频或文字发给后端，拿回回复并播报
+async function sendTurn(payload) {
+  if (!S.sessionId || S.busy) return;
+  S.busy = true;
+  $("btnSend").disabled = true;
+  try {
+    const r = await fetch("/api/turn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Object.assign({ session_id: S.sessionId }, payload))
+    });
+    const d = await r.json();
+    if (d.error) { log("系统", "出错了：" + d.error); return; }
+
+    log("用户", d.user_text);
+    log("客服", d.reply_text, d.next_stage);
+    if (d.tool_result) {
+      log("系统", "工具调用：" + JSON.stringify(d.tool_result) + (d.closed ? "（已闭环并回写）" : ""));
+    }
+    if (d.compliance && d.compliance.blocked) {
+      log("系统", "⚠ 合规护栏命中禁语：" + d.compliance.hits.join("、"));
+    }
+
+    $("mTotal").textContent = d.latency.total_ms + " ms";
+    $("mSplit").textContent = d.latency.asr_ms + " / " + d.latency.llm_ms + " / " + d.latency.tts_ms;
+    speak(d.reply_text);
+    refreshMetrics();
+    refreshEvents();
+  } catch (e) {
+    log("系统", "请求失败：" + e.message);
+  } finally {
+    S.busy = false;
+    if (S.sessionId) $("btnSend").disabled = false;
+  }
+}
+
+// 播报：骨架阶段故意用浏览器自带 TTS，服务端不合成（见 modules/voice.py 的说明）
+function speak(text) {
+  if (!("speechSynthesis" in window)) return;
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "zh-CN";
+  u.rate = 1.05;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+}
+
+async function endCall() {
+  if (!S.sessionId) return;
+  await fetch("/api/call/end", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: S.sessionId })
+  });
+  log("系统", "通话已结束。");
+  $("btnStart").disabled = false;
+  $("btnRec").disabled = true;
+  $("btnEnd").disabled = true;
+  $("textInput").disabled = true;
+  $("btnSend").disabled = true;
+  S.sessionId = null;
+  refreshMetrics();
+}
+
+async function refreshMetrics() {
+  try {
+    const r = await fetch("/api/metrics");
+    const d = await r.json();
+    $("mPct").textContent = d.p50_ms + " / " + d.p95_ms + " ms";
+    $("mClosed").textContent = d.closed_sessions + " 通（共 " + d.turns + " 轮）";
+  } catch (e) { /* 指标拉取失败不影响通话 */ }
+}
+
+async function refreshEvents() {
+  if (!S.sessionId) return;
+  try {
+    const r = await fetch("/api/events?session_id=" + encodeURIComponent(S.sessionId));
+    const d = await r.json();
+    $("events").textContent = (d.events || []).map(e =>
+      "#" + String(e.id).padStart(3, "0") + "  turn " + e.turn_id + "  " +
+      e.type.padEnd(13) + " " + (e.latency_ms ? e.latency_ms + "ms" : "") +
+      "\n     " + JSON.stringify(e.payload)
+    ).join("\n") || "还没有事件。";
+  } catch (e) { /* 忽略 */ }
+}
+
+$("btnStart").onclick = startCall;
+$("btnRec").onclick = toggleRec;
+$("btnEnd").onclick = endCall;
+$("btnEvents").onclick = refreshEvents;
+$("btnSend").onclick = () => {
+  const t = $("textInput").value.trim();
+  if (!t) return;
+  $("textInput").value = "";
+  sendTurn({ text: t });
+};
+$("textInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btnSend").click(); });
+
+boot();
+refreshMetrics();
+</script>
+</body>
+</html>
