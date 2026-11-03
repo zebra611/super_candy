@@ -307,6 +307,15 @@ def main():
                                     ("turns", "first_audio_samples", "first_audio_p50_ms",
                                      "processing_p50_ms", "gate_ms", "est_cost_cny")},
                                    ensure_ascii=False)])
+
+    # 上报事件必须把轮次写进事件列。只写 payload 会让面板上每条都显示
+    # "turn 0"，实测时根本对不上是哪一轮慢——这个 bug 真的发生过。
+    rep = [e for e in events.list_events(sid_f) if e["type"] == "latency_report"]
+    check("latency_report 的 turn_id 落在事件列上（不是只塞进 payload）",
+          len(rep) == 1 and rep[0]["turn_id"] == 1
+          and payload_of(sid_f, "latency_report").get("turn_id") == 1,
+          ["事件列 turn_id = %s" % (rep[0]["turn_id"] if rep else "无此事件"),
+           "payload.turn_id = %s" % (payload_of(sid_f, "latency_report") or {}).get("turn_id")])
     end_call(sid_f)
 
     print()

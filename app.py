@@ -596,9 +596,13 @@ def report_client_metric(session_id, turn_id, first_audio_ms, estimate=False):
     if not (0 < value < 60000):
         raise ValueError("first_audio_ms 超出合理范围（0-60000ms）")
 
+    # turn_id 必须同时写进事件列：面板和排查都按列取，只放 payload 里的活
+    # 会出现"每轮都是 turn 0"的假象。payload 里也留一份，因为 metrics()
+    # 是按 payload 配对浏览器值与 turn_end 的，两处必须同步。
     events.write_event(session_id, "latency_report",
                        {"turn_id": int(turn_id), "first_audio_ms": round(value, 1),
-                        "estimate": bool(estimate)})
+                        "estimate": bool(estimate)},
+                       turn_id=int(turn_id))
     return {"ok": True, "turn_id": int(turn_id), "first_audio_ms": round(value, 1)}
 
 
