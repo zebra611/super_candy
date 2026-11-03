@@ -44,6 +44,16 @@
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 分支、提交信息、8 项自检、PR 与审查流程 | 全员（动手前必读） |
 | [docs/12_团队使用规范.md](docs/12_团队使用规范.md) | 两条硬规矩：开工前对齐基线、收工后清干净 | 全员 |
 
+### 想让机器真听懂人话（接云 API）
+
+| 文档 | 内容 | 谁该读 |
+|---|---|---|
+| [docs/15_开通云ASR.md](docs/15_开通云ASR.md) | 注册实名 → 拿 key → 存哪 → 一条命令验 key → 切到云端 → 省钱与限额 | 1 号（拿到 key 的人） |
+| [docs/05_技术选型对比.md](docs/05_技术选型对比.md) | 云 vs 本地、五层选型、单价与成本 | 全员 |
+
+密钥放 `config/secrets.json`（已 gitignore），**不要写进 `scene.json`、不要发群、不要截图**。
+验 key 只需一条命令：`python scripts\check_key.py`。
+
 ### 想理解设计与契约（改代码前必读）
 
 | 文档 | 内容 | 谁该读 |

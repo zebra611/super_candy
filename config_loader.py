@@ -19,8 +19,11 @@ import os
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(_ROOT, "config", "scene.json")
+# 密钥单独一个文件，不进仓库（见 .gitignore）。仓库里只放 example 模板。
+SECRETS_PATH = os.path.join(_ROOT, "config", "secrets.json")
 
 _cache = None   # 进程内缓存，避免每次请求都读盘
+_secrets_cache = None
 
 
 def load(force=False):
@@ -150,3 +153,68 @@ def fallback_text(key="reply", default=""):
 def scene_name():
     """当前场景名，展示在页面上，方便一眼看出跑的是哪套配置。"""
     return load().get("scene_name", "未命名场景")
+
+
+# ---------------------------------------------------------------------------
+# 密钥：与业务配置分开，绝不能进仓库
+# ---------------------------------------------------------------------------
+
+def _secrets():
+    """读 config/secrets.json。文件不存在时返回空 dict，不报错。
+
+    为什么不读就叫失败：没配密钥是一种正常状态（骨架默认用占位识别），
+    不该让整个服务起不来。要不要云端识别由调用方判断。
+    """
+    global _secrets_cache
+    if _secrets_cache is not None:
+        return _secrets_cache
+    try:
+        with open(SECRETS_PATH, "r", encoding="utf-8") as f:
+            _secrets_cache = json.load(f)
+    except FileNotFoundError:
+        _secrets_cache = {}
+    except Exception as e:
+        # 文件存在但格式错，要说出来——否则会以为"密钥没配"而白查半天
+        print("[配置] config/secrets.json 解析失败：%s" % e)
+        _secrets_cache = {}
+    return _secrets_cache
+
+
+def secret(name, default=""):
+    """取密钥。**环境变量优先，其次 secrets.json**。
+
+    环境变量优先的理由：部署到云端沙箱时没有 secrets.json（也不该有），
+    只能靠平台注入的环境变量。本地开发则写文件更省事，不用每次开终端设变量。
+    环境变量名 = 键名大写，如 `dashscope_api_key` → `DASHSCOPE_API_KEY`。
+    """
+    env_name = name.upper()
+    val = os.environ.get(env_name) or os.environ.get("SC_" + env_name)
+    if val:
+        return val.strip()
+    val = (_secrets().get(name) or "").strip()
+    return val or default
+
+
+def asr_config():
+    """语音识别相关配置：走哪家、用哪个模型、端点在哪。
+
+    换服务商只改配置不改代码——这就是为什么 provider 放在这里，
+    而不是在 voice.py 里写一堆 if。
+    """
+    return dict(load().get("asr", {}) or {})
+
+
+def asr_provider():
+    """当前用哪个识别实现。没配密钥时一律回落到 placeholder。
+
+    这条回落很重要：没有密钥的机器（比如队友刚 clone 下来）必须能跑通整条链路，
+    否则新人都卡在第一步。
+    """
+    cfg = asr_config()
+    provider = (cfg.get("provider") or "placeholder").strip()
+    if provider == "placeholder":
+        return "placeholder"
+    if not secret("dashscope_api_key"):
+        return "placeholder"
+    return provider
+
