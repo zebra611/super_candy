@@ -560,13 +560,18 @@ def start_call():
                         "blocked": guard["blocked"], "hits": guard["hits"],
                         "replaced": guard["replaced"]},
                        turn_id=0)
-    events.write_event(session_id, "tts_start", voice.tts(opening), turn_id=0)
+    # 开场白也要真合成。原来这里只把 voice.tts() 的返回值塞进事件就丢了，
+    # 结果服务端花了 1 秒多、花了钱合成一段音频，前端却拿不到——
+    # 用户听到的第一句永远是浏览器机械音，而后面的句子是真声音，非常割裂。
+    opening_tts = voice.tts(opening)
+    events.write_event(session_id, "tts_start", opening_tts, turn_id=0)
 
     return {"session_id": session_id, "read_token": sess["read_token"],
             "scene": config_loader.scene_name(),
             "stages": list(contracts.STAGES),
             "gate_ms": contracts.LATENCY_GATE_MS,
-            "opening": opening}
+            "opening": opening,
+            "opening_tts": opening_tts}
 
 
 def end_call(session_id):

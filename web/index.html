@@ -139,7 +139,7 @@ async function startCall() {
   if (d.opening) {
     // 外呼由客服先开口：开场自报身份是六环节的第一环
     log("客服", d.opening, "开场");
-    speak(d.opening, 0);
+    speak(d.opening_tts || { text: d.opening, mode: "browser" }, 0);
   }
   log("系统", "通话已建立。说一句或打一句话，系统会按环节推进；留空点发送可以模拟“用户不说话”。");
 }
