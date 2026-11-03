@@ -60,6 +60,20 @@ def forbidden_words():
     return list(load().get("compliance", {}).get("forbidden_words", []))
 
 
+def answer_keywords(kind):
+    """取某类问题的触发关键词（如 fee / validity）。
+
+    用途：用户问"这个要钱吗"时，能命中标准答法而不是让模型自由发挥。
+    """
+    val = load().get("answers", {}).get(kind, [])
+    return list(val) if isinstance(val, list) else []
+
+
+def apology_prefix():
+    """安抚前缀。用户带情绪时拼在回复前面，避免每处都写一遍。"""
+    return load().get("apology_prefix", "")
+
+
 def scene_name():
     """当前场景名，展示在页面上，方便一眼看出跑的是哪套配置。"""
     return load().get("scene_name", "未命名场景")
