@@ -370,17 +370,19 @@ _HANDLERS = {
 
 
 def _handle_empty(session):
-    """用户没说话（空输入）：重问一次，连续两次就收尾。
+    """用户这一轮没说话（沉默 / 空输入）。
 
-    _todo 真实实现应该是"检测到沉默 → 重播 → 再沉默 → 挂断"，
-    并记录 no_answer 事件供质检统计。
+    规则：第一次重问一句，连续第二次仍无应答就收尾挂断。
+    这条路径以前是死代码——app.py 把空输入替换成"（空输入）"这个非空字符串，
+    于是永远走不到这里。现在 app.py 会如实传空串，并由它记 no_answer 事件。
+
+    _todo 真实实现应区分两种情况：完全没声音（网络/静音）vs 有声音但 ASR 没识别出字。
+    后者不该直接挂断，应该重播一次并提示"没听清"。
     """
+    cfg = config_loader.silence_config()
     if session["empty_count"] >= 2:
-        return _finish(session, config_loader.stage_config("GREETING").get("reply_hangup", ""), "silence")
-    stage = session["stage"]
-    text = config_loader.stage_config(stage).get("reply_again") \
-        or config_loader.stage_config(stage).get("reply", "您还在吗？")
-    return _reply(session, text, intent="empty")
+        return _finish(session, cfg.get("reply_final", "看来信号不太好，稍后再联系您，再见。"), "silence")
+    return _reply(session, cfg.get("reply", "您还在吗？"), intent="empty")
 
 
 def respond(session, user_text):

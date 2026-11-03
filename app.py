@@ -79,21 +79,46 @@ def handle_turn(session_id, user_text=None, audio_bytes=b""):
                        {"audio_bytes": len(audio_bytes), "text_input": bool(user_text)},
                        turn_id=turn_id)
 
-    # ② VAD：判断有没有人说话（假的，只要收到音频就算说了）
-    vad = voice.vad_detect(audio_bytes)
-    events.write_event(session_id, "vad_result", vad, turn_id=turn_id)
-
-    # ③ ASR：有声就走识别，没声就用打的字（文字模式用于无麦克风调试）
+    # ② VAD：只有真的收到音频才做端点检测。
+    # 文字输入不写 vad_result——否则 VAD 准确度统计里会混进一堆"没声音"的轮次。
     if audio_bytes:
-        asr_out = voice.asr(audio_bytes, hints=[])
+        vad = voice.vad_detect(audio_bytes)
+        events.write_event(session_id, "vad_result", vad, turn_id=turn_id)
+
+    # ③ 三条输入路径分开处理，绝不能把"用户没说话"伪造成为一句话：
+    #    audio_bytes → 真语音识别
+    #    user_text   → 打字调试（不产生 fake，也不消耗识别时长）
+    #    两者都空     → 用户沉默，记一条 no_answer，交给编排决定重问还是挂断
+    typed = (user_text or "").strip()
+    silence = False
+    if audio_bytes:
+        asr_out = voice.asr(audio_bytes, hints=config_loader.asr_hints())
         heard = asr_out["text"]
         asr_ms = asr_out["latency_ms"]
-    else:
-        heard = (user_text or "").strip() or "（空输入）"
+        # fake 由识别实现自己声明：接上真 ASR 后它会返回 False，
+        # 这里不再硬编码，否则评测会把真数据当成占位结果过滤掉。
+        is_fake = bool(asr_out.get("fake", False))
+        source = "asr"
+    elif typed:
+        heard = typed
         asr_ms = 0.0
-    events.write_event(session_id, "asr_result",
-                       {"text": heard, "latency_ms": asr_ms, "fake": True},
-                       turn_id=turn_id, latency_ms=asr_ms)
+        is_fake = False
+        source = "text"
+    else:
+        heard = ""
+        asr_ms = 0.0
+        is_fake = False
+        source = "silence"
+        silence = True
+        events.write_event(session_id, "no_answer",
+                           {"reason": "empty_input", "stage": sess["stage"]},
+                           turn_id=turn_id)
+
+    if not silence:
+        events.write_event(session_id, "asr_result",
+                           {"text": heard, "latency_ms": asr_ms,
+                            "fake": is_fake, "source": source},
+                           turn_id=turn_id, latency_ms=asr_ms)
 
     # ④ 编排：吃用户话，吐回复（可能附带工具调用）
     t_llm = time.time()

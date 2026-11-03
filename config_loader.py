@@ -74,6 +74,24 @@ def apology_prefix():
     return load().get("apology_prefix", "")
 
 
+def asr_hints():
+    """语音识别热词表（人名、产品名、工单号这类专有词）。
+
+    热词属于业务内容，必须外置：换场景时只改 config，不改 voice.py。
+    真实 ASR 服务一般支持 50–200 个热词，超了会被截断。
+    """
+    return list(load().get("asr", {}).get("hints", []))
+
+
+def silence_config():
+    """用户沉默时的处理话术。
+
+    reply       第一次没说话时的追问
+    reply_final 连续没说话，收尾挂断
+    """
+    return dict(load().get("silence", {}) or {})
+
+
 def scene_name():
     """当前场景名，展示在页面上，方便一眼看出跑的是哪套配置。"""
     return load().get("scene_name", "未命名场景")
