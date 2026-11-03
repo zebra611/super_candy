@@ -39,6 +39,7 @@ EVENT_TYPES = {
     "turn_start",     # 一轮交互开始（用户开口或打字）
     "vad_result",     # 端点检测结果（是否有人说话、语音时长）
     "asr_result",     # 语音识别出最终文本（哑链路里是假的）
+    "no_answer",      # 用户这一轮没说话（沉默 / 空输入），用于统计静默率
     "agent_reply",    # 对话编排产出回复文本
     "tool_call",      # 发起一次业务工具调用
     "tool_result",    # 业务工具返回结果
