@@ -107,17 +107,28 @@ def handle_turn(session_id, user_text=None, audio_bytes=b""):
         tc = agent_out["tool_call"]
         events.write_event(session_id, "tool_call", tc, turn_id=turn_id)
         tool_result = tools.dispatch(tc)
+        # 写操作失败重试一次：幂等键不变，所以不会重复建单（幂等的用处就在这）
+        if tc.get("name") == "create_ticket" and not (tool_result or {}).get("ticket_id"):
+            tool_result = tools.dispatch(tc)
+            tool_result["retried"] = True
         events.write_event(session_id, "tool_result", tool_result,
                            turn_id=turn_id, latency_ms=tool_result.get("_ms", 0))
         # 工单真的建出来了，才算"结构化结果回写"完成——这是闭环的唯一硬证据
         if tc["name"] == "create_ticket" and tool_result.get("ticket_id"):
             events.write_event(session_id, "writeback",
                                {"ticket_id": tool_result["ticket_id"],
-                                "created": tool_result.get("created")},
+                                "created": tool_result.get("created"),
+                                "retried": tool_result.get("retried", False)},
                                turn_id=turn_id)
             sess["closed"] = True
 
     # ⑥ 合规护栏：播出去之前先过滤（真实实现要重新生成合规表达，而不是打码）
+    # 回写失败时不能播"已为您登记"——那是虚假承诺，必须换成兜底话术。
+    # 注意：这里要用 tool_call 判断，不能用 agent_out["stage"]，
+    # 因为回写那一轮所处的阶段是 CONFIRM/OFFER，不是 WRITEBACK。
+    _tc = agent_out.get("tool_call") or {}
+    if _tc.get("name") == "create_ticket" and not (tool_result or {}).get("ticket_id"):
+        agent_out["reply_text"] = dialogue.fallback_text("reply_fail")
     guard = dialogue.compliance_guard(agent_out["reply_text"])
     reply_text = guard["text"]
 
@@ -145,8 +156,10 @@ def handle_turn(session_id, user_text=None, audio_bytes=b""):
         "reply_text": reply_text,
         "stage": agent_out["stage"],
         "next_stage": agent_out["next_stage"],
+        "intent": agent_out.get("intent", "unknown"),
         "tool_result": tool_result,
         "closed": sess["closed"],
+        "slots": dict(sess["slots"]),
         "latency": {
             "asr_ms": asr_ms,
             "llm_ms": llm_ms,

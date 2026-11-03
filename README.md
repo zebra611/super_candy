@@ -111,6 +111,18 @@ python app.py
 
 ---
 
+## 跑评测
+
+```bash
+python scripts/run_eval.py --fresh      # 清空事件库后跑全部 30 条种子用例
+python scripts/run_eval.py N01 I02      # 只跑指定用例
+```
+
+会打印一张表（每条用例的闭环/意向/违规）和汇总。
+
+**当前基线：通过 28/28、闭环 9/28，但这个 100% 不可信**——用例和规则是互相照着写的。
+原因和探针验证过程写在 `docs/06_评测集说明.md` 第 7 节，汇报前必读。
+
 ## 协作规范
 
 四个人怎么分工、怎么开分支、提交前要自检什么、PR 交给谁审——全部写在 **[CONTRIBUTING.md](CONTRIBUTING.md)**。
@@ -144,6 +156,7 @@ python app.py
 | `modules/tools.py` | 角色 2 / 4 | 假客户库、幂等回写 | 接企业 Mock 接口（幂等逻辑可留） |
 | `modules/eval.py` | 角色 3 | 只判"有没有闭环" | 质检报告、评测集、归因、进化闭环 |
 | `eval/seed_cases.json` | 角色 3 | 30 条种子用例 | 扩到 80–120 条，并留 20% 作留出集 |
+| `scripts/run_eval.py` | 角色 3 | 跑批脚本，出分数表 | 加留出集统计、加版本对比 |
 | `app.py` | 角色 4 | HTTP 路由 + 串链路 | 换 WebSocket/WebRTC，音频改流式 |
 | `web/index.html` | 角色 1 | 录音、字幕、指标面板 | 换成 WebRTC，加实时字幕与打断按钮 |
 
