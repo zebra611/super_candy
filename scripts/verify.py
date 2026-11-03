@@ -125,9 +125,27 @@ def main():
 
     print()
     print("=" * 74)
-    print("证据 3：文字输入这一轮写了什么，尾号有没有被打码")
+    print("证据 3：开场白先出声，文字输入这一轮写了什么，尾号有没有被打码")
     print("=" * 74)
-    out = handle_turn((sid_a := start_call()["session_id"]), user_text="是我，尾号8866")
+    _started = start_call()
+    sid_a = _started["session_id"]
+    # 开场白必须把音频一起返回。曾经这里只把 voice.tts() 的返回值写进事件就丢了：
+    # 服务端白花一秒多合成一段，前端拿不到，用户听到的第一句仍是浏览器机械音，
+    # 而后面的句子是真声音——两种嗓音交替，比全程机械音更难解释。
+    check("开场白连同音频一起返回（不是只写进事件）",
+          bool(_started.get("opening"))
+          and isinstance(_started.get("opening_tts"), dict)
+          and _started["opening_tts"].get("text") == _started["opening"],
+          ["opening = %r" % _started.get("opening"),
+           "opening_tts = %s" % json.dumps(_started.get("opening_tts"), ensure_ascii=False)])
+    _open_ev = [e for e in events.list_events(sid_a)
+                if e["type"] == "agent_reply" and e["turn_id"] == 0]
+    check("开场白作为第 0 轮落在事件链里",
+          len(_open_ev) == 1 and _open_ev[0]["payload"].get("source") == "opening",
+          ["turn 0 的 agent_reply 条数 = %d" % len(_open_ev),
+           "source = %s" % (_open_ev[0]["payload"].get("source") if _open_ev else "无"),
+           "事件链：%s" % " → ".join(event_types(sid_a))])
+    out = handle_turn(sid_a, user_text="是我，尾号8866")
     types = event_types(sid_a)
     asr = payload_of(sid_a, "asr_result")
     check("文字输入不写 vad_result", "vad_result" not in types,
