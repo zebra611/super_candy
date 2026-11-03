@@ -61,7 +61,7 @@
       <span class="hint" id="sessionLine">未开始</span>
     </div>
     <div class="row" style="margin-top:10px">
-      <input type="text" id="textInput" placeholder="没有麦克风就打字（调试用）" disabled>
+      <input type="text" id="textInput" placeholder="没有麦克风就打字；留空直接点发送 = 模拟用户不说话" disabled>
       <button id="btnSend" disabled>发送</button>
     </div>
   </div>
@@ -185,7 +185,7 @@ async function sendTurn(payload) {
     const d = await r.json();
     if (d.error) { log("系统", "出错了：" + d.error); return; }
 
-    log("用户", d.user_text);
+    log("用户", d.user_text || "（无应答）");
     log("客服", d.reply_text, d.next_stage);
     if (d.tool_result) {
       log("系统", "工具调用：" + JSON.stringify(d.tool_result) + (d.closed ? "（已闭环并回写）" : ""));
@@ -261,8 +261,9 @@ $("btnEnd").onclick = endCall;
 $("btnEvents").onclick = refreshEvents;
 $("btnSend").onclick = () => {
   const t = $("textInput").value.trim();
-  if (!t) return;
   $("textInput").value = "";
+  // 允许空发送：等于模拟"用户没说话"，用来验证沉默处理（记 no_answer、不推进状态机）。
+  // 调试期很有用——真实电话里"没人应答"是常态，不能只在脚本里测。
   sendTurn({ text: t });
 };
 $("textInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btnSend").click(); });

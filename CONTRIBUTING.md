@@ -76,6 +76,7 @@ git log --oneline -5 -- docs/ contracts.py app.py config/scene.json
 - [ ] **7. 时延没退化**：把改动前后的 P50 数字贴进 PR（页面右下角能看）
 - [ ] **8. 清理干净**：临时脚本（`_t.bat`、`_t.log`、`probe_*.py`、`tmp_*.py`）、被替换掉的旧实现、注释掉的大段代码、调试 `print` 全部删掉。判据是"没人会再读、也没人会再跑"，不留"万一以后用得上"
 - [ ] **9. 删完能跑**：清理之后重新跑一次 `python app.py` 和 `python scripts/run_eval.py`，服务和分数都正常——删错了就用 `git checkout -- <文件>` 找回来
+- [ ] **10. 自检没回归**：`python scripts/verify.py`（或双击 `验证.bat`）必须是 `N/N 通过`。它断言的是「沉默不被当成说话」「文字轮不写 vad_result」这类**已经踩过坑的行为**，挂了就说明你改坏了别人的防线
 
 ---
 
