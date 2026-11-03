@@ -37,6 +37,7 @@ EVENT_FIELDS = (
 EVENT_TYPES = {
     "call_started",   # 通话开始（浏览器点了"开始通话"）
     "turn_start",     # 一轮交互开始（用户开口或打字）
+    "audio_stream",   # 一轮采集结束时的音频流统计（帧数/采样数/序号缺口），S1 新增
     "vad_result",     # 端点检测结果（是否有人说话、语音时长）
     "asr_result",     # 语音识别出最终文本（哑链路里是假的）
     "no_answer",      # 用户这一轮没说话（沉默 / 空输入），用于统计静默率
@@ -55,6 +56,18 @@ EVENT_TYPES = {
 # 首字响应时延门槛（赛题硬门槛，单位毫秒）。
 # 放在契约层而不是配置里：它是"对外承诺的指标"，不随场景变化。
 LATENCY_GATE_MS = 2000
+
+# 音频流的格式契约（S1 定稿）：浏览器采集 ←→ 服务端接收 ←→ ASR/TTS。
+# 为什么格式也要进契约：1 号写前端采集、2 号接 ASR、4 号做传输层，
+# 三方只要有一处把 16k 写成 8k 或把单声道写成双声道，声音就会变成噪音，
+# 而且症状是"能跑但识别很差"，最难排查。
+PCM_SAMPLE_RATE = 16000   # 采样率：ASR 通用输入格式，16kHz
+PCM_SAMPLE_WIDTH = 2      # 位宽：PCM16LE，每采样 2 字节
+PCM_CHANNELS = 1          # 声道：单声道
+FRAME_MS = 20             # 一帧时长：20ms（流式 ASR 的常规分块）
+FRAME_SAMPLES = PCM_SAMPLE_RATE * FRAME_MS // 1000   # 每帧采样数 = 320
+FRAME_BYTES = FRAME_SAMPLES * PCM_SAMPLE_WIDTH       # 每帧字节数 = 640
+
 
 # 任务状态机的阶段名（状态机契约）。
 # 顺序即推进顺序，对应赛题要求的 6 个业务环节 + 2 个边界状态。

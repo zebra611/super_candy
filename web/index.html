@@ -65,6 +65,7 @@
       <input type="text" id="textInput" placeholder="没有麦克风就打字；留空直接点发送 = 模拟用户不说话" disabled>
       <button id="btnSend" disabled>发送</button>
     </div>
+    <div class="hint" id="audioLine" style="margin-top:8px">麦克风未启用。点「按下说话」开始采集，20ms 一帧、16kHz 单声道。</div>
   </div>
 
   <div class="card">
@@ -93,8 +94,7 @@
 <script>
 // 全部状态放这里，避免到处找变量。
 // token 是这通电话的读取凭证：没有它，别人拿到 session_id 也查不到事件与报告。
-const S = { sessionId: null, token: null, recorder: null, chunks: [],
-            recording: false, busy: false, turnId: 0, t0: 0 };
+const S = { sessionId: null, token: null, recording: false, busy: false, turnId: 0, t0: 0 };
 
 const $ = (id) => document.getElementById(id);
 
@@ -144,50 +144,248 @@ async function startCall() {
   log("系统", "通话已建立。说一句或打一句话，系统会按环节推进；留空点发送可以模拟“用户不说话”。");
 }
 
-// 录音：点一次开始、再点一次结束（半双工，骨架阶段够用）
+// ---------------------------------------------------------------------------
+// S1 采集：AudioWorklet 分帧
+// ---------------------------------------------------------------------------
+// 为什么不用 MediaRecorder：它只给压缩后的 webm，拿不到原始采样点——
+// 既不能切帧（做不了流式识别），也算不出能量（做不了 VAD），
+// 而且服务端还得先解码才知道音频有多长。
+// 现在换成：麦克风 → AudioWorklet 拿原始 PCM → 重采样 16k → 20ms 一帧 → 每 8 帧上传。
+
+// worklet 必须作为独立模块加载，所以拼成字符串再走 Blob URL，
+// 这样前端仍然只有 index.html 一个文件（不新增静态资源，部署不用改路由）。
+const WORKLET_SRC = `
+class PcmCollector extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.ratio = sampleRate / 16000;   // 一般是 48000/16000 = 3
+    this.pos = 0;       // 跨 block 保留的小数位置，保证重采样连续
+    this.tail = 0;      // 上一 block 的最后一个采样，拼接用
+    this.frame = new Int16Array(320);  // 20ms @16k
+    this.fill = 0;
+    this.seq = 0;       // 帧序号，服务端靠它发现丢帧
+  }
+  emit(v) {
+    v = v < -1 ? -1 : (v > 1 ? 1 : v);
+    this.frame[this.fill++] = v < 0 ? v * 0x8000 : v * 0x7fff;
+    if (this.fill === this.frame.length) {
+      // 转移所有权而不是复制，主线程再拼批
+      this.port.postMessage({ seq: this.seq++, pcm: this.frame.buffer }, [this.frame.buffer]);
+      this.frame = new Int16Array(320);
+      this.fill = 0;
+    }
+  }
+  process(inputs) {
+    const input = inputs[0];
+    if (!input || input.length === 0 || !input[0]) return true;
+    const n = input[0].length;
+    // 下混成单声道（多声道设备取平均），契约要求 mono
+    const mono = new Float32Array(n);
+    for (let c = 0; c < input.length; c++) {
+      const d = input[c];
+      for (let i = 0; i < n; i++) mono[i] += d[i] / input.length;
+    }
+    // 线性插值重采样到 16k：arr[0] 是上一块的尾巴，arr[1..n] 是本块
+    const arr = new Float32Array(n + 1);
+    arr[0] = this.tail;
+    arr.set(mono, 1);
+    let p = this.pos;
+    while (p < n) {                       // 需要 arr[p+1]，故 p < n
+      const i = p | 0;
+      const f = p - i;
+      this.emit(arr[i] * (1 - f) + arr[i + 1] * f);
+      p += this.ratio;
+    }
+    this.pos = p - n;                     // 折算到下一块坐标（下一块 arr[0] = 本块 arr[n]）
+    this.tail = mono[n - 1];
+    return true;
+  }
+}
+registerProcessor('pcm-collector', PcmCollector);
+`;
+
+// 采集与上传的状态。录一轮就重置一次，避免跨轮串数据。
+const A = { ctx: null, node: null, gain: null, src: null, stream: null,
+            seq: 0, frames: 0, samples: 0, dropped: 0,
+            batch: [], inflight: 0, queue: Promise.resolve(),
+            srvFrames: 0, srvSamples: 0, srvGaps: 0 };
+
+const BATCH_FRAMES = 8;      // 8 帧 = 160ms 一次请求，兼顾延迟与请求数
+const MAX_INFLIGHT = 6;      // 网络跟不上时的背压上限，超了丢片并记账
+
+// 开采集：拿麦克风、装 worklet、接管线
+async function startCapture() {
+  // 回声消除必须开。否则播报声会被麦克风收回去，VAD 以为用户在说话，
+  // 结果就是每播一句都自我打断——这是 S3/S6 最容易踩的坑，源头在这里。
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true,
+             noiseSuppression: true, autoGainControl: true }
+  });
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: "application/javascript" }));
+  try {
+    await ctx.audioWorklet.addModule(url);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+  const src = ctx.createMediaStreamSource(stream);
+  const node = new AudioWorkletNode(ctx, "pcm-collector");
+  node.port.onmessage = (e) => onFrame(e.data);
+  // 必须接到 destination 才会被音频图拉动；gain=0 保证不把麦克风声音放出来
+  const gain = ctx.createGain();
+  gain.gain.value = 0;
+  src.connect(node);
+  node.connect(gain);
+  gain.connect(ctx.destination);
+
+  Object.assign(A, { ctx, node, gain, src, stream,
+                     seq: 0, frames: 0, samples: 0, dropped: 0,
+                     batch: [], inflight: 0, queue: Promise.resolve(),
+                     srvFrames: 0, srvSamples: 0, srvGaps: 0 });
+  return { sampleRate: ctx.sampleRate };
+}
+
+// 停采集：先发完尾巴，再断开资源。返回这一轮的采集统计。
+async function stopCapture() {
+  if (A.node) A.node.port.onmessage = null;
+  flushBatch();                    // 最后不足一批的帧也要发出去
+  await A.queue;                   // 等所有分片落地，否则服务端样本数会少一截
+  try {
+    if (A.gain) A.gain.disconnect();
+    if (A.node) A.node.disconnect();
+    if (A.src) A.src.disconnect();
+  } catch (e) { /* 已经断开过就忽略 */ }
+  if (A.ctx) { try { await A.ctx.close(); } catch (e) { /* 同上 */ } }
+  if (A.stream) A.stream.getTracks().forEach(t => t.stop());   // 及时松开麦克风
+
+  const stat = { frames: A.frames, samples: A.samples, dropped: A.dropped };
+  A.ctx = A.node = A.gain = A.src = A.stream = null;
+  return stat;
+}
+
+// 收到一帧：攒进批次，够一批就发
+function onFrame(d) {
+  A.frames += 1;
+  A.samples += d.pcm.byteLength / 2;
+  A.batch.push(new Int16Array(d.pcm));
+  if (A.batch.length >= BATCH_FRAMES) flushBatch();
+  updateAudioLine();
+}
+
+// 把攒着的帧合成一片发出去。seq 用"这批第一帧的序号"，
+// 服务端靠它判断有没有中间丢片（帧号不跳是 S1 的验收标准）。
+function flushBatch() {
+  if (!A.batch.length) return;
+  const frames = A.batch;
+  A.batch = [];
+  let total = 0;
+  for (const f of frames) total += f.length;
+  const merged = new Int16Array(total);
+  let off = 0;
+  for (const f of frames) { merged.set(f, off); off += f.length; }
+
+  const seq = A.seq;
+  A.seq += frames.length;
+
+  if (!S.sessionId) return;          // 还没开始通话，直接把音频丢掉
+  if (A.inflight >= MAX_INFLIGHT) {
+    // 背压：宁可丢片并记账，也不要把内存堆爆。
+    // 丢片会让服务端看到 seq 缺口——这是故意的，掩盖丢片才是错的。
+    A.dropped += frames.length;
+    updateAudioLine();
+    return;
+  }
+  A.inflight += 1;
+  // 串行发送：保证到达顺序，也避免 seq 乱序被误判成丢片
+  A.queue = A.queue.then(() => uploadChunk(seq, merged)).catch(() => {});
+}
+
+// 上传一片音频。失败不抛给用户，但要留痕（否则会以为"没声音"是麦克风坏了）
+async function uploadChunk(seq, pcm16) {
+  try {
+    const q = "?session_id=" + encodeURIComponent(S.sessionId) +
+              "&token=" + encodeURIComponent(S.token) +
+              "&seq=" + seq + "&rate=16000";
+    const r = await fetch("/api/audio/chunk" + q, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: pcm16.buffer
+    });
+    const d = await r.json();
+    if (d.ok) {
+      A.srvFrames = d.received_frames;
+      A.srvSamples = d.received_samples;
+      A.srvGaps = d.gaps;
+    } else {
+      log("系统", "音频分片被拒：" + (d.error || r.status) +
+          (d.detail ? "（" + d.detail + "）" : ""));
+    }
+  } catch (e) {
+    log("系统", "音频分片上传失败：" + e.message);
+  } finally {
+    A.inflight -= 1;
+    updateAudioLine();
+  }
+}
+
+// 采集状态条：这是 S1 唯一能"眼看为实"的地方
+function updateAudioLine() {
+  if (!S.recording && !A.frames) return;
+  const parts = ["采集 " + A.frames + " 帧 / " + A.samples +
+                 " 采样（" + (A.samples / 16000).toFixed(2) + " 秒）"];
+  if (A.srvSamples) parts.push("服务端已收 " + A.srvSamples + " 采样");
+  if (A.srvGaps) parts.push("序号缺口 " + A.srvGaps + " 次");
+  if (A.dropped) parts.push("本地丢帧 " + A.dropped);
+  $("audioLine").textContent = parts.join(" · ");
+}
+
+// 说话：点一次开始、再点一次结束（半双工；真的边识别边打断要等 S2/S3）
 async function toggleRec() {
   if (S.busy) return;
   if (!S.recording) {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      S.recorder = new MediaRecorder(stream);
-      S.chunks = [];
-      S.recorder.ondataavailable = (e) => { if (e.data.size) S.chunks.push(e.data); };
-      S.recorder.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());   // 及时释放麦克风
-        const blob = new Blob(S.chunks, { type: "audio/webm" });
-        const b64 = await blobToBase64(blob);
-        $("btnRec").textContent = "按下说话";
-        log("系统", "录音结束，已上传 " + Math.round(blob.size / 1024) + " KB，开始走识别链路…");
-        sendTurn({ audio_b64: b64 });
-      };
-      S.recorder.start();
+      const info = await startCapture();
       S.recording = true;
       $("btnRec").textContent = "停止并发送";
+      $("audioLine").textContent = "采集中（设备 " + info.sampleRate +
+                                   "Hz → 16kHz / 20ms 一帧，每 160ms 上传一次）";
     } catch (e) {
-      log("系统", "拿不到麦克风：" + e.message + "（改用下面打字）");
+      log("系统", "拿不到麦克风：" + (e && e.message ? e.message : e) + "（可改用下面打字）");
     }
-  } else {
-    S.recorder.stop();
-    S.recording = false;
+    return;
+  }
+
+  S.recording = false;
+  $("btnRec").disabled = true;
+  $("btnRec").textContent = "按下说话";
+  // T0 = 用户说完的**那一刻**，必须在等分片上传落地之前取。
+  // 如果放在 stopCapture() 之后，上传耗时就被悄悄排除了，
+  // 首字响应会算得比用户真实感知的更快——那是自欺型数字。
+  const t0 = performance.now();
+  const stat = await stopCapture();
+  if (!stat.samples) {
+    log("系统", "这一轮没采到音频，已忽略。");
+    $("btnRec").disabled = false;
+    return;
+  }
+  log("系统", "采集结束：共 " + stat.frames + " 帧 / " + stat.samples + " 采样（" +
+      (stat.samples / 16000).toFixed(2) + " 秒）" +
+      (stat.dropped ? "，本地丢帧 " + stat.dropped : ""));
+  try {
+    await sendTurn({ audio_streamed: true, audio_dropped: stat.dropped }, t0);
+  } finally {
+    $("btnRec").disabled = false;
   }
 }
 
-function blobToBase64(blob) {
-  return new Promise((res) => {
-    const fr = new FileReader();
-    fr.onload = () => res(String(fr.result).split(",")[1] || "");
-    fr.readAsDataURL(blob);
-  });
-}
-
-// 一轮对话：把音频或文字发给后端，拿回回复并播报
-async function sendTurn(payload) {
+// 一轮对话：把音频或文字发给后端，拿回回复并播报。
+// t0 由调用方给：语音轮是"说完那一刻"（在等上传之前取），文字轮是"点发送那一刻"。
+async function sendTurn(payload, t0) {
   if (!S.sessionId || S.busy) return;
   S.busy = true;
   $("btnSend").disabled = true;
   // T0：用户"说完 / 点发送"的时刻。首字响应从这里算到第一帧声音。
-  S.t0 = performance.now();
+  S.t0 = t0 || performance.now();
   try {
     const r = await fetch("/api/turn", {
       method: "POST",
@@ -268,6 +466,13 @@ async function reportMetric(turnId, ms, estimate) {
 
 async function endCall() {
   if (!S.sessionId) return;
+  // 挂断时如果还在采集，先停掉：否则麦克风会一直开着，音频还会往已结束的会话里发
+  if (S.recording) {
+    S.recording = false;
+    $("btnRec").textContent = "按下说话";
+    await stopCapture();
+    $("audioLine").textContent = "麦克风已关闭。";
+  }
   await fetch("/api/call/end", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: S.sessionId, token: S.token })

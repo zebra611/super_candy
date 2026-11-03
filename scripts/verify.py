@@ -37,8 +37,8 @@ events.init_db()
 
 import config_loader  # noqa: E402
 import contracts  # noqa: E402
-from app import (_acquire, _auth, _release, end_call, handle_turn,  # noqa: E402
-                 report_client_metric, start_call)
+from app import (_acquire, _audio_state, _auth, _release, end_call,  # noqa: E402
+                 handle_turn, ingest_audio_chunk, report_client_metric, start_call)
 from modules import dialogue, eval as eval_mod, tools  # noqa: E402
 
 results = []
@@ -316,6 +316,85 @@ def main():
 
     print()
     print("=" * 74)
+    print("证据 12：S1 采集分帧——10 秒音频是否真的变成 160000 个采样（帧号不跳）")
+    print("=" * 74)
+    check("契约里的音频格式常数自洽（16k / 16bit / 单声道 / 20ms）",
+          contracts.PCM_SAMPLE_RATE == 16000 and contracts.FRAME_SAMPLES == 320
+          and contracts.FRAME_BYTES == 640,
+          ["PCM_SAMPLE_RATE=%d, FRAME_MS=%d, FRAME_SAMPLES=%d, FRAME_BYTES=%d"
+           % (contracts.PCM_SAMPLE_RATE, contracts.FRAME_MS,
+              contracts.FRAME_SAMPLES, contracts.FRAME_BYTES)])
+
+    started_i = start_call()
+    sid_i = started_i["session_id"]
+    sess_i, _, _ = _auth(sid_i, started_i["read_token"])
+    frame = b"\x00\x00" * contracts.FRAME_SAMPLES       # 一帧静音，只验证流量与计数
+    last_chunk = None
+    for chunk in range(63):                              # 63 片 × 8 帧 = 504 帧 ≈ 10.08 秒
+        last_chunk = ingest_audio_chunk(sess_i, chunk * 8, frame * 8)
+    check("10 秒音频 → 采样数与帧数按契约换算准确",
+          last_chunk["received_samples"] == 504 * 320 and last_chunk["received_frames"] == 504,
+          ["发了 504 帧（每帧 320 采样）",
+           "服务端统计：%d 采样 / %d 帧 / 缺口 %d"
+           % (last_chunk["received_samples"], last_chunk["received_frames"], last_chunk["gaps"]),
+           "换算时长：%.2f 秒" % (last_chunk["received_samples"] / 16000.0)])
+
+    gap = ingest_audio_chunk(sess_i, 900, frame * 8)      # 故意跳号
+    dup = ingest_audio_chunk(sess_i, 0, frame * 8)        # 重复旧片
+    check("序号跳了会被记下（不掩盖丢帧），重复分片不重复追加",
+          gap["gaps"] == 1 and dup["duplicates"] == 1
+          and dup["received_samples"] == last_chunk["received_samples"] + 8 * 320,
+          ["跳号后 gaps = %d" % gap["gaps"],
+           "重复旧片后 duplicates = %d，采样数是否被重复累加：%s"
+           % (dup["duplicates"], "否（正确）" if dup["received_samples"] == last_chunk["received_samples"] + 8 * 320 else "是（错误）")])
+
+    try:
+        ingest_audio_chunk(sess_i, 999, frame, sample_rate=8000)
+        bad_rate = "没报错（错误）"
+    except ValueError as e:
+        bad_rate = "拒绝：" + str(e)
+    check("采样率不符契约时直接拒绝（防止 8k/16k 串号变噪音）", bad_rate.startswith("拒绝"),
+          [bad_rate])
+
+    # 整轮：帧流进来 → 一轮结束 → 音频流统计与识别一起落事件
+    handle_turn(sid_i, audio_streamed=True, audio_dropped=3)
+    stat = payload_of(sid_i, "audio_stream")
+    vad_i = payload_of(sid_i, "vad_result")
+    turn_start_i = payload_of(sid_i, "turn_start")
+    check("一轮结束时写了 audio_stream 事件，且时长/丢帧都对得上",
+          bool(stat) and stat["duration_ms"] > 9000 and stat["dropped_at_client"] == 3,
+          ["audio_stream.payload = %s" % json.dumps(stat, ensure_ascii=False)])
+    check("turn_start 记下了真实音频字节数（不再是 0）",
+          turn_start_i["audio_bytes"] > 0 and turn_start_i["audio_streamed"] is True,
+          ["turn_start.payload = %s" % json.dumps(turn_start_i, ensure_ascii=False)])
+    check("VAD 用的是真采样数，不是字节数拍脑袋",
+          vad_i["samples"] == stat["samples"] and vad_i["speech_ms"] == int(stat["duration_ms"]),
+          ["vad_result.payload = %s" % json.dumps(vad_i, ensure_ascii=False)])
+    check("这一轮的识别来源标 source=asr（音频确实进了识别）",
+          (payload_of(sid_i, "asr_result") or {}).get("source") == "asr",
+          ["asr_result.payload = %s"
+           % json.dumps(payload_of(sid_i, "asr_result"), ensure_ascii=False)])
+
+    st_after = _audio_state(sess_i)
+    check("一轮结束后缓冲被清空（下一轮不会串上这一轮的音频）",
+          st_after["samples"] == 0 and st_after["frames"] == 0 and st_after["expect_seq"] == 0,
+          ["清空后状态：samples=%d, frames=%d, expect_seq=%d, buf=%d 字节"
+           % (st_after["samples"], st_after["frames"], st_after["expect_seq"],
+              len(st_after["buf"]))])
+
+    # 空缓冲但前端声称有流：应走"沉默"，不能伪造一句识别结果
+    sid_j = start_call()["session_id"]
+    silence_j = handle_turn(sid_j, audio_streamed=True)
+    types_j = event_types(sid_j)
+    check("声称有流但一帧都没到 → 按沉默处理，不伪造识别结果",
+          "no_answer" in types_j and "asr_result" not in types_j,
+          ["实际事件链：%s" % " → ".join(types_j),
+           "实际回复：%s" % silence_j["reply_text"]])
+    end_call(sid_j)
+    end_call(sid_i)
+
+    print()
+    print("=" * 74)
     total = len(results)
     passed = sum(1 for _, ok in results if ok)
     print("结果：%d/%d 通过" % (passed, total))
@@ -323,7 +402,7 @@ def main():
         print("有断言失败，说明代码与预期不符 —— 以这里为准，不要信文档。")
         return 1
     print("全部通过。这只证明上面这些行为是真的，不代表整个系统都完成了：")
-    print("  仍然是占位的：真 ASR/TTS、流式与打断、语义级合规、模拟用户跑批。")
+    print("  仍然是占位的：真 ASR/TTS、真 VAD、打断、语义级合规、模拟用户跑批。")
     return 0
 
 

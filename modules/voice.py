@@ -4,40 +4,75 @@
     音频帧进来 → VAD 判断端点 → 流式 ASR 出文本；文本出去 → 流式 TTS 出音频；
     用户中途开口要能立刻掐断播报（barge-in）。
 
-当前状态：全部返回占位数据，但**接口签名已经是最终形态**，
+当前状态：**采集侧已经是真的**（S1 完成：浏览器 AudioWorklet 16kHz/20ms 分帧上传），
+下面三个函数仍是占位实现，但**接口签名已经是最终形态**，
 后续替换内部实现时，上层（app.py / dialogue.py）一行都不用改。
 
 负责人：角色 1（实时语音与终端）
 
 后续待补充（按优先级）：
-    1. 接真实流式 ASR（FunASR 或云 ASR），配领域热词表；
+    1. 接真实流式 ASR（FunASR 或云 ASR），配领域热词表；现在 asr() 不看音频内容；
     2. 接真实流式 TTS，并把"首包到达时间"打进 latency_ms；
-    3. VAD 换成真正的能量/模型判定，替代现在的"整段录完才算说完"；
+    3. VAD 换成 Silero 逐帧判定，替代现在的"有字节就算说完"；
     4. 打断：detect_barge_in 目前恒为 False，真实实现需要在播报期间持续监听。
+    （分帧与传输已完成，见 S1；S2 会把 HTTP 分片换成 WebSocket。）
 """
 
+import struct
 import time
 
 import config_loader
+import contracts
 
 
-def vad_detect(audio_bytes, sample_rate=16000):
+def pcm_duration_ms(audio_bytes):
+    """这段 PCM 有多少毫秒。
+
+    口径统一走契约里的采样率与位宽，不要在别处再写一次 32000——
+    "每毫秒 32 字节"这种常数一旦散落在多个文件里，改采样率就会漏改一处。
+    """
+    if not audio_bytes:
+        return 0
+    samples = len(audio_bytes) // contracts.PCM_SAMPLE_WIDTH
+    return int(samples * 1000 / contracts.PCM_SAMPLE_RATE)
+
+
+def pcm_to_samples(audio_bytes):
+    """把 PCM16LE 字节解成 -1.0~1.0 的浮点采样序列。
+
+    现在只有 VAD 和调试会用到；接实时 ASR 时不需要它（直接把字节推给云端），
+    但做能量分析、波形回放、离线复算时必须先归一化。
+    用 struct 而不是 numpy：全项目不引第三方依赖这条约束还没解除。
+    """
+    n = len(audio_bytes) // contracts.PCM_SAMPLE_WIDTH
+    if not n:
+        return []
+    ints = struct.unpack("<%dh" % n, audio_bytes[:n * contracts.PCM_SAMPLE_WIDTH])
+    return [v / 32768.0 for v in ints]
+
+
+def vad_detect(audio_bytes, sample_rate=contracts.PCM_SAMPLE_RATE):
     """判断这段音频里有没有人说话（端点检测）。
 
     哑链路实现：只要有音频字节就认为有人说了话，不做任何能量判断。
-    真实实现要做的：
-        - 按 20–30ms 分帧算能量/过零率，或直接上 VAD 模型；
-        - 返回"起始时间"与"结束时间"，而不只是一个布尔值；
-        - 播报期间持续检测，命中即触发 barge-in。
+    但**时长与采样数现在是真算的**——因为 S1 之后传上来的已经是 PCM16，
+    不再是压缩后的 webm，字节数与时长有确定的换算关系，不需要再估。
 
-    返回：dict(started=bool, ended=bool, speech_ms=int)
+    真实实现要做的（S3）：
+        - 逐帧跑 Silero VAD，返回"起始帧 / 结束帧"，而不只是一个布尔值；
+        - 播报期间持续检测，命中即触发 barge-in；
+        - 加最短语音时长过滤（≥200ms），挡掉咳嗽与键盘声。
+
+    返回：dict(started, ended, speech_ms, samples, sample_rate)
     """
-    has_audio = bool(audio_bytes) and len(audio_bytes) > 0
+    has_audio = bool(audio_bytes)
+    samples = len(audio_bytes) // contracts.PCM_SAMPLE_WIDTH if has_audio else 0
     return {
         "started": has_audio,
         "ended": has_audio,
-        # 16kHz / 16bit 单声道 → 每字节 0.5 个采样点，这里只做粗略估算
-        "speech_ms": int(len(audio_bytes) / 32) if has_audio else 0,
+        "speech_ms": pcm_duration_ms(audio_bytes),
+        "samples": samples,
+        "sample_rate": sample_rate,
     }
 
 
@@ -54,7 +89,7 @@ def asr(audio_bytes, hints=None):
         - 返回字级时间戳，打断判定和字幕对齐都要用。
 
     参数：
-        audio_bytes  浏览器上传的音频原始字节（哑链路不解码）
+        audio_bytes  PCM16LE / 16kHz / 单声道原始字节（S1 之后格式已固定）
         hints        领域热词列表，当前被忽略
     返回：dict(text, confidence, latency_ms, fake)
     """
