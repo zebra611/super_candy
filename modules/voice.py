@@ -18,6 +18,8 @@
 
 import time
 
+import config_loader
+
 
 def vad_detect(audio_bytes, sample_rate=16000):
     """判断这段音频里有没有人说话（端点检测）。
@@ -73,16 +75,21 @@ def tts(text):
     前端用浏览器内置的 speechSynthesis 播报，所以链路里确实有声音，
     但不是我们自己的 TTS——这是有意为之，先不引入任何外部服务。
 
+    音色与语速来自 config/scene.json 的 tts 段：换音色属于业务决策，
+    不该改代码，所以哪怕现在只是传给浏览器，也走配置。
+
     真实实现要换掉的：
         - 服务端流式合成，首包就往下推，不要等整句合成完；
-        - 记录"首包耗时"写进事件，这是 P50 门槛的关键一段；
-        - 支持音色/语速配置（来自 config/scene.json）。
+        - 记录"首包耗时"写进事件，这是 P50 门槛的关键一段。
 
-    返回：dict(mode, text, latency_ms)
+    返回：dict(mode, text, voice, rate, latency_ms)
     """
+    cfg = config_loader.tts_config()
     return {
         "mode": "browser",      # 前端据此决定用 speechSynthesis 播报
         "text": text,
+        "voice": cfg.get("voice", ""),
+        "rate": float(cfg.get("rate", 1.0)),
         "latency_ms": 0.0,      # 骨架阶段无服务端合成，故为 0
     }
 

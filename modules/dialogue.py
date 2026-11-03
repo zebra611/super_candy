@@ -76,6 +76,8 @@ def new_session(session_id):
         "identity_attempts": 0,
         "confirm_asks": 0,
         "empty_count": 0,
+        # 第几版回写。用户改口时递增，配合幂等键让"同一张工单被更新"而不是新开一张。
+        "writeback_version": 0,
     }
 
 
@@ -125,12 +127,16 @@ def _intent_name(flags):
     return "info" if flags.get("digits") else "unknown"
 
 
-def _reply(session, text, next_stage=None, tool_call=None, intent="unknown", end_reason=""):
+def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
+           end_reason="", stage_label=None):
     """统一的返回构造：把回复、阶段迁移、事件字段一次组装好。
 
     注意 stage 是"这一轮所处的阶段"（回复归属），next_stage 才是迁移后的阶段。
+    stage_label 用于覆盖回复归属：回写那句话属于 WRITEBACK 环节，但这一轮
+    是从 CONFIRM 直接跳过去的，不覆盖的话事件的 stage 会记成 CONFIRM，
+    质检统计"回写环节说没说要说的那句话"时就查不到。
     """
-    stage_now = session["stage"]
+    stage_now = stage_label or session["stage"]
     if next_stage:
         session["stage"] = next_stage
     out = {
@@ -157,17 +163,33 @@ def _finish(session, text, reason):
     return _reply(session, text, next_stage="DONE", intent=reason, end_reason=reason)
 
 
-def _do_writeback(session, declined=False):
+def _do_writeback(session, consent, changed=False):
     """执行回写：构造工具调用，把阶段推到 DONE。
 
-    幂等键固定为 "<session_id>:WRITEBACK"——同一通电话重复回写只产生一条工单。
-    回写内容来自 config 的 writeback_template，再用槽位覆盖。
+    consent 只有三种取值，不能压缩成布尔：
+        True      用户明确同意
+        False     用户明确拒绝（拒绝也要回写，业务侧要知道这通电话的结果）
+        "unknown" 问过一次仍含糊——宁可记"不确定"，也不能把"嗯"当成同意
+
+    幂等键带版本号：第一次是 v1，用户改口后是 v2。
+    同一个键重复调用不会新建（网络重试安全），版本递增则会更新同一张工单
+    （`tools.create_ticket` 用 session_id 做业务主键）——这是"改口能纠正结论"的关键。
+
+    参数：
+        consent  本次回写的结论
+        changed  是否是改口后的更正（决定用哪句播报话术）
     """
     cfg = config_loader.stage_config("WRITEBACK")
+    session["slots"]["consent"] = consent
+
+    version = int(session.get("writeback_version", 0)) + 1
+    session["writeback_version"] = version
+
     content = config_loader.writeback_template()
     content["identity_confirmed"] = bool(session["slots"].get("identity_confirmed"))
     content["need"] = session["slots"].get("need") or "未获取"
-    content["consent"] = session["slots"].get("consent")
+    content["consent"] = consent
+    content["writeback_version"] = version
     if session["slots"].get("order"):
         content["order_id"] = session["slots"]["order"].get("order_id")
 
@@ -176,13 +198,27 @@ def _do_writeback(session, declined=False):
         "args": {
             "session_id": session["session_id"],
             "content": content,
-            "idempotency_key": "%s:WRITEBACK" % session["session_id"],
+            "idempotency_key": "%s:WRITEBACK:v%d" % (session["session_id"], version),
+            "version": version,
         },
     }
-    text = cfg.get("reply_declined" if declined else "reply",
-                   cfg.get("reply", "已为您登记。"))
+
+    if changed:
+        key = "reply_changed" if consent is True else "reply_changed_declined"
+        intent = "changed"
+    elif consent is True:
+        key = "reply"
+        intent = "consent"
+    elif consent is False:
+        key = "reply_declined"
+        intent = "declined"
+    else:
+        key = "reply_unknown"
+        intent = "ambiguous_writeback"
+
+    text = cfg.get(key) or cfg.get("reply", "已为您登记。")
     return _reply(session, text, next_stage="DONE", tool_call=tool_call,
-                  intent="declined" if declined else "consent")
+                  intent=intent, stage_label="WRITEBACK")
 
 
 # ---------------------------------------------------------------------------
@@ -275,8 +311,7 @@ def _stage_need(session, text, flags):
     # 用户一上来就明确拒绝 → 直接去回写（拒绝也要留痕）
     if flags["no"]:
         session["slots"]["need"] = "用户表示不需要"
-        session["slots"]["consent"] = False
-        return _do_writeback(session, declined=True)
+        return _do_writeback(session, False)
 
     # 用户在提问 → 用查到的订单信息回答，仍停在本阶段
     if flags["ask"]:
@@ -312,8 +347,7 @@ def _stage_offer(session, text, flags):
 
     # 明确拒绝 → 回写（拒绝也留痕）
     if flags["no"]:
-        session["slots"]["consent"] = False
-        return _do_writeback(session, declined=True)
+        return _do_writeback(session, False)
 
     # 说了方案之后必须走确认，不能默认同意
     confirm = config_loader.stage_config("CONFIRM")
@@ -323,24 +357,27 @@ def _stage_offer(session, text, flags):
 def _stage_confirm(session, text, flags):
     """CONFIRM：拿到明确答复。
 
-    规则：明确肯定 → true；明确否定 → false；其他一律算含糊，
-    追问一次后仍含糊就记 unknown——宁可记"不确定"，也不能把"嗯"当成同意。
+    规则：明确肯定 → true；明确否定 → false；其他一律算含糊。
+    含糊**先追问一次**（"您可以简单回我一句同意或者不需要"），
+    第二次仍含糊才记 unknown——宁可记"不确定"，也不能把"嗯"当成同意。
+
+    为什么追问这一次这么重要：犹豫的用户是外呼里最值钱的一类（还没决定），
+    直接一句"那就不打扰您了"等于把本来能成的一单关掉，而且业务侧收到的
+    是"客户拒绝"这个错误结论。以前这里写成 `confirm_asks >= 1`，
+    导致 reply_again 是死代码、第一次含糊就挂断，这是已修的真实缺陷。
     """
     cfg = config_loader.stage_config("CONFIRM")
 
     if flags["yes"]:
-        session["slots"]["consent"] = True
-        return _do_writeback(session)
+        return _do_writeback(session, True)
 
     if flags["no"]:
-        session["slots"]["consent"] = False
-        return _do_writeback(session, declined=True)
+        return _do_writeback(session, False)
 
     session["confirm_asks"] += 1
-    if session["confirm_asks"] >= 1:
-        session["slots"]["consent"] = "unknown"
-        return _do_writeback(session, declined=True)
-    return _reply(session, cfg.get("reply_again", cfg.get("reply", "")), intent="ambiguous")
+    if session["confirm_asks"] < 2:
+        return _reply(session, cfg.get("reply_again", cfg.get("reply", "")), intent="ambiguous")
+    return _do_writeback(session, "unknown")
 
 
 def _stage_writeback(session, text, flags):
@@ -348,13 +385,37 @@ def _stage_writeback(session, text, flags):
 
     正常情况下应当在 NEED/OFFER/CONFIRM 里直接调用 _do_writeback 完成，
     走到这里说明上一轮没有正常迁移，直接补一次回写。
+    结论沿用已有槽位；没有就记 unknown（不知道结果比编一个结果安全）。
     """
-    return _do_writeback(session, declined=(session["slots"].get("consent") is False))
+    consent = session["slots"].get("consent")
+    if consent not in (True, False, "unknown"):
+        consent = "unknown"
+    return _do_writeback(session, consent)
 
 
 def _stage_done(session, text, flags):
-    """DONE：终态。只说结束语，不再发起新话题（继续推销会拉低交互质量分）。"""
+    """DONE：终态。默认只说结束语，不再发起新话题（继续推销会拉低交互质量分）。
+
+    但终态不等于"不再听"。两种输入必须处理，否则会出现两个真实缺陷：
+        1. 用户改口（"等等，我不要了" / "那我要"）——不回写就更正，
+           业务侧会一直拿着旧结论；
+        2. 用户提问（"这个是免费的吧"）——不回答直接说再见，是最伤体验的一种。
+
+    改口靠递增幂等键版本重写同一张工单，不新增阶段（不改状态机契约）。
+    """
     cfg = config_loader.stage_config("DONE")
+    current = session["slots"].get("consent")
+
+    target = True if flags["yes"] else (False if flags["no"] else None)
+    already_written = int(session.get("writeback_version", 0)) > 0
+    # 注意这里不能要求 current 是布尔值：含糊回写记的是 "unknown"，
+    # 用户之后说清"那我要"时必须能把它更正过来，否则工单永远停在"不确定"。
+    if target is not None and already_written and current != target:
+        return _do_writeback(session, target, changed=True)
+
+    if flags["ask"]:
+        return _reply(session, cfg.get("reply_ask") or cfg.get("reply", ""), intent="ask")
+
     return _reply(session, cfg.get("reply", "感谢您的接听，再见。"), intent="done")
 
 
@@ -383,6 +444,43 @@ def _handle_empty(session):
     if session["empty_count"] >= 2:
         return _finish(session, cfg.get("reply_final", "看来信号不太好，稍后再联系您，再见。"), "silence")
     return _reply(session, cfg.get("reply", "您还在吗？"), intent="empty")
+
+
+def forced_end(session, reason):
+    """被容量/时长闸门强制收尾（不是用户的意思，所以不推进业务结论）。
+
+    触发条件见 config.budget：轮次超限、单通时长超限。
+    为什么要做这个：外呼是按时长计费的，没有上限的话一个死循环或一个
+    不爱挂断的用户就能把当天额度烧完。先能拦，再谈优化。
+    """
+    cfg = config_loader.stage_config("DONE")
+    key = {"max_turns": "reply_budget_turns",
+           "max_call_seconds": "reply_budget_time"}.get(reason)
+    text = (cfg.get(key) if key else "") or cfg.get("reply", "感谢您的接听，再见。")
+    return _finish(session, text, reason)
+
+
+def safe_fallback(session):
+    """编排环节自己出错时的兜底回复：认错 + 请对方再说一遍，阶段不推进。
+
+    不推进阶段是刻意的：这一轮没听懂，下一轮应该从同一个环节重来，
+    而不是假装已经过了这一关（否则会漏掉必说话术与确认）。
+    """
+    text = config_loader.fallback_text("reply", "抱歉，我这边刚才没处理好，麻烦您再说一遍好吗？")
+    return _reply(session, text, intent="error")
+
+
+def opening_line():
+    """开场白：外呼是客服先说话，不是等用户先开口。
+
+    为什么单独一个函数：外呼场景里"开场自报身份"是六环节的第一环，也是合规要求
+    （必须说清是谁、是哪家公司）。以前它只作为"回应用户第一句"的素材存在，
+    结果用户一上来就报尾号时，客服直接从"核对上了"开始，自报身份被整段跳过——
+    既拿不到必说话术分，也不符合外呼的合规惯例。
+
+    返回：str
+    """
+    return config_loader.stage_config("GREETING").get("reply", "您好。")
 
 
 def respond(session, user_text):
@@ -421,17 +519,26 @@ def respond(session, user_text):
 def compliance_guard(text):
     """合规护栏：检查待播报的话术有没有踩红线。
 
-    当前只做字面禁语匹配（config 的 forbidden_words），命中替换成 ***。
-    _todo 真实实现要做语义级检测（"我保证您一定赚"这类没有关键词的虚假承诺），
-    并且不是打码，而是重新生成一句合规表达；必说话术没说到也要能发现。
+    命中禁语的处理是**整句替换**，不是打码。原因：
+        - 打码后的句子会被 TTS 念成"星星星星"，用户听到的是怪音；
+        - 打码只遮住了关键词，句子的诱导语义还在（"我保证您***赚钱"）。
+    所以命中即整句换成配置里的合规话术，并把命中词记进事件供质检归因。
+
+    另外做一次自检：如果配置的合规话术里本身含禁语，就退回一句最保守的兜底，
+    否则会出现"用来兜底的话自己违规"这种荒谬情况。
+
+    _todo 真实实现要做语义级检测（换个说法说同样的话），并重新生成一句
+    合规表达而不是整句换掉——现在换句会丢上下文，但至少不会播错。
     """
-    hits = []
     out = text or ""
-    for w in config_loader.forbidden_words():
-        if w and w in out:
-            hits.append(w)
-            out = out.replace(w, "***")
-    return {"text": out, "blocked": bool(hits), "hits": hits}
+    hits = [w for w in config_loader.forbidden_words() if w and w in out]
+    if not hits:
+        return {"text": out, "blocked": False, "hits": [], "replaced": False}
+
+    safe = config_loader.blocked_reply()
+    if any(w and w in safe for w in config_loader.forbidden_words()):
+        safe = "这部分我需要请专员和您说明，可以吗？"
+    return {"text": safe, "blocked": True, "hits": hits, "replaced": True}
 
 
 def fallback_text(key="reply_fail"):

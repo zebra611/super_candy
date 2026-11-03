@@ -50,9 +50,19 @@ def stage_config(stage):
     return load().get("stages", {}).get(stage, {}) or {}
 
 
+def stages_config():
+    """全部阶段配置。质检（M6）要按阶段取 must_say，所以需要一个整体视图。"""
+    return dict(load().get("stages", {}) or {})
+
+
 def writeback_template():
-    """回写字段模板。真实实现要按 Mock 接口文档校准字段名。"""
-    return dict(load().get("writeback_template", {}))
+    """回写字段模板。真实实现要按 Mock 接口文档校准字段名。
+
+    以 "_" 开头的键是给人看的注释（_comment / _todo），不能进业务单据——
+    否则工单里会多出一个叫 "_comment" 的字段，对接真实接口时会被当成脏数据。
+    """
+    raw = load().get("writeback_template", {}) or {}
+    return {k: v for k, v in raw.items() if not k.startswith("_")}
 
 
 def forbidden_words():
@@ -90,6 +100,51 @@ def silence_config():
     reply_final 连续没说话，收尾挂断
     """
     return dict(load().get("silence", {}) or {})
+
+
+def tts_config():
+    """播报参数（音色、语速）。前端 speechSynthesis 与服务端流式 TTS 共用这一份。
+
+    放在配置里而不是写死在前端：换音色属于业务决策，不该改代码。
+    """
+    return dict(load().get("tts", {}) or {})
+
+
+def budget_config():
+    """成本与容量闸门。字段含义见 config/scene.json 的 budget 段。
+
+    这些数字是"先能观测，再决定要不要硬拦"：超出上限只结束本通电话，
+    不做全局熔断——骨架阶段硬熔断会让演示莫名其妙失败。
+    """
+    return dict(load().get("budget", {}) or {})
+
+
+def privacy_config():
+    """隐私相关开关。当前只有一项：事件入库前是否把连续数字打码。"""
+    return dict(load().get("privacy", {}) or {})
+
+
+def compliance_categories():
+    """按违规类型分组的词表（辱骂 / 虚假承诺 / 诱导）。
+
+    和 forbidden_words 的区别：forbidden_words 是"说了就整句替换"的硬禁语，
+    这里是"命中即判该项不合规"的分类词表，用于质检报告逐项给结论。
+    """
+    return dict(load().get("compliance", {}).get("categories", {}) or {})
+
+
+def blocked_reply():
+    """禁语命中后整句替换用的合规话术。
+
+    为什么整句替换而不是打码：打码后的句子会被 TTS 念成"星星星星"，
+    而且语义仍然带诱导性，等于既不通顺也没合规。
+    """
+    return load().get("compliance", {}).get("reply_blocked") or "这部分我需要请专员和您说明。"
+
+
+def fallback_text(key="reply", default=""):
+    """异常兜底话术（识别/编排/工具出错时用），与写回失败话术分开。"""
+    return load().get("fallback", {}).get(key) or default
 
 
 def scene_name():

@@ -44,6 +44,7 @@
   .meter { background: var(--gray-bg); border-radius: 8px; padding: 10px 12px; }
   .meter .k { font-size: 11px; color: var(--muted); }
   .meter .v { font-size: 17px; font-weight: 500; }
+  #metricNote { color: var(--muted); font-size: 11px; margin-top: 8px; }
   #events { font-family: Consolas, monospace; font-size: 11px; color: var(--muted); white-space: pre-wrap; max-height: 240px; overflow-y: auto; }
   .hint { color: var(--muted); font-size: 12px; }
 </style>
@@ -72,11 +73,12 @@
 
   <div class="card">
     <div class="meters">
-      <div class="meter"><div class="k">本轮总耗时</div><div class="v" id="mTotal">—</div></div>
-      <div class="meter"><div class="k">识别 / 编排 / 合成</div><div class="v" id="mSplit" style="font-size:13px">—</div></div>
-      <div class="meter"><div class="k">P50 / P95（全部轮次）</div><div class="v" id="mPct" style="font-size:13px">—</div></div>
+      <div class="meter"><div class="k">本轮首字响应（T4−T0）</div><div class="v" id="mFirst">—</div></div>
+      <div class="meter"><div class="k">本轮处理耗时（服务端）</div><div class="v" id="mTotal">—</div></div>
+      <div class="meter"><div class="k">首字 P50 / P95（语音轮）</div><div class="v" id="mPct" style="font-size:13px">—</div></div>
       <div class="meter"><div class="k">闭环通话数</div><div class="v" id="mClosed">—</div></div>
     </div>
+    <div id="metricNote">门槛 2000ms。首字口径要等第一通语音电话才有样本。</div>
   </div>
 
   <div class="card">
@@ -90,7 +92,9 @@
 
 <script>
 // 全部状态放这里，避免到处找变量。
-const S = { sessionId: null, recorder: null, chunks: [], recording: false, busy: false };
+// token 是这通电话的读取凭证：没有它，别人拿到 session_id 也查不到事件与报告。
+const S = { sessionId: null, token: null, recorder: null, chunks: [],
+            recording: false, busy: false, turnId: 0, t0: 0 };
 
 const $ = (id) => document.getElementById(id);
 
@@ -113,17 +117,18 @@ async function boot() {
   try {
     const r = await fetch("/api/health");
     const d = await r.json();
-    $("sceneLine").textContent = "场景：" + d.scene + " · 服务已就绪";
+    $("sceneLine").textContent = "场景：" + d.scene + " · 服务已就绪 · 首字门槛 " + d.gate_ms + "ms";
   } catch (e) {
     $("sceneLine").textContent = "连不上服务，确认 python app.py 是否在跑";
   }
 }
 
-// 开始通话：拿 session_id，之后每一轮都要带它
+// 开始通话：拿 session_id 与 read_token，之后每一轮都要带它们
 async function startCall() {
   const r = await fetch("/api/call/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
   const d = await r.json();
   S.sessionId = d.session_id;
+  S.token = d.read_token;
   $("sessionLine").textContent = "会话 " + d.session_id;
   $("btnStart").disabled = true;
   $("btnRec").disabled = false;
@@ -131,7 +136,12 @@ async function startCall() {
   $("textInput").disabled = false;
   $("btnSend").disabled = false;
   $("btnEvents").disabled = false;
-  log("系统", "通话已建立，可以说话了。状态机从 GREETING 开始，每说一轮推进一格。");
+  if (d.opening) {
+    // 外呼由客服先开口：开场自报身份是六环节的第一环
+    log("客服", d.opening, "开场");
+    speak(d.opening, 0);
+  }
+  log("系统", "通话已建立。说一句或打一句话，系统会按环节推进；留空点发送可以模拟“用户不说话”。");
 }
 
 // 录音：点一次开始、再点一次结束（半双工，骨架阶段够用）
@@ -148,7 +158,7 @@ async function toggleRec() {
         const blob = new Blob(S.chunks, { type: "audio/webm" });
         const b64 = await blobToBase64(blob);
         $("btnRec").textContent = "按下说话";
-        log("系统", "录音结束，已上传 " + Math.round(blob.size / 1024) + " KB，开始走假识别链路…");
+        log("系统", "录音结束，已上传 " + Math.round(blob.size / 1024) + " KB，开始走识别链路…");
         sendTurn({ audio_b64: b64 });
       };
       S.recorder.start();
@@ -176,14 +186,16 @@ async function sendTurn(payload) {
   if (!S.sessionId || S.busy) return;
   S.busy = true;
   $("btnSend").disabled = true;
+  // T0：用户"说完 / 点发送"的时刻。首字响应从这里算到第一帧声音。
+  S.t0 = performance.now();
   try {
     const r = await fetch("/api/turn", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(Object.assign({ session_id: S.sessionId }, payload))
+      body: JSON.stringify(Object.assign({ session_id: S.sessionId, token: S.token }, payload))
     });
     const d = await r.json();
-    if (d.error) { log("系统", "出错了：" + d.error); return; }
+    if (d.error) { log("系统", "出错了：" + d.error + (d.detail ? "（" + d.detail + "）" : "")); return; }
 
     log("用户", d.user_text || "（无应答）");
     log("客服", d.reply_text, d.next_stage);
@@ -191,12 +203,12 @@ async function sendTurn(payload) {
       log("系统", "工具调用：" + JSON.stringify(d.tool_result) + (d.closed ? "（已闭环并回写）" : ""));
     }
     if (d.compliance && d.compliance.blocked) {
-      log("系统", "⚠ 合规护栏命中禁语：" + d.compliance.hits.join("、"));
+      log("系统", "⚠ 合规护栏命中禁语：" + d.compliance.hits.join("、") + "，已整句替换");
     }
 
+    S.turnId = d.turn_id;
     $("mTotal").textContent = d.latency.total_ms + " ms";
-    $("mSplit").textContent = d.latency.asr_ms + " / " + d.latency.llm_ms + " / " + d.latency.tts_ms;
-    speak(d.reply_text);
+    speak(d.reply_text, d.turn_id);
     refreshMetrics();
     refreshEvents();
   } catch (e) {
@@ -207,21 +219,58 @@ async function sendTurn(payload) {
   }
 }
 
-// 播报：骨架阶段故意用浏览器自带 TTS，服务端不合成（见 modules/voice.py 的说明）
-function speak(text) {
-  if (!("speechSynthesis" in window)) return;
+// 播报：骨架阶段故意用浏览器自带 TTS，服务端不合成（见 modules/voice.py 的说明）。
+// 首字响应在这里测量：onstart 触发时才是"用户真的听到声音"。
+function speak(text, turnId) {
+  const t0 = S.t0;
+
+  if (!("speechSynthesis" in window)) {
+    reportMetric(turnId, performance.now() - t0, true);
+    return;
+  }
+
   const u = new SpeechSynthesisUtterance(text);
   u.lang = "zh-CN";
   u.rate = 1.05;
+
+  let reported = false;
+  const report = (estimate) => {
+    if (reported) return;
+    reported = true;
+    reportMetric(turnId, performance.now() - t0, estimate);
+  };
+
+  u.onstart = () => report(false);
   speechSynthesis.cancel();
   speechSynthesis.speak(u);
+  // 兜底：个别浏览器不触发 onstart，1.5 秒后按"已开始播报"记一条估算值。
+  // 宁可标 estimated，也不要让面板空着——空着会让人以为没在测。
+  setTimeout(() => report(true), 1500);
+}
+
+// 把浏览器实测的首字响应回传给服务端，聚合口径才有一手数据
+async function reportMetric(turnId, ms, estimate) {
+  if (!turnId || !S.sessionId) return;
+  const val = Math.round(ms);
+  $("mFirst").textContent = val + (estimate ? " ms（估算）" : " ms");
+  try {
+    await fetch("/api/turn/metric", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: S.sessionId, token: S.token,
+        turn_id: turnId, first_audio_ms: val, estimate: estimate
+      })
+    });
+  } catch (e) { /* 上报失败不影响通话，聚合时按服务端下界计入 */ }
+  refreshMetrics();
 }
 
 async function endCall() {
   if (!S.sessionId) return;
   await fetch("/api/call/end", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: S.sessionId })
+    body: JSON.stringify({ session_id: S.sessionId, token: S.token })
   });
   log("系统", "通话已结束。");
   $("btnStart").disabled = false;
@@ -230,6 +279,7 @@ async function endCall() {
   $("textInput").disabled = true;
   $("btnSend").disabled = true;
   S.sessionId = null;
+  S.token = null;
   refreshMetrics();
 }
 
@@ -237,19 +287,33 @@ async function refreshMetrics() {
   try {
     const r = await fetch("/api/metrics");
     const d = await r.json();
-    $("mPct").textContent = d.p50_ms + " / " + d.p95_ms + " ms";
+    const p95 = d.first_audio_p95_ms ? d.first_audio_p95_ms + " ms" : "样本不足";
+    $("mPct").textContent = d.first_audio_samples
+      ? d.first_audio_p50_ms + " / " + p95
+      : "— （暂无语音样本）";
     $("mClosed").textContent = d.closed_sessions + " 通（共 " + d.turns + " 轮）";
+
+    const bits = [];
+    bits.push("语音样本 " + d.first_audio_samples + (d.first_audio_estimated ? "（其中估算 " + d.first_audio_estimated + "）" : ""));
+    bits.push("超时 " + d.first_audio_timeouts);
+    if (d.first_audio_text_samples) bits.push("打字轮参考 P50 " + d.first_audio_text_p50_ms + "ms（不计入门槛）");
+    bits.push("处理耗时 P50 " + d.processing_p50_ms + "ms");
+    bits.push("估算成本 ¥" + d.est_cost_cny);
+    $("metricNote").textContent = "门槛 " + d.gate_ms + "ms · " + bits.join(" · ");
   } catch (e) { /* 指标拉取失败不影响通话 */ }
 }
 
 async function refreshEvents() {
   if (!S.sessionId) return;
   try {
-    const r = await fetch("/api/events?session_id=" + encodeURIComponent(S.sessionId));
+    const url = "/api/events?session_id=" + encodeURIComponent(S.sessionId) +
+                "&token=" + encodeURIComponent(S.token);
+    const r = await fetch(url);
     const d = await r.json();
+    if (d.error) { $("events").textContent = "读取失败：" + d.error; return; }
     $("events").textContent = (d.events || []).map(e =>
       "#" + String(e.id).padStart(3, "0") + "  turn " + e.turn_id + "  " +
-      e.type.padEnd(13) + " " + (e.latency_ms ? e.latency_ms + "ms" : "") +
+      e.type.padEnd(14) + " " + (e.latency_ms ? e.latency_ms + "ms" : "") +
       "\n     " + JSON.stringify(e.payload)
     ).join("\n") || "还没有事件。";
   } catch (e) { /* 忽略 */ }

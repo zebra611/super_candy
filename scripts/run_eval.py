@@ -120,43 +120,34 @@ def main():
         rows.append({
             "id": case["id"], "category": case["category"],
             "ok": ok, "closed": closed, "consent": consent, "problems": problems,
-            # 已知缺口：当前实现按设计做不到，单独统计，不混进通过率
-            "gap": bool(case.get("known_gap")),
         })
 
     # ---- 输出表格 ----
     print("%-5s %-13s %-6s %-6s %-10s %s" % ("ID", "类别", "结论", "闭环", "意向", "问题"))
     print("-" * 92)
     for r in rows:
-        verdict = "缺口" if r["gap"] else ("通过" if r["ok"] else "失败")
         print("%-5s %-13s %-6s %-6s %-10s %s" % (
-            r["id"], r["category"], verdict,
+            r["id"], r["category"], "通过" if r["ok"] else "失败",
             "是" if r["closed"] else "否",
             str(r["consent"]) if r["consent"] not in ("", None) else "-",
             "；".join(r["problems"]) or "",
         ))
 
     # ---- 汇总 ----
-    real = [r for r in rows if not r["gap"]]
-    gaps = [r for r in rows if r["gap"]]
-    passed = sum(1 for r in real if r["ok"])
+    passed = sum(1 for r in rows if r["ok"])
     print("-" * 92)
-    print("通过率：%d/%d = %.0f%%（不含已知缺口）" % (
-        passed, len(real), (passed * 100.0 / len(real)) if real else 0))
-    print("闭环率：%d/%d" % (sum(1 for r in real if r["closed"]), len(real)))
-    if gaps:
-        print("已知缺口：%d 条，其中已通过 %d 条：%s" % (
-            len(gaps), sum(1 for r in gaps if r["ok"]),
-            "、".join(r["id"] for r in gaps)))
+    print("通过率：%d/%d = %.0f%%" % (passed, len(rows), passed * 100.0 / len(rows)))
+    print("闭环率：%d/%d" % (sum(1 for r in rows if r["closed"]), len(rows)))
 
     by_cat = {}
-    for r in real:
+    for r in rows:
         t, p = by_cat.get(r["category"], (0, 0))
         by_cat[r["category"]] = (t + 1, p + (1 if r["ok"] else 0))
     print("分类通过：", "  ".join("%s %d/%d" % (k, v[1], v[0]) for k, v in by_cat.items()))
 
-    print("\n注意：当前所有识别结果都是占位数据（fake=true），这张表只证明"
-          "业务流水线通了，不代表真实能力。角色 2 接入模型后这里才有参考价值。")
+    print("\n注意：这批用例是**文字驱动**的，不经过语音识别，也不测时延。"
+          "它只证明业务流水线（环节推进、回写、纠错、合规）通了；"
+          "100% 的成因与过拟合风险见 docs/06 第 7 节，汇报前必读。")
     return 0
 
 

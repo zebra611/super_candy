@@ -21,8 +21,10 @@ import hashlib
 import time
 
 # 幂等存储：真实实现应换成数据库唯一索引，骨架阶段用内存 dict。
-# 键 = 幂等键，值 = 已生成的工单
+# _TICKETS          键 = 幂等键，值 = 已生成的工单（同一键重复调用不再写）
+# _TICKET_BY_SESSION 键 = 会话 ID，值 = 这通电话的工单号（改口时更新同一张，不新开）
 _TICKETS = {}
+_TICKET_BY_SESSION = {}
 
 # 假客户库：模拟企业提供的脱敏名单。
 _FAKE_CUSTOMERS = [
@@ -57,35 +59,65 @@ def query_order(customer_id):
     return {"found": bool(order), "order": order, "_ms": _ms(t0)}
 
 
-def create_ticket(session_id, content, idempotency_key):
+def create_ticket(session_id, content, idempotency_key, version=1):
     """登记工单 —— 这一步就是赛题要的"结构化结果回写"。
 
-    幂等规则（重要）：
-        同一个 idempotency_key 重复调用，**返回同一个 ticket_id 且 created=False**，
-        不会产生第二条工单。断网重试、用户重复确认都不会脏数据。
+    幂等的边界（重要，容易做错）：
+        同一个 idempotency_key 重复调用 → **返回同一条结果，created=False**，
+        不会产生第二条记录。断网重试、用户重复确认都不会脏数据。
+        但"用户改口"不是重复调用，它是**同一张工单的新版本**：
+        幂等键递增（...:v2），工单号不变，内容被更新，updated=True。
+        这样业务系统里始终只有一张工单、一个最终结论，不会留下两条互相矛盾的记录。
 
     参数：
-        session_id       通话 ID（用于追溯）
+        session_id       通话 ID（同时作为业务主键：一通电话一张工单）
         content          结构化字段 dict（形状来自 config 的 writeback_template）
-        idempotency_key  幂等键，约定为 "会话ID:环节名"
-    返回：dict(ticket_id, created, _ms)
+        idempotency_key  幂等键，约定为 "会话ID:WRITEBACK:v版本号"
+        version          第几次回写，从 1 开始；改口时递增
+    返回：dict(ticket_id, created, updated, version, _ms)
     """
     t0 = time.time()
     if idempotency_key in _TICKETS:
-        # 命中幂等：直接把上次的结果还回去，不新建
+        # 命中幂等：直接把上次的结果还回去，不新建也不更新
         t = _TICKETS[idempotency_key]
-        return {"ticket_id": t["ticket_id"], "created": False, "_ms": _ms(t0)}
+        return {"ticket_id": t["ticket_id"], "created": False, "updated": False,
+                "version": t["version"], "_ms": _ms(t0)}
 
-    # 用幂等键派生一个稳定的工单号，方便肉眼核对"重复调用拿到的是同一个号"
-    digest = hashlib.md5(idempotency_key.encode("utf-8")).hexdigest()[:8].upper()
+    # 同一通电话复用同一个工单号：改口是"更新"，不是"再开一张"
+    ticket_id = _TICKET_BY_SESSION.get(session_id)
+    updated = ticket_id is not None
+    if ticket_id is None:
+        # 用工单号的派生方式保持可预期，方便肉眼核对"同一通电话拿到的是同一个号"
+        digest = hashlib.md5(session_id.encode("utf-8")).hexdigest()[:8].upper()
+        ticket_id = "T%s" % digest
+        _TICKET_BY_SESSION[session_id] = ticket_id
+
     ticket = {
-        "ticket_id": "T%s" % digest,
+        "ticket_id": ticket_id,
         "session_id": session_id,
         "content": content,
-        "created_at": int(time.time()),
+        "version": int(version),
+        "updated_at": int(time.time()),
     }
     _TICKETS[idempotency_key] = ticket
-    return {"ticket_id": ticket["ticket_id"], "created": True, "_ms": _ms(t0)}
+    return {"ticket_id": ticket_id, "created": not updated, "updated": updated,
+            "version": int(version), "_ms": _ms(t0)}
+
+
+def ticket_for_session(session_id):
+    """取这通电话最新一版的工单（没有则 None）。验证改口是否真的更正了结论时用。"""
+    latest = None
+    for t in _TICKETS.values():
+        if t["session_id"] == session_id:
+            if latest is None or t["version"] >= latest["version"]:
+                latest = t
+    return latest
+
+
+def _reset_for_test():
+    """清空内存中的工单。仅自检脚本使用，业务代码不要调。"""
+    _TICKETS.clear()
+    _TICKET_BY_SESSION.clear()
 
 
 def dispatch(tool_call):
@@ -105,6 +137,7 @@ def dispatch(tool_call):
             session_id=args.get("session_id", ""),
             content=args.get("content", {}),
             idempotency_key=args.get("idempotency_key", ""),
+            version=args.get("version", 1),
         )
     # 未知工具：不抛异常，返回结构化错误，让上层能兜底（赛题要求异常兜底）
     return {"error": "UNKNOWN_TOOL", "name": name, "_ms": 0.0}
