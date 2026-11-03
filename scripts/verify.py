@@ -19,10 +19,13 @@
 """
 
 import json
+import math
 import os
+import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -317,6 +320,54 @@ def main():
           ["事件列 turn_id = %s" % (rep[0]["turn_id"] if rep else "无此事件"),
            "payload.turn_id = %s" % (payload_of(sid_f, "latency_report") or {}).get("turn_id")])
     end_call(sid_f)
+
+    # 真实观测到的问题：一轮 1.9 秒的音频（三轮里最短）让接口耗了 15.5 秒。
+    # 这条断言用本地假接口故意拖慢，确认超时会**按配置的时限**触发，
+    # 而不是让用户对着话筒干等。它是负向测试——正常路径不会走到这里。
+    import http.server
+
+    class _SlowASR(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            time.sleep(3)                    # 比 timeout 长，必定触发超时
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"choices":[{"message":{"content":"x"}}]}')
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), _SlowASR)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    orig_cfg, orig_secret = config_loader.asr_config, config_loader.secret
+    orig_env = os.environ.get("DASHSCOPE_API_KEY")
+    # 队友机器上没配密钥也要能跑这条：请求打到本地假接口，key 不被校验
+    os.environ["DASHSCOPE_API_KEY"] = "test-key-not-used"
+    config_loader.asr_config = lambda: {
+        "provider": "dashscope", "model": "m", "timeout_sec": 1,
+        "silence_rms": 0.0,               # 关掉静音闸门，保证真的发出请求
+        "endpoint": "http://127.0.0.1:%d/asr" % srv.server_address[1]}
+    try:
+        wave_pcm = b"".join(struct.pack("<h", int(8000 * math.sin(i / 8.0)))
+                            for i in range(8000))        # 0.5 秒非静音
+        t_slow = time.time()
+        out_slow = voice.asr(wave_pcm)
+        cost_slow = (time.time() - t_slow) * 1000
+        check("识别超时按配置时限触发，不让用户干等",
+              "超时" in str(out_slow.get("error")) and cost_slow < 2500,
+              ["假接口拖 3 秒，配置超时 1 秒 → 实际耗时 %.0f ms" % cost_slow,
+               "error = %s" % out_slow.get("error"),
+               "失败时 text 为空且 fake=True（不会被当成识别成功）：%r / %s"
+               % (out_slow.get("text"), out_slow.get("fake"))])
+    finally:
+        config_loader.asr_config, config_loader.secret = orig_cfg, orig_secret
+        if orig_env is None:
+            os.environ.pop("DASHSCOPE_API_KEY", None)
+        else:
+            os.environ["DASHSCOPE_API_KEY"] = orig_env
+        srv.shutdown()
+        srv.server_close()
 
     print()
     print("=" * 74)

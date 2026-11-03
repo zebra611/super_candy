@@ -21,6 +21,7 @@
 import base64
 import io
 import json
+import socket
 import struct
 import time
 import urllib.error
@@ -240,17 +241,29 @@ def _asr_dashscope(pcm):
         headers={"Authorization": "Bearer " + key,
                  "Content-Type": "application/json"},
         method="POST")
-    timeout = float(cfg.get("timeout_sec", 15))
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", "replace")[:300]
-        raise RuntimeError("识别接口返回 %d：%s" % (e.code, raw))
-    except urllib.error.URLError as e:
-        raise RuntimeError("连不上识别接口：%s" % e)
-
-    return _extract_text(payload)
+    timeout = float(cfg.get("timeout_sec", 5))
+    # 超时必须短。实测有一轮 1.9 秒的音频（三轮里最短）让接口耗了 15.5 秒，
+    # 原因不在音频长度，而是同步单次调用的长尾——这类慢请求重试只会更慢。
+    # 所以策略是：宁可早点告诉用户"没听清，再说一遍"，也不让他干等。
+    # 只对"连不上"重试：那种失败通常几十毫秒就返回，重试不占用用户的时间。
+    last_err = None
+    for attempt in (1, 2):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return _extract_text(json.loads(resp.read().decode("utf-8")))
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", "replace")[:300]
+            last_err = RuntimeError("识别接口返回 %d：%s" % (e.code, raw))
+            if 400 <= e.code < 500:
+                raise last_err          # 请求本身有问题，重试不会变好
+        except urllib.error.URLError as e:
+            # urlopen 把 socket 超时包在 URLError.reason 里，得拆开看
+            if isinstance(e.reason, socket.timeout):
+                raise RuntimeError("识别超时（%g 秒），这段音频没能出结果" % timeout)
+            last_err = RuntimeError("连不上识别接口：%s" % e)
+        except socket.timeout:
+            raise RuntimeError("识别超时（%g 秒），这段音频没能出结果" % timeout)
+    raise last_err
 
 
 def _extract_text(payload):
