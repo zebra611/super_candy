@@ -25,12 +25,16 @@ import os
 import sqlite3
 import time
 
-from contracts import EVENT_VERSION
+from contracts import EVENT_VERSION, LATENCY_GATE_MS
 
 # 事件库文件位置：项目根目录下的 data/events.db
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(_ROOT, "data")
 DB_PATH = os.path.join(DATA_DIR, "events.db")
+
+# 超过这个耗时的轮次记为超时：不并入分位数，但要在报告里写明条数。
+# 依据 docs/04 第 4 节的统计口径。
+TIMEOUT_MS = 10000
 
 # 建表语句。
 # 刻意不设外键与复杂索引：骨架阶段只按 session_id 明细查询 + 全表算分位数。
@@ -157,20 +161,33 @@ def _percentile(sorted_vals, p):
     return float(sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * frac)
 
 
-def metrics():
-    """算时延指标：每轮端到端耗时的 P50 / P95，以及轮数与闭环通话数。
+def metrics(gate_ms=LATENCY_GATE_MS):
+    """算时延指标。**两套口径并列**，因为它们回答两个不同的问题。
 
-    口径（骨架阶段自定义，拿到官方定义后要覆盖这里）：
-        一轮的端到端耗时记在 turn_end 事件上，由 app.py 在轮次收尾时写入。
+    口径 A「处理耗时」= turn_end.payload.processing_ms
+        服务端从收到请求到返回回复文本的耗时。回答"服务器快不快"。
+        它不含用户说话之前的部分，也不含声音真正播出来——**不是首字响应**。
 
-    后续待补充：
-        - TODO 官方口径明确后，改成"用户末字 → 首包出声"的分段口径；
-        - TODO 增加按版本（version）分组的对比，供自进化前后对比使用。
+    口径 B「首字响应」= latency_report.payload.first_audio_ms（T4 − T0）
+        浏览器实测：用户说完/点发送 → 听到第一帧声音。回答"用户等多久"，
+        这才是赛题 2 秒门槛对应的数字。
+        没有前端上报时，退回 turn_end.payload.server_first_audio_ms
+        （服务端下界：请求到达 → 首包就绪），并标 estimated=True。
+
+    样本规则（与 docs/04 一致）：
+        - 首字口径只统计语音轮（source=asr）；打字轮单列，仅供调试参考；
+        - 超过 TIMEOUT_MS 的记为超时，不并入分位数，但要单独报条数；
+        - 样本数 < 20 不出 P95（少样本的 P95 没有意义）。
+
+    返回：dict，字段见函数末尾。新增字段只追加，不改已有名字。
     """
     conn = sqlite3.connect(DB_PATH)
     try:
         rows = conn.execute(
-            "SELECT latency_ms FROM events WHERE type='turn_end' AND latency_ms > 0"
+            "SELECT session_id, turn_id, payload, latency_ms FROM events WHERE type='turn_end'"
+        ).fetchall()
+        reports = conn.execute(
+            "SELECT session_id, payload FROM events WHERE type='latency_report'"
         ).fetchall()
         closed = conn.execute(
             "SELECT COUNT(DISTINCT session_id) FROM events WHERE type='writeback'"
@@ -178,10 +195,76 @@ def metrics():
     finally:
         conn.close()
 
-    vals = sorted(r[0] for r in rows)
+    # 前端上报按 (session, turn) 建索引；同一轮重复上报以最后一条为准
+    client = {}
+    timeouts = 0
+    for sid, payload in reports:
+        p = json.loads(payload or "{}")
+        v = p.get("first_audio_ms")
+        if not isinstance(v, (int, float)) or v <= 0:
+            continue
+        if v >= TIMEOUT_MS:
+            timeouts += 1
+            continue
+        client[(sid, p.get("turn_id"))] = (float(v), bool(p.get("estimate")))
+
+    turns = []
+    for sid, tid, payload, latency in rows:
+        p = json.loads(payload or "{}")
+        turns.append({
+            "session_id": sid,
+            "turn_id": tid,
+            "source": p.get("source", "text"),
+            "processing_ms": float(p.get("processing_ms") or latency or 0),
+            "server_first_audio_ms": p.get("server_first_audio_ms"),
+            "cost_cny": float(p.get("est_cost_cny") or 0),
+        })
+
+    processing = sorted(t["processing_ms"] for t in turns
+                        if 0 < t["processing_ms"] < TIMEOUT_MS)
+
+    def collect(sources):
+        """取指定来源轮次的首字样本，返回 (样本, 估算条数)。"""
+        vals, estimated = [], 0
+        for t in turns:
+            if t["source"] not in sources:
+                continue
+            hit = client.get((t["session_id"], t["turn_id"]))
+            if hit:
+                vals.append(hit[0])
+                estimated += 1 if hit[1] else 0
+            elif t["server_first_audio_ms"]:
+                vals.append(float(t["server_first_audio_ms"]))
+                estimated += 1
+        return sorted(vals), estimated
+
+    voice_vals, voice_est = collect({"asr"})
+    text_vals, _ = collect({"text"})
+
+    def p95(vals):
+        # 样本太少时 P95 等于最大值，容易造成误判，干脆不出
+        return _percentile(vals, 95) if len(vals) >= 20 else None
+
+    within = sum(1 for v in voice_vals if v <= gate_ms)
+
     return {
-        "turns": len(vals),
-        "p50_ms": round(_percentile(vals, 50), 1),
-        "p95_ms": round(_percentile(vals, 95), 1),
+        "turns": len(turns),
+        "turns_voice": sum(1 for t in turns if t["source"] == "asr"),
+        "turns_text": sum(1 for t in turns if t["source"] == "text"),
+        "turns_silence": sum(1 for t in turns if t["source"] == "silence"),
+        # 口径 A：服务端处理耗时
+        "processing_p50_ms": round(_percentile(processing, 50), 1),
+        "processing_p95_ms": round(p95(processing) or 0, 1),
+        # 口径 B：首字响应（语音轮，浏览器实测）
+        "first_audio_p50_ms": round(_percentile(voice_vals, 50), 1),
+        "first_audio_p95_ms": round(p95(voice_vals) or 0, 1),
+        "first_audio_samples": len(voice_vals),
+        "first_audio_estimated": voice_est,
+        "first_audio_timeouts": timeouts,
+        "gate_ms": int(gate_ms),
+        # 打字轮的参考值：不是门槛口径，只用来判断"是不是服务端在拖慢"
+        "first_audio_text_p50_ms": round(_percentile(text_vals, 50), 1),
+        "first_audio_text_samples": len(text_vals),
         "closed_sessions": int(closed or 0),
+        "est_cost_cny": round(sum(t["cost_cny"] for t in turns), 4),
     }

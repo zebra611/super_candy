@@ -16,6 +16,35 @@
     "_todo": "热词要按企业资料包的名单与产品名替换；多数云 ASR 支持 50-200 个词"
   },
 
+  "tts": {
+    "voice": "zh-CN-XiaoxiaoNeural",
+    "rate": 1.05,
+    "_todo": "现在只传给浏览器 speechSynthesis；接服务端流式 TTS 后，这里换成音色 ID 与语速参数"
+  },
+
+  "fallback": {
+    "reply": "抱歉，我这边刚才没处理好，麻烦您再说一遍好吗？",
+    "reply_tool": "我这边查得有点慢，稍后让专员给您回电说明，可以吗？",
+    "_todo": "兜底话术要再细分：识别失败 / 编排异常 / 接口超时 / 业务拒绝，各自不同"
+  },
+
+  "budget": {
+    "max_turns": 40,
+    "max_call_seconds": 300,
+    "session_ttl_sec": 1800,
+    "max_sessions": 200,
+    "daily_warn_cny": 5.0,
+    "price_per_min_asr": 0.0048,
+    "price_per_1k_chars_tts": 0.08,
+    "price_per_1m_tokens": 0.6,
+    "_todo": "单价按 2026-11 公开价格折算，仅用于估算告警；真实成本按账单核对"
+  },
+
+  "privacy": {
+    "mask_digits_in_events": true,
+    "_todo": "事件库用于分析，不用于还原身份，所以入库前把连续数字打码；原始文本只留在内存会话里"
+  },
+
   "stages": {
     "GREETING": {
       "reply": "您好，我是京东客服中心的小采，请问是张先生本人吗？",
@@ -56,14 +85,20 @@
     "WRITEBACK": {
       "reply": "好的，已经为您登记完成，稍后会有短信通知。感谢您的接听，再见。",
       "reply_declined": "好的，那就不打扰您了，已经帮您记录下这个结果。感谢您的接听，再见。",
+      "reply_unknown": "好的，那我先按您现在的意思记录下来，稍后专员再和您确认一次。感谢您的接听，再见。",
+      "reply_changed": "好的，已经按您新的意思更正了登记，稍后会有短信通知。感谢您的接听，再见。",
+      "reply_changed_declined": "好的，已经帮您改成不需要了，之前那条记录会一并更正。感谢您的接听，再见。",
       "reply_fail": "我这边登记时出了点问题，稍后会有专员联系您确认。感谢您的接听，再见。",
       "must_say": ["登记"],
       "_todo": "这句必须在回写成功之后才播，回写失败要走 reply_fail"
     },
     "DONE": {
       "reply": "感谢您的接听，祝您生活愉快，再见。",
+      "reply_ask": "这份权益是免费的，不用您额外付费。您如果改变主意，随时告诉我，我给您补登记。",
+      "reply_budget_turns": "今天先不耽误您太多时间了，有需要我再联系您，再见。",
+      "reply_budget_time": "这通电话时间有点长了，我先不占用您时间，稍后专员再和您联系，再见。",
       "must_say": [],
-      "_todo": "终态，不再推进，也不再发起新话题"
+      "_todo": "终态，不再推进，也不再发起新话题；但用户改口要能更正回写"
     }
   },
 
@@ -72,7 +107,9 @@
     {"name": "need", "desc": "用户表达的诉求", "type": "str"},
     {"name": "consent", "desc": "是否同意领取权益（true/false/unknown）", "type": "str"},
     {"name": "order", "desc": "查到的订单信息", "type": "object"},
-    {"name": "customer", "desc": "查到的客户信息", "type": "object"}
+    {"name": "customer", "desc": "查到的客户信息", "type": "object"},
+    {"name": "order_queried", "desc": "本通电话是否已查过订单（避免每轮重复打接口）", "type": "bool"},
+    {"name": "last_user_text", "desc": "用户上一句原话，供多轮指代与归因", "type": "str"}
   ],
 
   "answers": {
@@ -94,6 +131,12 @@
 
   "compliance": {
     "forbidden_words": ["保证赚", "百分百", "稳赚", "你必须", "不办就"],
-    "_todo": "真实禁语表由企业提供；语义级检测（虚假承诺/诱导）M6 负责，不在这里"
+    "reply_blocked": "这部分我这边不能给您保证，具体以正式条款为准，我请专员再和您说明，可以吗？",
+    "categories": {
+      "insult": ["你这个傻", "闭嘴", "神经病", "爱买不买"],
+      "false_promise": ["一定赚", "绝对没问题", "保证有效", "百分百"],
+      "inducement": ["不办就", "错过就没", "最后一天", "限时名额"]
+    },
+    "_todo": "真实禁语表由企业提供；上面的分类词表是占位，语义级检测（换种说法的虚假承诺）M6 负责"
   }
 }

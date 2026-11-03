@@ -21,7 +21,7 @@ python app.py          # 浏览器打开 http://127.0.0.1:8000
 ```
 
 > Windows 上如果 `python` 报错，双击 `启动.bat` 即可。
-> 用 Codespaces 的队友见 README 的 B 节。
+> 用 Codespaces 的队友见 `docs/10_运行与访问方式.md` 第 2 节。
 
 **动手写代码前，先确认"提示内容"有没有更新**（README「使用规范」规矩一）：
 

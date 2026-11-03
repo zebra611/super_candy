@@ -174,18 +174,14 @@
       "category": "correction",
       "goal": "用户改口：已回写后又反悔，应能更正结果",
       "turns": ["是我，8866", "用着还行", "可以", "同意", "等等我说错了，我不要了"],
-      "expect": {"consent": false},
-      "known_gap": true,
-      "gap_reason": "回写已完成后无法撤回或更正，需要二次回写机制"
+      "expect": {"consent": false, "closed": true}
     },
     {
       "id": "C02",
       "category": "correction",
       "goal": "用户改口：先拒绝后改主意",
       "turns": ["是我，8866", "不需要", "哎等等，你刚说的那个权益是免费的吧", "那我要"],
-      "expect": {"consent": true},
-      "known_gap": true,
-      "gap_reason": "拒绝后会话已进入终态，无法重新开启接纳流程"
+      "expect": {"consent": true, "closed": true}
     },
     {
       "id": "C03",

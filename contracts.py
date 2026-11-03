@@ -47,8 +47,14 @@ EVENT_TYPES = {
     "tts_start",      # 开始播报
     "barge_in",       # 用户打断（哑链路暂未实现，留口）
     "turn_end",       # 一轮交互结束，latency_ms 记本轮端到端总耗时
+    "latency_report",  # 浏览器实测的首字响应（T4−T0），由前端上报
+    "error",          # 某个环节出错（不中断通话，但要能被统计）
     "call_ended",     # 通话结束
 }
+
+# 首字响应时延门槛（赛题硬门槛，单位毫秒）。
+# 放在契约层而不是配置里：它是"对外承诺的指标"，不随场景变化。
+LATENCY_GATE_MS = 2000
 
 # 任务状态机的阶段名（状态机契约）。
 # 顺序即推进顺序，对应赛题要求的 6 个业务环节 + 2 个边界状态。
@@ -63,12 +69,13 @@ STAGES = (
     "DONE",       # 通话目的已达成，可结束
 )
 
-# 这些阶段结束时算"闭环完成"，用于统计任务闭环率。
-# 注意：只有走到 WRITEBACK 且回写成功才算，DONE 只是礼貌收尾。
-CLOSED_STAGES = ("WRITEBACK", "DONE")
-
-# 终止态：进入后不再推进。
+# 终止态：进入后不再推进业务环节（但用户改口仍要能更正回写）。
 TERMINAL_STAGE = "DONE"
+
+# 刻意不提供 "CLOSED_STAGES" 这类"用阶段名判闭环"的常量。
+# 原因：曾有过一个 `CLOSED_STAGES = ("WRITEBACK", "DONE")`，被用来判"是否闭环"，
+# 结果走到 DONE 就算闭环——可 DONE 只是礼貌收尾，回写失败也会走到 DONE。
+# 闭环的唯一证据是 `writeback` 事件（工单真的建出来了），不要用阶段名推断。
 
 # 工具契约。键为工具名，值为参数与返回结构说明。
 # 真实实现（M4）必须严格按此签名，参数名不得改。
@@ -91,9 +98,13 @@ TOOL_SCHEMAS = {
             "session_id": "str",
             "content": "dict",          # 结构化字段，形状见 config/scene.json 的 writeback_template
             "idempotency_key": "str",   # 幂等键：同一键重复调用只产生一条工单
+            "version": "int",           # 选填，第几次回写（从 1 开始）；改口时递增
         },
-        "returns": {"ticket_id": "str", "created": "bool"},
+        "returns": {"ticket_id": "str", "created": "bool", "updated": "bool",
+                    "version": "int"},
         # 写操作必须幂等，这是赛题明确要求的"调用幂等性与一致性"。
+        # 注意幂等的边界：同一个键 → 同一条结果；**不同版本** → 同一张工单被更新，
+        # 而不是另开一张。否则用户改口会在业务系统里留下两条互相矛盾的记录。
         "idempotent": True,
     },
 }
