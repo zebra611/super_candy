@@ -93,6 +93,20 @@ def main():
         print("  详细开号步骤见 docs/15_开通云ASR.md")
         return 2
 
+    # 防一手最常见、代价也最大的错：把账号级 AccessKey 当成 API Key 填进来。
+    # 这不只是"填错"——LTAI 开头的那对能操作整个账号，泄露后果远大于一把 API Key。
+    if key.startswith("LTAI"):
+        print()
+        print("  ❌ 这是 AccessKey（LTAI 开头），不是百炼的 API Key。")
+        print("     两者完全不同：")
+        print("       API Key（sk- 开头）→ 只能调大模型，按量计费，泄露损失有限")
+        print("       AccessKey（LTAI）  → 账号级最高权限，能开机器、删数据、看账单")
+        print("     本项目一次都不需要 AccessKey。请：")
+        print("       1) 到 RAM 访问控制 → AccessKey 管理，把这对禁用再删除；")
+        print("       2) 到 https://bailian.console.aliyun.com → 头像 → API-KEY 管理")
+        print("          新建一把 sk- 开头的 key，填进 config/secrets.json。")
+        return 3
+
     print()
     print("=" * 68)
     print("第 2 步：拿这个 key 发一个最小请求（花费约 0 元）")
