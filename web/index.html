@@ -406,7 +406,7 @@ async function sendTurn(payload, t0) {
 
     S.turnId = d.turn_id;
     $("mTotal").textContent = d.latency.total_ms + " ms";
-    speak(d.reply_text, d.turn_id);
+    speak(d.tts || { text: d.reply_text, mode: "browser" }, d.turn_id);
     refreshMetrics();
     refreshEvents();
   } catch (e) {
@@ -417,20 +417,12 @@ async function sendTurn(payload, t0) {
   }
 }
 
-// 播报：骨架阶段故意用浏览器自带 TTS，服务端不合成（见 modules/voice.py 的说明）。
-// 首字响应在这里测量：onstart 触发时才是"用户真的听到声音"。
-function speak(text, turnId) {
+// 播报：服务端合成好音频就播它，没合成成功才退回浏览器自带 TTS。
+// 首字响应在这里测量：onplaying / onstart 触发时才是"用户真的听到声音"。
+// 注意这个数现在**包含云 TTS 的合成耗时**——那才是真实的端到端首字。
+function speak(tts, turnId) {
   const t0 = S.t0;
-
-  if (!("speechSynthesis" in window)) {
-    reportMetric(turnId, performance.now() - t0, true);
-    return;
-  }
-
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = "zh-CN";
-  u.rate = 1.05;
-
+  const text = (tts && tts.text) || "";
   let reported = false;
   const report = (estimate) => {
     if (reported) return;
@@ -438,6 +430,27 @@ function speak(text, turnId) {
     reportMetric(turnId, performance.now() - t0, estimate);
   };
 
+  // 服务端合成路线：<audio> 播 OSS 链接。不 fetch，所以不受 CORS 限制。
+  if (tts && tts.mode === "url" && tts.audio_url) {
+    const a = new Audio(tts.audio_url);
+    a.onplaying = () => report(false);
+    a.onerror = () => { log("系统", "音频播放失败，改用浏览器播报"); browserSpeak(text, report); };
+    a.play().catch(() => { log("系统", "自动播放被拦截，改用浏览器播报"); browserSpeak(text, report); });
+    return;
+  }
+
+  browserSpeak(text, report);
+}
+
+// 降级路线：浏览器 speechSynthesis。音色机械，但保证"有声音"。
+function browserSpeak(text, report) {
+  if (!("speechSynthesis" in window)) {
+    report(true);
+    return;
+  }
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "zh-CN";
+  u.rate = 1.05;
   u.onstart = () => report(false);
   speechSynthesis.cancel();
   speechSynthesis.speak(u);

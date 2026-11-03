@@ -287,27 +287,117 @@ def _extract_text(payload):
 def tts(text):
     """把回复文本变成语音。
 
-    哑链路实现：**服务端不合成**，只回一个"请前端自己念"的指令。
-    前端用浏览器内置的 speechSynthesis 播报，所以链路里确实有声音，
-    但不是我们自己的 TTS——这是有意为之，先不引入任何外部服务。
+    两条路：
+        dashscope → 服务端合成，返回一个音频 URL，前端用 <audio> 播；
+        browser   → 服务端不合成，前端用 speechSynthesis 念（占位/降级）。
+    为什么保留降级：合成服务抖动时宁可声音机械一点，也不能突然没声——
+    外呼里沉默比音色难听严重得多。
 
-    音色与语速来自 config/scene.json 的 tts 段：换音色属于业务决策，
-    不该改代码，所以哪怕现在只是传给浏览器，也走配置。
+    音色与语速来自 config/scene.json 的 tts 段：换音色属于业务决策，不该改代码。
 
-    真实实现要换掉的：
-        - 服务端流式合成，首包就往下推，不要等整句合成完；
-        - 记录"首包耗时"写进事件，这是 P50 门槛的关键一段。
-
-    返回：dict(mode, text, voice, rate, latency_ms)
+    返回：dict(mode, text, voice, rate, latency_ms[, audio_url, error])
     """
     cfg = config_loader.tts_config()
+    provider = (cfg.get("provider") or "browser").strip()
+    t0 = time.time()
+
+    if provider == "dashscope":
+        try:
+            url = _tts_dashscope(text)
+            return {
+                "mode": "url",
+                "text": text,
+                # 这里必须是云端音色 ID。之前错填成浏览器音色名，排查时
+                # 会以为"用的是 Xiaoxiao 却发出了 Cherry 的声音"而绕远路。
+                "voice": cfg.get("voice_name", ""),
+                "rate": float(cfg.get("rate", 1.0)),
+                "audio_url": url,
+                "provider": provider,
+                "latency_ms": round((time.time() - t0) * 1000, 1),
+            }
+        except Exception as e:
+            # 合成失败不掐断通话：退回浏览器播报，并把原因留痕
+            return {
+                "mode": "browser",
+                "text": text,
+                "voice": cfg.get("voice", ""),
+                "rate": float(cfg.get("rate", 1.0)),
+                "provider": "browser",
+                "fallback_from": provider,
+                "error": str(e)[:200],
+                "latency_ms": round((time.time() - t0) * 1000, 1),
+            }
+
     return {
         "mode": "browser",      # 前端据此决定用 speechSynthesis 播报
         "text": text,
         "voice": cfg.get("voice", ""),
         "rate": float(cfg.get("rate", 1.0)),
-        "latency_ms": 0.0,      # 骨架阶段无服务端合成，故为 0
+        "provider": "browser",
+        "latency_ms": 0.0,      # 没走服务端合成，自然没有服务端耗时
     }
+
+
+def _tts_dashscope(text):
+    """调 qwen3-tts-flash 合成，返回可播放的音频 URL。
+
+    为什么返回 URL 而不是自己下载转 base64：
+        这条链路上音频只播一次，转一道手多一次读盘/编码，还让响应体从
+        几百字节涨到几百 KB。OSS 链接 24 小时有效，当场播完全够。
+    为什么要 language_type：模型是多语种的，不指定时英文单词会被念成中文字母。
+    """
+    cfg = config_loader.tts_config()
+    key = config_loader.secret("dashscope_api_key")
+    if not key:
+        raise RuntimeError("未配置 dashscope_api_key")
+    if not (text or "").strip():
+        raise RuntimeError("空文本不合成")
+
+    body = {
+        "model": cfg.get("model") or "qwen3-tts-flash",
+        "input": {
+            "text": text,
+            "voice": cfg.get("voice_name") or "Cherry",
+            "language_type": cfg.get("language_type") or "Chinese",
+        },
+    }
+    req = urllib.request.Request(
+        cfg.get("endpoint") or
+        "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Authorization": "Bearer " + key,
+                 "Content-Type": "application/json"},
+        method="POST")
+    timeout = float(cfg.get("timeout_sec", 10))
+    # 合成比识别更该重试：它是幂等的、纯函数式调用，重试不会产生副作用，
+    # 而失败的表现是"客服突然不说话了"，比多等一会儿难看得多。
+    last_err = None
+    for _ in (1, 2):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            url = ((payload.get("output") or {}).get("audio") or {}).get("url")
+            if not url:
+                raise RuntimeError("返回体里没有音频链接：%s"
+                                   % json.dumps(payload, ensure_ascii=False)[:200])
+            # OSS 默认给 http://，而我们是 https 页面。
+            # 不换成 https 的话，浏览器会以"混合内容"为由直接拦掉播放，
+            # 表现是"合成成功但一点声音都没有"，极难查。
+            if url.startswith("http://"):
+                url = "https://" + url[len("http://"):]
+            return url
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", "replace")[:200]
+            last_err = RuntimeError("合成接口返回 %d：%s" % (e.code, raw))
+            if 400 <= e.code < 500:
+                raise last_err
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, socket.timeout):
+                raise RuntimeError("合成超时（%g 秒）" % timeout)
+            last_err = RuntimeError("连不上合成接口：%s" % e)
+        except socket.timeout:
+            raise RuntimeError("合成超时（%g 秒）" % timeout)
+    raise last_err
 
 
 def detect_barge_in(is_playing):

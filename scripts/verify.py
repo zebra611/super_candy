@@ -45,6 +45,12 @@ from app import (_acquire, _audio_state, _auth, _release, end_call,  # noqa: E40
                  handle_turn, ingest_audio_chunk, report_client_metric, start_call)
 from modules import dialogue, eval as eval_mod, tools, voice  # noqa: E402
 
+# 自检默认不真的调云端合成：既慢又要花钱，还会让"没有密钥的队友"跑不过。
+# TTS 的真实请求构造与失败回落，下面用本地假接口单独测（见证据 9 之后那段）。
+_orig_tts_config = config_loader.tts_config
+config_loader.tts_config = lambda: {
+    "provider": "browser", "voice": "zh-CN-XiaoxiaoNeural", "rate": 1.05}
+
 results = []
 
 # 让"用户报尾号"这类剧本可以反复跑：工单是内存态的，每次自检从头开始
@@ -369,6 +375,70 @@ def main():
         srv.shutdown()
         srv.server_close()
 
+    # ---- TTS：真实请求构造 + 合成失败必须回落，不能静音 ----
+    seen_tts = []
+
+    class _FakeTTS(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            seen_tts.append(json.loads(self.rfile.read(n).decode("utf-8") or "{}"))
+            if "fail" in self.path:
+                body = b'{"message":"boom"}'
+                self.send_response(500)
+            else:
+                body = json.dumps({"output": {"audio": {
+                    "url": "https://example.com/a.mp3"}}}).encode()
+                self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv_tts = http.server.HTTPServer(("127.0.0.1", 0), _FakeTTS)
+    threading.Thread(target=srv_tts.serve_forever, daemon=True).start()
+    tts_base = "http://127.0.0.1:%d" % srv_tts.server_address[1]
+    os.environ["DASHSCOPE_API_KEY"] = "test-key-not-used"
+    orig_tts_key_env = os.environ.get("DASHSCOPE_API_KEY")
+
+    def _tts_cfg(endpoint):
+        return {"provider": "dashscope", "model": "qwen3-tts-flash",
+                "endpoint": endpoint, "voice_name": "Cherry",
+                "language_type": "Chinese", "timeout_sec": 3,
+                "voice": "zh-CN-XiaoxiaoNeural", "rate": 1.05}
+
+    try:
+        config_loader.tts_config = lambda: _tts_cfg(tts_base + "/ok")
+        out_tts = voice.tts("您好，我是京东客服中心的小采。")
+        got = seen_tts[-1] if seen_tts else {}
+        check("TTS 走云端时返回可播放链接，音色与文本都带对了",
+              out_tts.get("mode") == "url"
+              and out_tts.get("audio_url") == "https://example.com/a.mp3"
+              and (got.get("input") or {}).get("voice") == "Cherry"
+              and (got.get("input") or {}).get("text", "").startswith("您好"),
+              ["mode = %s" % out_tts.get("mode"),
+               "audio_url = %s" % out_tts.get("audio_url"),
+               "请求体 input = %s" % json.dumps(got.get("input"), ensure_ascii=False),
+               "服务端合成耗时 %s ms" % out_tts.get("latency_ms")])
+
+        config_loader.tts_config = lambda: _tts_cfg(tts_base + "/fail")
+        out_fb = voice.tts("测试一句")
+        check("合成失败时回落到浏览器播报，而不是静音",
+              out_fb.get("mode") == "browser"
+              and out_fb.get("fallback_from") == "dashscope"
+              and out_fb.get("text") == "测试一句" and out_fb.get("error"),
+              ["mode = %s（回落自 %s）" % (out_fb.get("mode"), out_fb.get("fallback_from")),
+               "保留文本可供浏览器念：%r" % out_fb.get("text"),
+               "error = %s" % out_fb.get("error")])
+    finally:
+        config_loader.tts_config = _orig_tts_config
+        if orig_tts_key_env is None:
+            os.environ.pop("DASHSCOPE_API_KEY", None)
+        srv_tts.shutdown()
+        srv_tts.server_close()
+
     print()
     print("=" * 74)
     print("证据 10：会话 token 与并发保护")
@@ -502,7 +572,10 @@ def main():
         print("有断言失败，说明代码与预期不符 —— 以这里为准，不要信文档。")
         return 1
     print("全部通过。这只证明上面这些行为是真的，不代表整个系统都完成了：")
-    print("  仍然是占位的：真 ASR/TTS、真 VAD、打断、语义级合规、模拟用户跑批。")
+    print("  已经是真的：云端识别（qwen3-asr-flash）、云端合成（qwen3-tts-flash）、")
+    print("            采集分帧上传、静音闸门、超时分档、合成失败回落。")
+    print("  仍然是占位的：真 VAD（现在是「松手即说完」）、打断、语义级合规、")
+    print("            流式下发（识别与合成都是整段调用）、模拟用户跑批。")
     return 0
 
 
