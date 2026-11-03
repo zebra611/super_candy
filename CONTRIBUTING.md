@@ -23,6 +23,17 @@ python app.py          # 浏览器打开 http://127.0.0.1:8000
 > Windows 上如果 `python` 报错，双击 `启动.bat` 即可。
 > 用 Codespaces 的队友见 README 的 B 节。
 
+**动手写代码前，先确认"提示内容"有没有更新**（README「使用规范」规矩一）：
+
+```bash
+git pull origin main
+git log --oneline -5 -- docs/ contracts.py app.py config/scene.json
+```
+
+再看 `docs/02`、`docs/03`、`docs/04` 开头那行"状态：草案 / 已冻结"还是不是你依据的那一版。契约改过而你不知道，写出来的代码就是要返工的代码。
+
+开工前先在群里或 PR 里报三句话：**改哪些文件、依据哪版契约、会不会碰禁改区**。
+
 ---
 
 ## 1. 区域划分与文件归属
@@ -31,21 +42,24 @@ python app.py          # 浏览器打开 http://127.0.0.1:8000
 
 | 区域 | 归属文件 | 负责人 | 这个区域负责什么 |
 |---|---|---|---|
-| **R1 实时语音与终端** | `modules/voice.py`<br>`web/index.html` | 角色 1 | VAD、流式 ASR、流式 TTS、打断、录音与播报界面 |
-| **R2 对话大脑** | `modules/dialogue.py`<br>`modules/tools.py` | 角色 2 | 状态机、意图槽位、话术生成、工具调用、结构化回写 |
-| **R3 质检与自进化** | `modules/eval.py` | 角色 3 | 全量质检、评测集、失败归因、进化闭环 |
-| **R4 平台与交付** | `app.py`<br>`events.py`<br>`config_loader.py`<br>`config/scene.json`<br>`启动.bat`<br>`README.md`、`docs/` | 角色 4 | 路由与链路串联、事件流、配置、部署、文档 |
+| **R1 实时语音与终端** | `modules/voice.py`<br>`web/index.html` | 1 号 | VAD、流式 ASR、流式 TTS、打断、录音与播报界面 |
+| **R2A 对话编排** | `modules/dialogue.py` | 2 号 A | 状态机、意图判断、槽位填充、话术选择、多轮纠错 |
+| **R2B 工具与业务** | `modules/tools.py` | 2 号 B | 工具调用、Mock 接口适配、结构化回写、幂等与错误码 |
+| **R3 质检与自进化** | `modules/eval.py`<br>`eval/`<br>`scripts/run_eval.py` | 3 号 | 全量质检、评测集、失败归因、进化闭环 |
+| **R4 平台与交付** | `app.py`<br>`events.py`<br>`config_loader.py`<br>`config/scene.json`<br>`启动.bat`<br>`README.md`、`docs/` | 4 号 | 路由与链路串联、事件流、配置、部署、文档 |
 | **契约层（禁改区）** | `contracts.py` | 全员共有 | 事件类型、状态机阶段名、工具签名 |
+
+> **R2 是两个人一个任务**，所以边界必须比别的区域更硬：A 只决定"下一句说什么、什么时候调工具、传什么参数"，B 只负责"给了参数就按契约返回"。两人之间唯一的约定是 `contracts.py` 里的工具签名，谁都不许单方面改。
 
 ### 三类文件的处理规则
 
 | 类型 | 文件 | 规则 |
 |---|---|---|
-| **独占** | 上表 R1–R4 各自的文件 | 只有负责人能改。别人要改，先在群里说，由负责人改 |
+| **独占** | 上表 R1、R2A、R2B、R3、R4 各自的文件 | 只有负责人能改。别人要改，先在群里说，由负责人改 |
 | **申请** | `contracts.py`、`app.py`、`config/scene.json` | 想改必须先说明理由，得到同意后在 PR 里**单独标出**这处改动 |
 | **自由** | `docs/` 下新建文件 | 谁都可以新建自己的设计稿、笔记、实验记录 |
 
-> **`contracts.py` 只许追加，不许改语义。** 要改事件字段含义、阶段名、工具参数名，必须全员同步，因为它一改，另外三个人的代码同时失效。
+> **`contracts.py` 只许追加，不许改语义。** 要改事件字段含义、阶段名、工具参数名，必须全员同步，因为它一改，另外四个人的代码同时失效。
 
 ---
 
@@ -60,7 +74,8 @@ python app.py          # 浏览器打开 http://127.0.0.1:8000
 - [ ] **5. 没偷偷加依赖**：`git diff` 里没有新增 `requirements.txt` 之外的第三方包；如果有，写进 PR 说明并更新 README
 - [ ] **6. 没动契约**：`git diff contracts.py` 为空；如果有内容，PR 标题必须写「含契约变更」
 - [ ] **7. 时延没退化**：把改动前后的 P50 数字贴进 PR（页面右下角能看）
-- [ ] **8. 没留垃圾**：没有调试用的 `print`、注释掉的大段代码、`TODO: 测试` 之类的临时标记
+- [ ] **8. 清理干净**：临时脚本（`_t.bat`、`_t.log`、`probe_*.py`、`tmp_*.py`）、被替换掉的旧实现、注释掉的大段代码、调试 `print` 全部删掉。判据是"没人会再读、也没人会再跑"，不留"万一以后用得上"
+- [ ] **9. 删完能跑**：清理之后重新跑一次 `python app.py` 和 `python scripts/run_eval.py`，服务和分数都正常——删错了就用 `git checkout -- <文件>` 找回来
 
 ---
 
