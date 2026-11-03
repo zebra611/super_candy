@@ -25,7 +25,7 @@ import os
 import sqlite3
 import time
 
-from contracts import EVENT_VERSION, LATENCY_GATE_MS
+from contracts import EVENT_TYPES, EVENT_VERSION, LATENCY_GATE_MS
 
 # 事件库文件位置：项目根目录下的 data/events.db
 _ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -82,10 +82,17 @@ def write_event(session_id, event_type, payload=None, turn_id=0, latency_ms=0.0)
 
     返回：事件自增 id。
 
-    后续待补充：
-        - TODO 校验 event_type 是否在 EVENT_TYPES 内，非法值直接抛错（骨架阶段
-          故意不校验，方便四个人随意加事件试跑）。
+    事件类型在写入前校验：不在 contracts.EVENT_TYPES 里直接抛错。
+    为什么要管这个：早期为了"方便随便加事件试跑"故意不校验，结果一旦拼错
+    （比如把 turn_end 写成 turn_ended），事件照样写进库，只是质检和面板
+    永远看不到它——数据静默缺失，比直接崩掉难查得多。要加新事件，
+    先改 contracts 再改调用处，这正是契约该有的约束力。
     """
+    if event_type not in EVENT_TYPES:
+        raise ValueError(
+            "未登记的事件类型：%r。合法值是 contracts.EVENT_TYPES 里的 16 种；"
+            "要新增事件请先改契约，不要在调用处临时造名字。" % (event_type,))
+
     conn = sqlite3.connect(DB_PATH)
     try:
         cur = conn.execute(

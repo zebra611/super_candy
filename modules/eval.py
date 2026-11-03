@@ -4,8 +4,7 @@
     transcribe_session  从事件流还原"谁在什么时候说了什么"；
     compliance_report   逐项检查：闭环、字面禁语、分类违规（辱骂/虚假承诺/诱导）、
                         隐私泄露（完整手机号/身份证号）、必说话术是否说到；
-    score_session       以 writeback 事件为唯一闭环证据（与质检口径一致）；
-    run_batch           把最近若干通电话跑成一张基线表。
+    score_session       以 writeback 事件为唯一闭环证据（与质检口径一致）。
 
 还没做的（角色 3 的开工清单）：
     1. 语义级合规检测（换个说法说同样的话，字面词表抓不到）；
@@ -202,17 +201,3 @@ def score_session(session_id):
         "is_placeholder": True,
     }
 
-
-def run_batch(session_ids=None):
-    """批量跑评测，产出基线分表。
-
-    哑链路实现：把最近的会话逐个 score_session 后求平均。
-    TODO 真实实现要支持指定版本号、指定评测集、输出对比表。
-
-    返回：dict(count, mean_score, items)
-    """
-    if session_ids is None:
-        session_ids = [s["session_id"] for s in events.recent_sessions(limit=50)]
-    items = [score_session(sid) for sid in session_ids]
-    mean = round(sum(i["score"] for i in items) / len(items), 3) if items else 0.0
-    return {"count": len(items), "mean_score": mean, "items": items, "is_placeholder": True}

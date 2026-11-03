@@ -39,15 +39,6 @@ def load(force=False):
     return _cache
 
 
-def stages_order():
-    """状态机阶段顺序，直接来自 contracts.STAGES，不单独配置。
-
-    刻意不让配置决定"有哪些阶段"——阶段是代码契约，话术才是配置。
-    """
-    from contracts import STAGES
-    return list(STAGES)
-
-
 def stage_config(stage):
     """取某个阶段的话术配置（reply / must_say 等）。取不到就返回空 dict。"""
     return load().get("stages", {}).get(stage, {}) or {}

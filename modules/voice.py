@@ -1,20 +1,28 @@
-"""M2 实时语音网关 —— 哑链路里的"假实现"。
+"""M2 实时语音网关 —— 采集、识别、合成都是真的；VAD 与打断仍是缺口。
 
 职责（真实形态）：
     音频帧进来 → VAD 判断端点 → 流式 ASR 出文本；文本出去 → 流式 TTS 出音频；
     用户中途开口要能立刻掐断播报（barge-in）。
 
-当前状态：**采集侧已经是真的**（S1 完成：浏览器 AudioWorklet 16kHz/20ms 分帧上传），
-下面三个函数仍是占位实现，但**接口签名已经是最终形态**，
-后续替换内部实现时，上层（app.py / dialogue.py）一行都不用改。
+当前状态（每一条都经实测，不是照设计写的）：
+    asr()        真识别，走 qwen3-asr-flash 的 HTTP 接口（整段上传，非流式）；
+                 送识别前有 RMS 静音闸门，避免把静音识别成「嗯。」；
+    tts()        真合成，走 qwen3-tts-flash，返回 OSS 音频链接给前端播；
+                 合成失败回落到浏览器播报，不允许静默；
+    vad_detect() 仍是占位：只判"有没有声音"，不判"说到哪算结束"，
+                 所以现在是"松手即视为说完"；
+    barge_in     做不到，原因见下面第 4 条，不是忘了写。
 
 负责人：角色 1（实时语音与终端）
 
 后续待补充（按优先级）：
-    1. 接真实流式 ASR（FunASR 或云 ASR），配领域热词表；现在 asr() 不看音频内容；
-    2. 接真实流式 TTS，并把"首包到达时间"打进 latency_ms；
+    1. 流式 ASR：现在一轮说完整段上传，请求耗时会随音频增长且长尾不可控
+       （实测一轮 1.9 秒的音频耗过 15.5 秒）；
+    2. 流式 TTS：现在整句合成完才返回，首字要多等约 1.1 秒，逼近 2 秒门槛；
     3. VAD 换成 Silero 逐帧判定，替代现在的"有字节就算说完"；
-    4. 打断：detect_barge_in 目前恒为 False，真实实现需要在播报期间持续监听。
+    4. 打断：半双工下前端"松手才上传音频"，播报期间服务器收不到任何上行声音，
+       既没有信号可检测、也没有通道可中断。要做得先把 S2 的 WebSocket
+       双向通道建起来。contracts.EVENT_TYPES 里的 barge_in 是为此预留的事件位。
     （分帧与传输已完成，见 S1；S2 会把 HTTP 分片换成 WebSocket。）
 """
 
@@ -47,20 +55,6 @@ def pcm_duration_ms(audio_bytes):
         return 0
     samples = len(audio_bytes) // contracts.PCM_SAMPLE_WIDTH
     return int(samples * 1000 / contracts.PCM_SAMPLE_RATE)
-
-
-def pcm_to_samples(audio_bytes):
-    """把 PCM16LE 字节解成 -1.0~1.0 的浮点采样序列。
-
-    现在只有 VAD 和调试会用到；接实时 ASR 时不需要它（直接把字节推给云端），
-    但做能量分析、波形回放、离线复算时必须先归一化。
-    用 struct 而不是 numpy：全项目不引第三方依赖这条约束还没解除。
-    """
-    n = len(audio_bytes) // contracts.PCM_SAMPLE_WIDTH
-    if not n:
-        return []
-    ints = struct.unpack("<%dh" % n, audio_bytes[:n * contracts.PCM_SAMPLE_WIDTH])
-    return [v / 32768.0 for v in ints]
 
 
 def vad_detect(audio_bytes, sample_rate=contracts.PCM_SAMPLE_RATE):
@@ -416,13 +410,3 @@ def _tts_dashscope(text):
         if attempt == 1:
             time.sleep(_RETRY_BACKOFF)
     raise last_err
-
-
-def detect_barge_in(is_playing):
-    """播报过程中是否被用户打断。
-
-    哑链路实现：恒为 False。
-    真实实现：播报期间持续跑 vad_detect，命中说话即返回 True，
-    上层收到后要立刻 cancel 播报并回退到"重新聆听"状态。
-    """
-    return False
