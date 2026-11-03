@@ -17,7 +17,8 @@
     "realtime_endpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
     "language": "zh",
     "itn": true,
-    "timeout_sec": 15,
+    "timeout_sec": 5,
+    "_timeout_why": "5 秒不是拍脑袋：实测有一轮 1.9 秒音频耗了 15.5 秒才返回（同步调用的长尾，与音频长度无关）。超时定得长，等于让用户对着话筒干等；定到 5 秒，最坏情况也只是让他重说一句。超过 5 秒的路由到『没听清』分支，不重试。",
     "hints": [
       "张伟",
       "李娜",
