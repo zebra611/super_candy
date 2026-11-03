@@ -11,12 +11,12 @@
     4. 管住会话的边界：token、并发、TTL、容量与成本闸门。
 
 刻意不做的事（骨架阶段）：
-    - 不做 WebSocket / WebRTC（真实链路才需要，先用 HTTP 半双工验证流程）；
+    - 不做 WebSocket / WebRTC（S1 先用 HTTP 分片承载音频流，S2 再换长连接）；
     - 不引入任何第三方库（FastAPI/uvicorn 等都先不上），保证 clone 下来就能跑。
 
 后续待补充：
-    - TODO 换成 WebSocket 或 WebRTC 承载音频流（角色 1，对应赛题"WebRTC 网页端"）；
-    - TODO turn 的音频改为流式上传，现在是一次性整段上传，无法做打断；
+    - TODO S2：把 /api/audio/chunk 换成 /ws/call 的二进制帧，接收与 seq 校验逻辑复用；
+    - TODO S2 之后才有"服务端主动下发"，打断（cancel 播报）要等它；
     - TODO 加简单的访问日志与错误日志文件（当前只打到控制台）。
 """
 
@@ -189,10 +189,129 @@ def _accrue_cost(sess, audio_bytes, reply_text):
 
 
 # ---------------------------------------------------------------------------
+# 音频流接收（S1）：浏览器分帧上传 PCM
+# ---------------------------------------------------------------------------
+# 这一段是"1 号任务"在服务端的接缝：浏览器用 AudioWorklet 把麦克风切成
+# 20ms / 320 采样点的 PCM16 帧，每 8 帧（160ms）打一个 HTTP 分片上来，
+# 服务端按 seq 校验连续性并累积到会话缓冲，一轮结束时整段交给 ASR。
+#
+# 为什么现在不用 WebSocket：S1 的目标是先把"分帧 + 边采边发 + 帧号不跳"
+# 这件事本身跑通并可验证。S2 会把这条 HTTP 分片换成 /ws/call 的二进制帧，
+# **下面这三个函数（_audio_state / ingest_audio_chunk / flush_audio）原样复用**，
+# 只有搬进搬出的通道变了。
+#
+# 已知边界（都是 S2 才解决的，别在这里花时间）：
+#   - 每 160ms 一个 HTTP 请求，有 TCP 与头部开销，比不上长连接；
+#   - 没有服务端主动下发的通道，所以做不了"服务端 cancel 播报"（打断要用它）；
+#   - 半双工：一轮说完才交给 ASR，不是真的边识别边出字。
+
+def _audio_state(sess):
+    """取（或惰性创建）这个会话的音频缓冲状态。
+
+    缓冲有上限：一轮说话累计不超过 MAX_AUDIO_BYTES，
+    否则一个异常前端（或忘了 stop 的页面）就能把内存吃满。
+    """
+    st = sess.get("audio")
+    if st is None:
+        st = {
+            "expect_seq": 0,     # 下一片应当出现的 seq，用来发现丢片
+            "frames": 0,         # 已收帧数（20ms 一帧）
+            "samples": 0,        # 已收采样点数（16k → 每帧 320）
+            "gaps": 0,           # 序号不连续的次数
+            "duplicates": 0,     # 重复分片的次数（seq 倒退）
+            "buf": bytearray(),  # 累积的 PCM16LE 原始字节
+            "started_ts": 0.0,
+        }
+        sess["audio"] = st
+    return st
+
+
+def ingest_audio_chunk(sess, seq, pcm, sample_rate=contracts.PCM_SAMPLE_RATE):
+    """收一片音频：校验格式与序号后追加到会话缓冲。
+
+    参数：
+        sess         会话字典（由调用方做鉴权后传入）
+        seq          这一片的第一帧序号，从 0 开始由前端递增
+        pcm          PCM16LE 单声道原始字节
+        sample_rate  采样率，必须等于契约值，否则拒绝
+    返回：dict(seq, bytes, received_frames, received_samples, gaps, duplicates)
+    异常：ValueError（参数不合法，调用方转 400）；PayloadTooLarge（累计超限，转 413）
+    """
+    if sample_rate != contracts.PCM_SAMPLE_RATE:
+        raise ValueError("采样率必须为 %d，收到 %d" % (contracts.PCM_SAMPLE_RATE, sample_rate))
+    if not pcm:
+        raise ValueError("空音频分片")
+    if len(pcm) % contracts.PCM_SAMPLE_WIDTH:
+        raise ValueError("PCM16 字节数必须为偶数，收到 %d" % len(pcm))
+
+    st = _audio_state(sess)
+    if len(st["buf"]) + len(pcm) > MAX_AUDIO_BYTES:
+        raise PayloadTooLarge("本通电话累计音频超过 %d 字节" % MAX_AUDIO_BYTES)
+
+    # 加锁的理由：HTTP 每个请求一个线程，两片并发到达时 seq 比较与 extend
+    # 会交错，可能出现"先到的被当成重复丢掉"。这把锁只保护这几行，
+    # 不涉及识别与对话，所以不会拖慢正常通话。
+    with _STORE_LOCK:
+        if seq < st["expect_seq"]:
+            # 重复分片（重试或前端 bug）：重复追加会在音频里叠出一段回声，
+            # 重复的采样还会让识别结果出现叠字。宁可丢弃并计数，也不盲信。
+            st["duplicates"] += 1
+        else:
+            if seq > st["expect_seq"]:
+                # 序号跳了：说明前面的分片丢了。不在这里补，但要记下来——
+                # "帧号不跳"是 S1 的验收标准，掩盖丢帧等于验收造假。
+                st["gaps"] += 1
+            frames = len(pcm) // contracts.FRAME_BYTES
+            st["buf"].extend(pcm)
+            st["samples"] += len(pcm) // contracts.PCM_SAMPLE_WIDTH
+            st["frames"] += frames
+            st["expect_seq"] = seq + frames
+            if not st["started_ts"]:
+                st["started_ts"] = time.time()
+
+        return {"seq": seq, "bytes": len(pcm),
+                "received_frames": st["frames"], "received_samples": st["samples"],
+                "gaps": st["gaps"], "duplicates": st["duplicates"]}
+
+
+def flush_audio(sess, dropped=0):
+    """把会话缓冲里的 PCM 取出来、清空，返回 (bytes, 统计)。
+
+    每轮说话结束时调用一次。统计会写成 audio_stream 事件，
+    它是"这一轮到底采到了多少声音、有没有丢片"的唯一证据。
+
+    参数：
+        dropped  前端因背压主动丢弃的帧数（前端自己报，服务端无法感知）
+    """
+    st = _audio_state(sess)
+    pcm = bytes(st["buf"])
+    stat = {
+        "bytes": len(pcm),
+        "samples": st["samples"],
+        "frames": st["frames"],
+        "duration_ms": round(st["samples"] * 1000.0 / contracts.PCM_SAMPLE_RATE, 1),
+        "gaps": st["gaps"],
+        "duplicates": st["duplicates"],
+        "dropped_at_client": int(dropped or 0),
+        "sample_rate": contracts.PCM_SAMPLE_RATE,
+        "frame_ms": contracts.FRAME_MS,
+    }
+    st["buf"] = bytearray()
+    st["expect_seq"] = 0
+    st["frames"] = 0
+    st["samples"] = 0
+    st["gaps"] = 0
+    st["duplicates"] = 0
+    st["started_ts"] = 0.0
+    return pcm, stat
+
+
+# ---------------------------------------------------------------------------
 # 业务流程：一轮对话的完整链路
 # ---------------------------------------------------------------------------
 
-def handle_turn(session_id, user_text=None, audio_bytes=b""):
+def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=False,
+                audio_dropped=0):
     """执行一轮对话：这是整个哑链路的核心，也是五个人将来各自替换的接缝。
 
     链路（每一步都写一条事件，方便事后归因）：
@@ -210,18 +329,33 @@ def handle_turn(session_id, user_text=None, audio_bytes=b""):
     **不让整通电话断掉**。外呼里中途崩掉，用户听到的是静音，比说错话更糟。
 
     参数：
-        session_id   通话 ID
-        user_text    文字模式下用户直接输入的内容（可空）
-        audio_bytes  语音模式下的音频字节（哑链路不解码，只用于证明音频传上来了）
+        session_id      通话 ID
+        user_text       文字模式下用户直接输入的内容（可空）
+        audio_bytes     语音模式下的音频字节（PCM16 / 16k / 单声道）
+        audio_streamed  为 True 表示音频已按帧上传过，本轮从会话缓冲取，
+                        此时 audio_bytes 参数被忽略（前端不再整段上传）
+        audio_dropped   前端因背压主动丢弃的帧数，仅用于记账
     返回：dict，前端需要的全部内容
     """
     t_start = time.time()
     sess = _SESSIONS[session_id]
     turn_id = sess["turn"] + 1
 
+    # S1：音频若是按帧上来的，先把会话缓冲取出来。
+    # 必须放在 turn_start 之前——否则 turn_start 里的 audio_bytes 会记成 0，
+    # 而"这一轮有没有声音"正是它要回答的问题。
+    audio_stat = None
+    if audio_streamed:
+        audio_bytes, audio_stat = flush_audio(sess, dropped=audio_dropped)
+
     events.write_event(session_id, "turn_start",
-                       {"audio_bytes": len(audio_bytes), "text_input": bool(user_text)},
+                       {"audio_bytes": len(audio_bytes), "text_input": bool(user_text),
+                        "audio_streamed": bool(audio_streamed)},
                        turn_id=turn_id)
+
+    if audio_stat is not None:
+        # 单独记一条：这是 S1 的验收证据（帧数/采样数/序号缺口/客户端丢帧）
+        events.write_event(session_id, "audio_stream", audio_stat, turn_id=turn_id)
 
     llm_ms = 0.0
     asr_ms = 0.0
@@ -497,6 +631,19 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         return json.loads(raw.decode("utf-8"))
 
+    def _read_raw(self):
+        """读原始二进制请求体（音频分片用）。空体返回 b""，超限抛 PayloadTooLarge。
+
+        为什么不复用 _read_json：音频是二进制，解码成 JSON 只会报 BAD_JSON，
+        而且 base64 会把体积撑大 33%，分片上传的意义就没了。
+        """
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            return b""
+        if length > MAX_AUDIO_BYTES:
+            raise PayloadTooLarge("单个分片超过 %d 字节" % MAX_AUDIO_BYTES)
+        return self.rfile.read(length)
+
     def _is_loopback(self):
         """请求是否来自本机。仅用于 /api/sessions 这类运维接口。"""
         return self.client_address[0] in ("127.0.0.1", "::1")
@@ -567,6 +714,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+
+        # 音频分片走二进制体，必须在解析 JSON 之前分流，否则会被判成 BAD_JSON
+        if path == "/api/audio/chunk":
+            self._handle_audio_chunk()
+            return
+
         try:
             body = self._read_json()
         except PayloadTooLarge as e:
@@ -607,8 +760,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(err, code)
             return
 
+        # 两条音频来路，二选一：
+        #   audio_streamed=True → 音频已按帧传过，从会话缓冲取（S1 之后前端走这条）
+        #   audio_b64           → 整段上传（保留给脚本与旧客户端，不算废弃接口）
+        streamed = bool(body.get("audio_streamed"))
         audio_bytes = b""
-        if body.get("audio_b64"):
+        if not streamed and body.get("audio_b64"):
             try:
                 audio_bytes = base64.b64decode(body["audio_b64"])
             except Exception as e:
@@ -625,7 +782,9 @@ class Handler(BaseHTTPRequestHandler):
                              "detail": "上一轮还在处理，请稍后重试"}, 409)
             return
         try:
-            out = handle_turn(sid, user_text=body.get("text"), audio_bytes=audio_bytes)
+            out = handle_turn(sid, user_text=body.get("text"), audio_bytes=audio_bytes,
+                              audio_streamed=streamed,
+                              audio_dropped=body.get("audio_dropped") or 0)
         except Exception as e:
             # 兜底：不能让一次异常把整通电话打断
             self._send_json({"error": "TURN_FAILED", "detail": str(e)}, 500)
@@ -633,6 +792,38 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             _release(sess)
         self._send_json(out)
+
+    def _handle_audio_chunk(self):
+        """收一片音频（S1）：鉴权 → 校验格式/序号 → 追加到会话缓冲。
+
+        这个接口设计成"只进不出业务"：它不推进状态机、不产生回复、不写业务事件，
+        只负责把音频攒起来。这样即使前端猛推帧，也不会打乱对话流程。
+
+        参数从 query 走而不是 JSON 体：请求体整个留给二进制 PCM，
+        省掉一次 base64 编解码（体积小 33%，也少一次 CPU 拷贝）。
+        """
+        qs = parse_qs(urlparse(self.path).query)
+        sid = (qs.get("session_id") or [""])[0]
+        sess, err, code = _auth(sid, (qs.get("token") or [""])[0])
+        if err:
+            self._send_json(err, code)
+            return
+
+        try:
+            seq = int((qs.get("seq") or ["0"])[0])
+            rate = int((qs.get("rate") or [str(contracts.PCM_SAMPLE_RATE)])[0])
+            if seq < 0:
+                raise ValueError("seq 不能为负")
+            pcm = self._read_raw()
+            out = ingest_audio_chunk(sess, seq, pcm, rate)
+        except PayloadTooLarge as e:
+            self._send_json({"error": "AUDIO_TOO_LARGE", "detail": str(e)}, 413)
+            return
+        except (TypeError, ValueError) as e:
+            self._send_json({"error": "BAD_CHUNK", "detail": str(e)}, 400)
+            return
+
+        self._send_json(dict(out, ok=True))
 
     def _handle_metric(self, body):
         """前端上报首字响应（T4−T0）。上报失败不影响通话，所以错误码给得很明确。"""
