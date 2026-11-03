@@ -12,8 +12,13 @@
   },
 
   "asr": {
+    "provider": "placeholder",
+    "model": "paraformer-realtime-v2",
+    "endpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+    "language": "zh",
     "hints": ["张伟", "李娜", "延保", "京东", "订单号", "工单", "权益"],
-    "_todo": "热词要按企业资料包的名单与产品名替换；多数云 ASR 支持 50-200 个词"
+    "_todo": "provider 改成 dashscope 并在 config/secrets.json 填 dashscope_api_key 才会走云端；没密钥时自动回落到 placeholder，保证队友 clone 下来就能跑",
+    "_hints_todo": "热词要按企业资料包的名单与产品名替换；多数云 ASR 支持 50-200 个词"
   },
 
   "tts": {
@@ -34,7 +39,7 @@
     "session_ttl_sec": 1800,
     "max_sessions": 200,
     "daily_warn_cny": 5.0,
-    "price_per_min_asr": 0.0048,
+    "price_per_min_asr": 0.0144,
     "price_per_1k_chars_tts": 0.08,
     "price_per_1m_tokens": 0.6,
     "_todo": "单价按 2026-11 公开价格折算，仅用于估算告警；真实成本按账单核对"

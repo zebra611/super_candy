@@ -13,6 +13,8 @@ venv/
 .env
 .env.*
 config.local.json
+config/secrets.json
+*.key
 
 # 音频与模型（大文件，别进 git）
 *.wav
