@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -39,7 +40,7 @@ import config_loader  # noqa: E402
 import contracts  # noqa: E402
 from app import (_acquire, _audio_state, _auth, _release, end_call,  # noqa: E402
                  handle_turn, ingest_audio_chunk, report_client_metric, start_call)
-from modules import dialogue, eval as eval_mod, tools  # noqa: E402
+from modules import dialogue, eval as eval_mod, tools, voice  # noqa: E402
 
 results = []
 
@@ -256,13 +257,45 @@ def main():
     print("=" * 74)
     print("证据 9：语音链路还通不通，首字双口径是否真的在算")
     print("=" * 74)
-    sid_f = start_call()["session_id"]
-    handle_turn(sid_f, audio_bytes=b"\x00" * 3200)
-    asr_f = payload_of(sid_f, "asr_result")
-    check("语音输入有 vad_result，占位识别标 fake=true",
-          "vad_result" in event_types(sid_f) and bool(asr_f) and asr_f.get("fake") is True,
-          ["实际事件链：%s" % " → ".join(event_types(sid_f)),
-           "asr_result.payload = %s" % json.dumps(asr_f, ensure_ascii=False)])
+    # 这一段刻意把 provider 钉成 placeholder：
+    # 自检要能离线跑、不花钱、也不依赖有没有配密钥。
+    # 真实云端识别见 scripts/test_asr_file.py（那个是人工主动跑的）。
+    orig_provider = config_loader.asr_provider
+    config_loader.asr_provider = lambda: "placeholder"
+    try:
+        sid_f = start_call()["session_id"]
+        handle_turn(sid_f, audio_bytes=b"\x00" * 3200)
+        asr_f = payload_of(sid_f, "asr_result")
+        check("占位识别路径仍可用（fake=true，不冒充真结果）",
+              "vad_result" in event_types(sid_f) and bool(asr_f)
+              and asr_f.get("fake") is True and asr_f.get("provider") == "placeholder",
+              ["实际事件链：%s" % " → ".join(event_types(sid_f)),
+               "asr_result.payload = %s" % json.dumps(asr_f, ensure_ascii=False)])
+
+        # 静音闸门：provider 是云端，但音频是静音 → 必须在发请求之前就短路。
+        # 这条断言不联网：真要联网就会超时变慢，说明闸门没生效。
+        config_loader.asr_provider = lambda: "dashscope"
+        t_gate = time.time()
+        silent_out = voice.asr(b"\x00\x00" * 16000)
+        gate_ms = (time.time() - t_gate) * 1000
+        check("静音在发请求之前就被挡掉（云端对静音会幻觉出一句）",
+              silent_out.get("skipped") == "silent" and silent_out["text"] == ""
+              and gate_ms < 200,
+              ["voice.asr(1 秒静音) → %s" % json.dumps(
+                  {k: silent_out.get(k) for k in ("text", "skipped", "rms", "latency_ms")},
+                  ensure_ascii=False),
+               "耗时 %.1fms（若接近超时说明真的发了请求）" % gate_ms])
+
+        sid_s = start_call()["session_id"]
+        handle_turn(sid_s, audio_streamed=False, audio_bytes=b"\x00\x00" * 16000)
+        types_s = event_types(sid_s)
+        check("静音轮按沉默处理（no_answer，不伪造识别结果）",
+              "no_answer" in types_s and "asr_result" not in types_s,
+              ["实际事件链：%s" % " → ".join(types_s),
+               "no_answer.reason = %s" % (payload_of(sid_s, "no_answer") or {}).get("reason")])
+        end_call(sid_s)
+    finally:
+        config_loader.asr_provider = orig_provider
 
     # 模拟前端上报：真实运行时由浏览器的 utterance.onstart 触发
     report_client_metric(sid_f, 1, 1234, estimate=False)
@@ -357,7 +390,14 @@ def main():
           [bad_rate])
 
     # 整轮：帧流进来 → 一轮结束 → 音频流统计与识别一起落事件
-    handle_turn(sid_i, audio_streamed=True, audio_dropped=3)
+    # 这一段验的是"音频有没有送到识别层"，不是识别准不准；
+    # 固定成占位实现才能离线跑、不花钱。真实识别见 scripts/test_asr_file.py。
+    orig_provider_i = config_loader.asr_provider
+    config_loader.asr_provider = lambda: "placeholder"
+    try:
+        handle_turn(sid_i, audio_streamed=True, audio_dropped=3)
+    finally:
+        config_loader.asr_provider = orig_provider_i
     stat = payload_of(sid_i, "audio_stream")
     vad_i = payload_of(sid_i, "vad_result")
     turn_start_i = payload_of(sid_i, "turn_start")
