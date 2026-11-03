@@ -19,6 +19,7 @@
 """
 
 import base64
+import http.client
 import io
 import json
 import socket
@@ -29,6 +30,10 @@ import urllib.request
 import wave
 
 import config_loader
+
+# 重试间隔（秒）。不要改成 0：对端刚掐断连接时立刻重连，大概率撞上同一个问题，
+# 0.15 秒足够让对端把旧连接清掉，又短到不影响首字响应。
+_RETRY_BACKOFF = 0.15
 import contracts
 
 
@@ -245,7 +250,7 @@ def _asr_dashscope(pcm):
     # 超时必须短。实测有一轮 1.9 秒的音频（三轮里最短）让接口耗了 15.5 秒，
     # 原因不在音频长度，而是同步单次调用的长尾——这类慢请求重试只会更慢。
     # 所以策略是：宁可早点告诉用户"没听清，再说一遍"，也不让他干等。
-    # 只对"连不上"重试：那种失败通常几十毫秒就返回，重试不占用用户的时间。
+    # 只对"连接被掐断/连不上"重试：那种失败通常几十毫秒就返回，重试不占用户时间。
     last_err = None
     for attempt in (1, 2):
         try:
@@ -263,6 +268,13 @@ def _asr_dashscope(pcm):
             last_err = RuntimeError("连不上识别接口：%s" % e)
         except socket.timeout:
             raise RuntimeError("识别超时（%g 秒），这段音频没能出结果" % timeout)
+        except (http.client.HTTPException, ConnectionError) as e:
+            # 关键：对端收下请求却不给响应就断开，抛的是
+            # http.client.RemoteDisconnected，它既不是 HTTPError 也不是 URLError。
+            # 以前漏了这一支，重试逻辑形同虚设——断连直接逃到最外层回落。
+            last_err = RuntimeError("识别连接被中断：%s" % e)
+        if attempt == 1:
+            time.sleep(_RETRY_BACKOFF)
     raise last_err
 
 
@@ -372,7 +384,7 @@ def _tts_dashscope(text):
     # 合成比识别更该重试：它是幂等的、纯函数式调用，重试不会产生副作用，
     # 而失败的表现是"客服突然不说话了"，比多等一会儿难看得多。
     last_err = None
-    for _ in (1, 2):
+    for attempt in (1, 2):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
@@ -397,6 +409,12 @@ def _tts_dashscope(text):
             last_err = RuntimeError("连不上合成接口：%s" % e)
         except socket.timeout:
             raise RuntimeError("合成超时（%g 秒）" % timeout)
+        except (http.client.HTTPException, ConnectionError) as e:
+            # 实测真的撞上过：对端收下请求后直接断连，抛 RemoteDisconnected。
+            # 它不是 HTTPError 也不是 URLError，漏掉这一支重试就白写了。
+            last_err = RuntimeError("合成连接被中断：%s" % e)
+        if attempt == 1:
+            time.sleep(_RETRY_BACKOFF)
     raise last_err
 
 

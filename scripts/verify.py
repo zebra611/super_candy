@@ -450,6 +450,52 @@ def main():
               ["mode = %s（回落自 %s）" % (out_fb.get("mode"), out_fb.get("fallback_from")),
                "保留文本可供浏览器念：%r" % out_fb.get("text"),
                "error = %s" % out_fb.get("error")])
+
+        # 这条守着一个真实踩过的坑：对端收下请求却不给响应就断开时，
+        # 抛的是 http.client.RemoteDisconnected——既不是 HTTPError 也不是
+        # URLError。当初只捕获了后两者，导致"重试"形同虚设，断连直接回落成
+        # 浏览器机械音。这里让第一次必然断连、第二次正常返回，验证重试真的生效。
+        drops = {"n": 0}
+
+        class _DropThenOK(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                drops["n"] += 1
+                if drops["n"] == 1:
+                    self.close_connection = True
+                    try:
+                        self.connection.close()     # 不回任何响应，直接断
+                    except Exception:
+                        pass
+                    return
+                body = json.dumps({"output": {"audio": {
+                    "url": "https://example.com/retry.mp3"}}}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        srv_drop = http.server.HTTPServer(("127.0.0.1", 0), _DropThenOK)
+        threading.Thread(target=srv_drop.serve_forever, daemon=True).start()
+        try:
+            config_loader.tts_config = lambda: _tts_cfg(
+                "http://127.0.0.1:%d/drop" % srv_drop.server_address[1])
+            out_retry = voice.tts("重试这一句")
+            check("连接被对端掐断时会重试，而不是直接回落成机械音",
+                  out_retry.get("mode") == "url"
+                  and out_retry.get("audio_url") == "https://example.com/retry.mp3"
+                  and drops["n"] == 2,
+                  ["实际请求次数 = %d（期望 2：首次断连 + 重试成功）" % drops["n"],
+                   "mode = %s" % out_retry.get("mode"),
+                   "audio_url = %s" % out_retry.get("audio_url"),
+                   "若这里只请求了 1 次，说明异常没被捕获、重试没生效"])
+        finally:
+            srv_drop.shutdown()
+            srv_drop.server_close()
     finally:
         config_loader.tts_config = _orig_tts_config
         if orig_tts_key_env is None:
