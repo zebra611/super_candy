@@ -25,6 +25,14 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
 import events                     # noqa: E402
+import config_loader              # noqa: E402
+
+# 跑批只验"业务流程对不对"，不真的合成音频。
+# 不隔离的话 30 条用例 × 约 1.2 秒 = 白等 36 秒，还要花钱，
+# 并且没有密钥的队友会在这里卡住——评测不该依赖外部服务。
+config_loader.tts_config = lambda: {
+    "provider": "browser", "voice": "zh-CN-XiaoxiaoNeural", "rate": 1.05}
+
 from app import end_call, handle_turn, start_call   # noqa: E402
 
 CASES_PATH = os.path.join(_ROOT, "eval", "seed_cases.json")

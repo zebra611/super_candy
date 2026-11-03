@@ -78,18 +78,6 @@ def payload_of(session_id, etype):
     return got[0] if got else None
 
 
-def run_turns(turns, audio=False):
-    """开一通电话，按剧本说完，返回 (最后一条返回, session_id)。
-
-    audio=False 走文字输入，不消耗识别、也不需要麦克风；只有测语音链路时才传音频。
-    """
-    sid = start_call()["session_id"]
-    last = None
-    for t in turns:
-        last = handle_turn(sid, audio_bytes=b"\x00" * 3200) if audio else handle_turn(sid, user_text=t)
-    return last, sid
-
-
 def git(*args):
     """调用 git 拿第三方记录。没装 git 就返回空，不影响断言执行。"""
     try:
@@ -122,6 +110,19 @@ def main():
           need <= set(contracts.EVENT_TYPES),
           ["实际共 %d 个：%s" % (len(contracts.EVENT_TYPES),
                              ", ".join(sorted(contracts.EVENT_TYPES)))])
+
+    # 拼错事件名曾经能静默写入：事件在库里，但质检和面板都看不见它，
+    # 整条链缺一环却没人报错。现在写入前就拦。
+    try:
+        events.write_event("s_illegal", "turn_ended", {"oops": True})
+        blocked = False
+    except ValueError as e:
+        blocked = True
+        err_msg = str(e)[:80]
+    check("写未登记的事件类型会直接抛错，而不是静默入库",
+          blocked,
+          ["尝试写入 'turn_ended'（正确名是 turn_end）",
+           "结果：%s" % ("被拦截 → " + err_msg if blocked else "竟然写进去了")])
 
     print()
     print("=" * 74)

@@ -38,7 +38,7 @@
     "provider": "dashscope",
     "model": "qwen3-tts-flash",
     "endpoint": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
-    "voice_name": "Cherry",
+    "voice_name": "Serena",
     "language_type": "Chinese",
     "timeout_sec": 10,
     "voice": "zh-CN-XiaoxiaoNeural",
