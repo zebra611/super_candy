@@ -18,8 +18,14 @@
     （分帧与传输已完成，见 S1；S2 会把 HTTP 分片换成 WebSocket。）
 """
 
+import base64
+import io
+import json
 import struct
 import time
+import urllib.error
+import urllib.request
+import wave
 
 import config_loader
 import contracts
@@ -77,30 +83,192 @@ def vad_detect(audio_bytes, sample_rate=contracts.PCM_SAMPLE_RATE):
 
 
 def asr(audio_bytes, hints=None):
-    """把一段音频转成文字。
+    """把一段音频转成文字。**这是全链路唯一需要替换的入口。**
 
-    哑链路实现：**不看音频内容**，直接返回一句固定文本。
-    这是整条链路里最明显的"假"，但它的价值在于：
-    让 app.py、dialogue.py、前端字幕、事件流全部先跑起来。
+    两条实现，由配置决定，调用方不需要知道用的是哪条：
+        placeholder  占位：不看音频内容，永远返回同一句（没配密钥时用）
+        dashscope    真识别：qwen3-asr-flash，走 HTTP，返回真文本
 
-    真实实现要换掉的：
-        - 换成流式识别，边收边出中间结果（用于提前判断意图、压低首字延迟）；
-        - 支持 hints（领域词表：人名、产品名、工单号）；
-        - 返回字级时间戳，打断判定和字幕对齐都要用。
+    为什么云端选"非实时"而不是"实时流式"：
+        我们现在是半双工——用户说完一整句才送识别，本来就没有边听边出的需求。
+        非实时接口是一次 HTTP POST，不需要 WebSocket、不需要 SDK、不引任何依赖，
+        在沙箱里也能跑；实时接口要长连接，等 S2 做完再换更有价值。
+        换的时候只改 config 的 model/endpoint，这个函数的签名不变。
 
     参数：
-        audio_bytes  PCM16LE / 16kHz / 单声道原始字节（S1 之后格式已固定）
-        hints        领域热词列表，当前被忽略
-    返回：dict(text, confidence, latency_ms, fake)
+        audio_bytes  PCM16LE / 16kHz / 单声道原始字节（格式由 contracts 固定）
+        hints        领域热词。当前 qwen3-asr-flash 的 HTTP 接口没有热词字段，
+                     传了也不用；保留这个参数是为了将来换 Paraformer 时不用改上层
+    返回：dict(text, confidence, latency_ms, fake, provider)
+         出错时额外带 error 字段，且 fake=True——失败结果不能被算成真实识别
     """
+    provider = config_loader.asr_provider()
+    if provider == "placeholder":
+        return _asr_placeholder()
+
     t0 = time.time()
-    text = "（假识别）你好，我是客服，请问是张先生吗？"
+    level = pcm_rms(audio_bytes)
+    threshold = float(config_loader.asr_config().get("silence_rms", 0.003))
+    if level < threshold:
+        # 明显是静音：不发请求，直接当"没人说话"。
+        # 省一次调用是顺带的，主要是避免模型对静音幻觉出一句"嗯。"
+        # （实测确实会），那会让状态机以为用户开了口。
+        # 这个门限是 S3 的临时替代品：真的 VAD 要判"说到哪结束"，不只是"有没有声"。
+        return {
+            "text": "",
+            "confidence": None,
+            "latency_ms": 0.0,
+            "fake": False,
+            "provider": provider,
+            "rms": round(level, 5),
+            "skipped": "silent",
+        }
+
+    try:
+        text = _asr_dashscope(audio_bytes)
+    except Exception as e:
+        # 识别失败不让通话崩掉：返回空文本 + error，由 app.py 记一条 error 事件。
+        # 外呼里因为网络抖一下就挂断，比识别错一句严重得多。
+        return {
+            "text": "",
+            "confidence": None,
+            "latency_ms": round((time.time() - t0) * 1000, 1),
+            "fake": True,
+            "provider": provider,
+            "rms": round(level, 5),
+            "error": str(e)[:300],
+        }
+
     return {
         "text": text,
+        "confidence": None,      # 该接口不返回置信度，不编一个假的填进去
+        "latency_ms": round((time.time() - t0) * 1000, 1),
+        "fake": False,           # 真识别结果，评测才会把它算进分数
+        "provider": provider,
+        "rms": round(level, 5),  # 记下音量，方便用真实录音标定 silence_rms
+    }
+
+
+def _asr_placeholder():
+    """占位识别：不看音频，永远同一句。
+
+    它的价值只有一条：让 app.py、dialogue.py、前端字幕、事件流先跑起来。
+    千万别把这个结果当成"识别能力"——它连标点都是写死的。
+    """
+    t0 = time.time()
+    return {
+        "text": "（假识别）你好，我是客服，请问是张先生吗？",
         "confidence": 1.0,
         "latency_ms": round((time.time() - t0) * 1000, 1),
-        "fake": True,   # 标记这是占位结果，评测时要过滤掉，别把假的算进分数
+        "fake": True,
+        "provider": "placeholder",
     }
+
+
+def pcm_to_wav(pcm):
+    """把裸 PCM 包成一个最小 WAV 容器。
+
+    为什么必须包：云端接口要的是"音频文件"，不是裸采样流。
+    有 WAV 头它才知道采样率与位宽；只发 PCM 字节，服务端只能靠猜，
+    猜错就是"能返回文字但全是错的"，比直接报错更难查。
+    用标准库 wave 写进内存，不落盘（避免在磁盘上留用户录音）。
+    """
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(contracts.PCM_CHANNELS)
+        w.setsampwidth(contracts.PCM_SAMPLE_WIDTH)
+        w.setframerate(contracts.PCM_SAMPLE_RATE)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+def pcm_rms(pcm):
+    """算这段 PCM 的均方根（0–1）。用来区分"真的在说话"和"只是麦克风开着"。
+
+    为什么必须有这一步：云端识别对纯静音**会返回东西**。
+    实测把 1 秒静音送进去，它返回「嗯。」——这会被当成用户说了话，
+    推进状态机、还可能触发一次工具调用。
+    与其在识别结果里过滤"嗯"（治不完），不如在送识别之前就判断有没有声音。
+    """
+    n = len(pcm) // contracts.PCM_SAMPLE_WIDTH
+    if not n:
+        return 0.0
+    samples = struct.unpack("<%dh" % n, pcm[:n * contracts.PCM_SAMPLE_WIDTH])
+    total = 0
+    for v in samples:
+        f = v / 32768.0
+        total += f * f
+    return (total / n) ** 0.5
+
+
+def _asr_dashscope(pcm):
+    """调用 qwen3-asr-flash（OpenAI 兼容的 chat/completions 接口），返回识别文本。
+
+    请求形状来自官方文档：音频以 data URL 放在 input_audio.data 里，
+    文本在 choices[0].message.content。
+
+    为什么用 urllib 而不是装 SDK：
+        一次 POST 就够，为它引一个包不划算；而且线上沙箱 installCmd 是空的，
+        多一个依赖就多一处部署失败的可能。
+    """
+    cfg = config_loader.asr_config()
+    key = config_loader.secret("dashscope_api_key")
+    if not key:
+        raise RuntimeError("未配置 dashscope_api_key")
+    if len(pcm) < contracts.PCM_SAMPLE_RATE // 2:      # 不足 0.5 秒，识别没有意义
+        return ""
+
+    wav = pcm_to_wav(pcm)
+    # 接口限制：base64 后不超过 10MB。超了直接报清楚，别等服务器返回一个含糊的错。
+    if len(wav) * 4 // 3 > 9 * 1024 * 1024:
+        raise RuntimeError("音频过长（%d 字节 PCM），请缩短单轮时长" % len(pcm))
+
+    data_uri = "data:audio/wav;base64," + base64.b64encode(wav).decode("ascii")
+    body = {
+        "model": cfg.get("model") or "qwen3-asr-flash",
+        "messages": [{"role": "user", "content": [
+            {"type": "input_audio", "input_audio": {"data": data_uri}}
+        ]}],
+        "stream": False,
+        # ITN：把"八八六六"转成"8866"。身份核验要靠数字匹配，
+        # 不转的话用户说数字我们一个字都对不上。
+        "asr_options": {"enable_itn": bool(cfg.get("itn", True))},
+    }
+    req = urllib.request.Request(
+        cfg.get("endpoint") or "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Authorization": "Bearer " + key,
+                 "Content-Type": "application/json"},
+        method="POST")
+    timeout = float(cfg.get("timeout_sec", 15))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", "replace")[:300]
+        raise RuntimeError("识别接口返回 %d：%s" % (e.code, raw))
+    except urllib.error.URLError as e:
+        raise RuntimeError("连不上识别接口：%s" % e)
+
+    return _extract_text(payload)
+
+
+def _extract_text(payload):
+    """从返回体里取文本。取不到就返回空串，绝不抛异常。
+
+    为什么容忍空：用户按了说话但没出声，接口会返回空内容——
+    这是正常情况（就是没人说话），不是错误。上层会把它当"沉默"处理。
+    """
+    try:
+        content = payload["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):      # 少数情况下是分段结构
+        return "".join(part.get("text", "") for part in content
+                       if isinstance(part, dict)).strip()
+    return ""
 
 
 def tts(text):

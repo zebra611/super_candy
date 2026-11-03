@@ -382,13 +382,28 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
         #    有文字   → 打字调试（不产生 fake，也不消耗识别时长）
         #    两者都空 → 用户沉默，记 no_answer，交给编排决定重问还是挂断
         is_fake = False
+        provider = ""
+        silence_reason = "empty_input"
         typed = (user_text or "").strip()
         if audio_bytes:
             asr_out = voice.asr(audio_bytes, hints=config_loader.asr_hints())
             heard = asr_out["text"]
             asr_ms = asr_out["latency_ms"]
             is_fake = bool(asr_out.get("fake", False))
-            source = "asr"
+            provider = asr_out.get("provider", "")
+            if asr_out.get("error"):
+                # 识别失败要留痕，否则用户抱怨"它总说听不清"时查不出原因
+                events.write_event(session_id, "error",
+                                   {"code": "ASR_FAILED", "detail": str(asr_out["error"])[:200],
+                                    "provider": provider}, turn_id=turn_id)
+            # 有音频但一个字都没识别出来 = 用户按了说话却没出声（或识别失败）。
+            # 这不是"用户说了一句空话"，必须按沉默处理，
+            # 否则会把空字符串当成有效输入推进状态机——那是缺陷 3 的老路。
+            if heard.strip():
+                source = "asr"
+            else:
+                source = "silence"
+                silence_reason = "no_speech"
         elif typed:
             heard = typed
             source = "text"
@@ -397,12 +412,14 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
 
         if source == "silence":
             events.write_event(session_id, "no_answer",
-                               {"reason": "empty_input", "stage": sess["stage"]},
+                               {"reason": silence_reason, "stage": sess["stage"]},
                                turn_id=turn_id)
         else:
-            events.write_event(session_id, "asr_result",
-                               {"text": _mask_digits(heard), "latency_ms": asr_ms,
-                                "fake": is_fake, "source": source},
+            payload = {"text": _mask_digits(heard), "latency_ms": asr_ms,
+                       "fake": is_fake, "source": source}
+            if provider:
+                payload["provider"] = provider
+            events.write_event(session_id, "asr_result", payload,
                                turn_id=turn_id, latency_ms=asr_ms)
 
         # ⑤ 编排：吃用户话，吐回复（可能附带工具调用）
