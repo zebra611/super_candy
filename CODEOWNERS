@@ -1,0 +1,47 @@
+# CODEOWNERS —— 谁的地盘由谁审
+#
+# 语法：文件模式  审核人 GitHub 账号（可写多个，**任意一人批准即可**）
+# 规则：**最后一条匹配的生效**，后写的覆盖先写的。所以具体文件写前面、目录写后面。
+# 生效前提：Settings → Branches → main 规则里勾上 "Require review from Code Owners"。
+# 不勾这一项的话，这个文件只是摆设——它不会自动触发任何人。
+#
+# 每条都写两个账号，是为了防死锁：GitHub 不允许批准自己的 PR。
+# 如果只写一个 owner，而 PR 正好是他提的，就永远凑不出批准，PR 会卡死。
+
+# ===== 禁改区：改这里要认真审 =====
+# 契约、事件流、入口。动了影响所有人，不是"我的模块我做主"的范围。
+/contracts.py          @zebra611 @yingbaoyue
+/events.py             @zebra611 @yingbaoyue
+/app.py                @zebra611 @yingbaoyue
+/config_loader.py      @zebra611 @yingbaoyue
+
+# ===== 实时语音与终端（1 号 张博涵）=====
+/modules/voice.py      @zebra611 @tongxin-txtxtx
+/web/                  @zebra611 @tongxin-txtxtx
+/*.bat                 @zebra611 @yingbaoyue
+
+# ===== 对话大脑与工具（2A 佟欣 / 2B 潘柏亦）=====
+/modules/dialogue.py   @tongxin-txtxtx @zebra611
+/modules/nlg.py        @tongxin-txtxtx @zebra611
+/modules/tools.py      @Peter13856981023 @zebra611
+/modules/adapters/     @Peter13856981023 @zebra611
+
+# ===== 质检与自进化（3 号 刘源）=====
+/modules/eval.py       @Matt163ly @zebra611
+/scripts/run_eval.py   @Matt163ly @zebra611
+/scripts/bench_voice.py @Matt163ly @zebra611
+
+# ===== 工程平台与交付（4 号 黄睿哲）=====
+/config/               @yingbaoyue @zebra611
+/mock_business/        @yingbaoyue @zebra611
+/scripts/clean_events.py @yingbaoyue @zebra611
+/cost_guard.py         @yingbaoyue @zebra611
+/dashboard.py          @yingbaoyue @zebra611
+/Dockerfile            @yingbaoyue @zebra611
+
+# ===== 文档与协作规范：默认队长兜底 =====
+# 文档写错不容易被测试发现，但会被评委直接看到，所以也要有人过一眼。
+/docs/                 @zebra611 @yingbaoyue
+/reviews/              @zebra611 @yingbaoyue
+/README.md             @zebra611 @yingbaoyue
+/CONTRIBUTING.md       @zebra611 @yingbaoyue
