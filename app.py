@@ -614,7 +614,7 @@ def start_call():
             "opening_tts": opening_tts}
 
 
-def record_barge_in(session_id, turn_id=0, reason="user_speech"):
+def record_barge_in(session_id, turn_id=0, reason="user_speech", text=""):
     """记录一次用户打断，并丢弃那一轮还没播完的音频。
 
     为什么必须丢弃剩余音频：用户插话之后，那半句话已经没有意义了。
@@ -624,10 +624,16 @@ def record_barge_in(session_id, turn_id=0, reason="user_speech"):
     注意这里不取消正在处理的请求：HTTP 请求发出后服务端无法中止，
     强行装作取消只会让状态更难对齐。打断的**听觉效果**由前端负责
     （立刻 pause），服务端只负责记账和清理。
+
+    text 是前端"确认打断"时那段音频的识别结果。记下来有两个用处：
+    一是复盘时能看出用户为什么打断（"等一下" vs "不是"），
+    二是如果这行文本其实是噪声识别出来的胡话，就说明阈值还得再收。
     """
     tid = int(turn_id or 0)
-    events.write_event(session_id, "barge_in",
-                       {"reason": reason, "turn_id": tid}, turn_id=tid)
+    payload = {"reason": reason, "turn_id": tid}
+    if text:
+        payload["heard"] = text
+    events.write_event(session_id, "barge_in", payload, turn_id=tid)
     sess = _SESSIONS.get(session_id)
     dropped = 0
     if sess:
@@ -637,6 +643,82 @@ def record_barge_in(session_id, turn_id=0, reason="user_speech"):
         # 清掉缓冲：播报声（含回声）不该进下一轮识别
         reset_audio_buffer(sess)
     return {"ok": True, "turn_id": tid, "dropped_pending": bool(dropped)}
+
+
+# 插话判定用到的字表。
+# 全都是语气词：单独出现说明只是随口应了一声，不是在抢话。
+_FILLER_CHARS = set("嗯啊哦呃唉诶哎喔噢哈呀吧呢嘛哟")
+# 单字里只有这几个带明确的"停下/否认/疑问"意图，值得立刻让客服闭嘴。
+# 其余的单个字（"我""那""这"）多半是开口的第一声，后面还有话，
+# 让客服先停下来等他说完反而更自然——但会被识别噪声误导，所以宁可不收。
+_STRONG_SINGLE = set("停别慢不等喂哎对")
+
+
+def _has_interrupt_content(text):
+    """这段识别结果够不够格打断客服。
+
+    用户提的问题：能量一超阈值就停播，咳嗽、碰麦、隔壁说话都能把客服打断。
+    所以改成"先识别、再决定"——但光"识别出文字"还不够，"嗯"也是文字。
+
+    实测踩到的坑（2026-11-04，真云识别）：
+        白噪声 → 识别成 "Thank you."  → 原规则判"该打断"，误停客服
+        "嗯"   → 识别成日文 "うん。"    → 侥幸被标点过滤挡住
+    ASR 遇到噪声会吐训练集里的高频短语，这类幻觉必须单独挡，不能靠运气。
+
+    规则（宁可少打断，不可乱打断）：
+        去掉标点后为空            → 不打（纯噪声）
+        **一个汉字都没有**         → 不打（英文幻觉；中文外呼场景下
+                                    用户插话必是中文，宁可漏掉一次 "OK"）
+        汉字全是语气词（嗯/啊/哦） → 不打（随口应一声）
+        只有 1 个汉字              → 只有停/别/慢/不/等/喂/哎/对 才打
+        >= 2 个汉字且有实义       → 打
+
+    为什么单字这么严：实测连续通话时，环境里别人的半句话、清嗓子、
+    椅子响都能被识别成一两个字。放开单字，客服就永远说不完一句话。
+    """
+    t = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9]", "", text or "")
+    if not t:
+        return False
+    han = re.findall(r"[\u4e00-\u9fa5]", t)
+    if not han:
+        return False        # 纯英文/纯数字：中文场景下几乎只能是识别幻觉
+    if all(ch in _FILLER_CHARS for ch in han):
+        return False
+    if len(han) == 1:
+        return han[0] in _STRONG_SINGLE
+    return True
+
+
+def probe_speech(session_id, pcm):
+    """播报期间截到的一小段疑似插话：只识别，不建轮次、不推进状态机。
+
+    为什么不复用 handle_turn：那一整套会写 turn_start/turn_end、推进阶段、
+    可能触发工具调用和回写。而这里只想问一句"这声音是不是人话"。
+    答案是否定时，这一轮必须当作没发生过——不能留下任何业务痕迹。
+
+    也刻意不写事件：用户在客服说话时清了下嗓子，不该在事件链上留一条。
+    真正的打断（和误判）由前端在确认后调 /api/call/barge_in 记账。
+    """
+    t0 = time.time()
+    if not pcm:
+        return {"text": "", "has_content": False, "asr_ms": 0.0,
+                "reason": "empty_audio"}
+    try:
+        out = voice.asr(pcm)
+    except Exception as e:
+        # 识别挂了不代表用户在说话。这种情况按"不打断"处理——宁可让客服说完。
+        return {"text": "", "has_content": False,
+                "asr_ms": round((time.time() - t0) * 1000, 1),
+                "reason": "asr_error", "error": str(e)[:200]}
+
+    text = (out.get("text") or "").strip()
+    return {
+        "text": text,
+        "has_content": _has_interrupt_content(text),
+        "asr_ms": round((time.time() - t0) * 1000, 1),
+        "fake": bool(out.get("fake")),
+        "error": out.get("error"),
+    }
 
 
 def end_call(session_id):
@@ -827,6 +909,10 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
 
         # 音频分片走二进制体，必须在解析 JSON 之前分流，否则会被判成 BAD_JSON
+        if path == "/api/asr/probe":
+            self._handle_asr_probe()
+            return
+
         if path == "/api/audio/chunk":
             self._handle_audio_chunk()
             return
@@ -865,7 +951,8 @@ class Handler(BaseHTTPRequestHandler):
                                  "detail": "turn_id 必须是整数"}, 400)
                 return
             self._send_json(record_barge_in(
-                sid, tid, body.get("reason") or "user_speech"))
+                sid, tid, body.get("reason") or "user_speech",
+                body.get("text") or ""))
             return
 
         if path == "/api/audio/reset":
@@ -961,6 +1048,30 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         self._send_json(dict(out, ok=True))
+
+    def _handle_asr_probe(self):
+        """播报期间的插话探针：识别一小段音频，回答"这是不是人话"。
+
+        与 /api/audio/chunk 的区别：那个把音频攒进本轮缓冲，这个用完就扔。
+        与 /api/turn 的区别：那个会推进状态机、写一整套事件，这个什么都不改。
+
+        前端在客服播报时听到疑似人声，会先压低播报音量、攒下这一小段，
+        等这段说完就发过来。返回 has_content=True 才真停播；False 就恢复音量。
+        """
+        qs = parse_qs(urlparse(self.path).query)
+        sid = (qs.get("session_id") or [""])[0]
+        sess, err, code = _auth(sid, (qs.get("token") or [""])[0])
+        if err:
+            self._send_json(err, code)
+            return
+
+        try:
+            pcm = self._read_raw()
+        except PayloadTooLarge as e:
+            self._send_json({"error": "AUDIO_TOO_LARGE", "detail": str(e)}, 413)
+            return
+
+        self._send_json(probe_speech(sid, pcm))
 
     def _handle_metric(self, body):
         """前端上报首字响应（T4−T0）。上报失败不影响通话，所以错误码给得很明确。"""
