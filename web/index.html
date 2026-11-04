@@ -57,15 +57,16 @@
   <div class="card">
     <div class="row">
       <button id="btnStart" class="primary">开始通话</button>
-      <button id="btnRec" disabled>按下说话</button>
+      <button id="btnRec" disabled>暂停聆听</button>
       <button id="btnEnd" disabled class="danger">挂断</button>
       <span class="hint" id="sessionLine">未开始</span>
     </div>
+    <div class="hint" id="phaseLine" style="margin-top:8px;font-weight:600">状态：未开始</div>
     <div class="row" style="margin-top:10px">
       <input type="text" id="textInput" placeholder="没有麦克风就打字；留空直接点发送 = 模拟用户不说话" disabled>
       <button id="btnSend" disabled>发送</button>
     </div>
-    <div class="hint" id="audioLine" style="margin-top:8px">麦克风未启用。点「按下说话」开始采集，20ms 一帧、16kHz 单声道。</div>
+    <div class="hint" id="audioLine" style="margin-top:8px">麦克风未启用。点「开始通话」后麦克风会自动打开，直接说话即可，客服说话时可以插话打断。</div>
   </div>
 
   <div class="card">
@@ -94,7 +95,22 @@
 <script>
 // 全部状态放这里，避免到处找变量。
 // token 是这通电话的读取凭证：没有它，别人拿到 session_id 也查不到事件与报告。
-const S = { sessionId: null, token: null, recording: false, busy: false, turnId: 0, t0: 0 };
+const S = { sessionId: null, token: null, busy: false, turnId: 0, t0: 0,
+            // 连续通话状态机：idle → listening → user → thinking → agent → (打断) → user
+            phase: "idle", autoMode: false,
+            silentFrames: 0, bargeHits: 0,
+            currentAudio: null, playToken: 0 };
+
+// VAD 判定参数。逐帧（20ms）算 RMS，不用模型，纯能量。
+// 为什么纯能量够用：这段链路里只有一个人说话，噪声被 getUserMedia 的
+// noiseSuppression 压过一道，能量判定的误判率可以接受，而且零延迟。
+const VAD = {
+  speechRms: 0.020,      // 一帧超过它 = 有人在说话（约 -34dBFS）
+  silenceRms: 0.010,     // 低于它算静音
+  endpointFrames: 35,    // 连续 35 帧静音 = 700ms，判"说完了"
+  bargeRms: 0.035,       // 打断阈值，**故意高于说话阈值**
+  bargeFrames: 3,        // 连续 3 帧（60ms）才判打断，挡咳嗽和碰撞声
+};
 
 const $ = (id) => document.getElementById(id);
 
@@ -136,12 +152,28 @@ async function startCall() {
   $("textInput").disabled = false;
   $("btnSend").disabled = false;
   $("btnEvents").disabled = false;
+
+  // 连续通话：进来就把麦克风打开，用户直接说话，不用点任何按钮。
+  // 采集在整个通话期间常开——播报时也要开着，否则检测不到"用户想插话"。
+  A.seq = 0;                       // 新会话，帧序号从头开始（服务端也是从 0 期望）
+  try {
+    await startCapture();
+    S.autoMode = true;
+    S.phase = "agent";             // 开场白马上要播，此期间允许被打断
+    setPhaseLine();
+  } catch (e) {
+    S.autoMode = false;
+    S.phase = "idle";
+    log("系统", "拿不到麦克风：" + (e && e.message ? e.message : e) +
+        "（可用下面打字；或检查浏览器权限）");
+  }
+
   if (d.opening) {
     // 外呼由客服先开口：开场自报身份是六环节的第一环
     log("客服", d.opening, "开场");
     speak(d.opening_tts || { text: d.opening, mode: "browser" }, 0);
   }
-  log("系统", "通话已建立。说一句或打一句话，系统会按环节推进；留空点发送可以模拟“用户不说话”。");
+  log("系统", "通话已建立。直接说话即可，说完会自动提交；客服说话时可以随时插话打断。");
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +271,7 @@ async function startCapture() {
   gain.connect(ctx.destination);
 
   Object.assign(A, { ctx, node, gain, src, stream,
-                     seq: 0, frames: 0, samples: 0, dropped: 0,
+                     frames: 0, samples: 0, dropped: 0,
                      batch: [], inflight: 0, queue: Promise.resolve(),
                      srvFrames: 0, srvSamples: 0, srvGaps: 0 });
   return { sampleRate: ctx.sampleRate };
@@ -263,13 +295,122 @@ async function stopCapture() {
   return stat;
 }
 
-// 收到一帧：攒进批次，够一批就发
+// 收到一帧：先做 VAD 判定，再决定要不要攒进上传批次。
 function onFrame(d) {
+  const pcm = new Int16Array(d.pcm);
   A.frames += 1;
-  A.samples += d.pcm.byteLength / 2;
-  A.batch.push(new Int16Array(d.pcm));
-  if (A.batch.length >= BATCH_FRAMES) flushBatch();
+  A.samples += pcm.length;
+
+  if (S.autoMode) {
+    vadTick(frameRms(pcm));
+    // 只在"该收用户声音"的两个状态上传。思考中/播报中的音频不能进识别：
+    // 播报时麦克风是开着的（要判打断），会把客服自己的声音采进来。
+    if (S.phase === "listening" || S.phase === "user") {
+      A.batch.push(pcm);
+      if (A.batch.length >= BATCH_FRAMES) flushBatch();
+    }
+  }
   updateAudioLine();
+}
+
+// 一帧 PCM16 的均方根，归一到 0~1。320 个采样，一秒 50 次，开销可以忽略。
+function frameRms(pcm) {
+  let sum = 0;
+  for (let i = 0; i < pcm.length; i++) {
+    const v = pcm[i] / 32768;
+    sum += v * v;
+  }
+  return Math.sqrt(sum / pcm.length);
+}
+
+// VAD 状态推进。每个 20ms 帧调一次，是整套连续对话的心脏。
+function vadTick(rms) {
+  if (S.phase === "agent") {
+    // 播报中：只关心"用户是不是在插话"。
+    // 阈值比说话阈值高，是因为外放时麦克风会收到自己播的声音——
+    // AEC 只能压 20~30dB，不保证干净。宁可偶尔打不断，也不能自己打断自己。
+    S.bargeHits = rms >= VAD.bargeRms ? S.bargeHits + 1 : 0;
+    if (S.bargeHits >= VAD.bargeFrames) doBargeIn();
+    return;
+  }
+  if (S.phase === "thinking") return;         // 等响应，不判任何东西
+
+  if (S.phase === "listening") {
+    if (rms >= VAD.speechRms) {
+      S.phase = "user";
+      S.silentFrames = 0;
+      setPhaseLine();
+    }
+    return;
+  }
+
+  if (S.phase === "user") {
+    if (rms >= VAD.speechRms) S.silentFrames = 0;
+    else S.silentFrames += 1;
+    if (S.silentFrames >= VAD.endpointFrames) {
+      // 端点到了：用户说完了，自动提交，不需要按任何按钮
+      S.phase = "thinking";
+      setPhaseLine();
+      // T0 = 说完了的那一刻，必须在等上传落地之前取
+      sendTurn({ audio_streamed: true, audio_dropped: A.dropped }, performance.now());
+    }
+  }
+}
+
+// 打断：用户插话时立刻让客服闭嘴。
+// 顺序很重要——先静音再发通知。网络请求可以慢，但"闭嘴"不能慢。
+function doBargeIn() {
+  if (S.phase !== "agent") return;
+  stopPlayback();
+  S.phase = "user";              // 用户已经在说话了，直接进 user 继续收
+  S.silentFrames = 0;
+  S.bargeHits = 0;
+  log("系统", "⚠ 打断：客服已停止播报");
+  setPhaseLine();
+  // 通知服务端记 barge_in、丢掉这一轮没播完的音频
+  const sid = S.sessionId, tok = S.token, tid = S.turnId;
+  fetch("/api/call/barge_in", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sid, token: tok, turn_id: tid, reason: "user_speech" })
+  }).catch(() => {});
+}
+
+// 立刻停掉正在播的声音，并让所有待播队列失效
+function stopPlayback() {
+  S.playToken += 1;              // 队列里每一段都会检查这个值，变了就不再播
+  if (S.currentAudio) {
+    try { S.currentAudio.pause(); } catch (e) { /* 已经停了 */ }
+    S.currentAudio = null;
+  }
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+}
+
+// 播报结束（正常播完）：回到聆听，并清掉播报期间采到的音频
+function afterPlayback() {
+  if (S.phase !== "agent") return;      // 被打断过就别再改状态
+  S.phase = "listening";
+  S.silentFrames = 0;
+  S.bargeHits = 0;
+  setPhaseLine();
+  // 播报期间麦克风一直开着（为了能打断），这段音频里混着客服自己的声音，
+  // 不清掉的话下一轮识别会把它们当成用户说的话。
+  const sid = S.sessionId, tok = S.token;
+  fetch("/api/audio/reset", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sid, token: tok })
+  }).catch(() => {});
+}
+
+function setPhaseLine() {
+  const label = { idle: "未开始", listening: "在听……请直接说话",
+                  user: "正在听你说", thinking: "正在处理",
+                  agent: "客服在说（可随时插话打断）" }[S.phase] || S.phase;
+  const el = $("phaseLine");
+  if (el) el.textContent = "状态：" + label;
+  const b = $("btnRec");
+  if (b && S.autoMode) b.textContent = "暂停聆听";
 }
 
 // 把攒着的帧合成一片发出去。seq 用"这批第一帧的序号"，
@@ -330,7 +471,7 @@ async function uploadChunk(seq, pcm16) {
 
 // 采集状态条：这是 S1 唯一能"眼看为实"的地方
 function updateAudioLine() {
-  if (!S.recording && !A.frames) return;
+  if (!S.autoMode && !A.frames) return;
   const parts = ["采集 " + A.frames + " 帧 / " + A.samples +
                  " 采样（" + (A.samples / 16000).toFixed(2) + " 秒）"];
   if (A.srvSamples) parts.push("服务端已收 " + A.srvSamples + " 采样");
@@ -339,42 +480,33 @@ function updateAudioLine() {
   $("audioLine").textContent = parts.join(" · ");
 }
 
-// 说话：点一次开始、再点一次结束（半双工；真的边识别边打断要等 S2/S3）
+// 连续通话下这个按钮不再是"录音"，而是暂停/恢复聆听。
+// 为什么还留一个暂停键：演示时要停下来讲解、环境太吵想先关麦，
+// 真电话上的"静音键"也是这个作用。
 async function toggleRec() {
-  if (S.busy) return;
-  if (!S.recording) {
-    try {
-      const info = await startCapture();
-      S.recording = true;
-      $("btnRec").textContent = "停止并发送";
-      $("audioLine").textContent = "采集中（设备 " + info.sampleRate +
-                                   "Hz → 16kHz / 20ms 一帧，每 160ms 上传一次）";
-    } catch (e) {
-      log("系统", "拿不到麦克风：" + (e && e.message ? e.message : e) + "（可改用下面打字）");
-    }
+  if (!S.sessionId) return;
+
+  if (S.autoMode) {
+    S.autoMode = false;
+    S.phase = "idle";
+    stopPlayback();
+    await stopCapture();
+    $("btnRec").textContent = "恢复聆听";
+    $("audioLine").textContent = "已暂停聆听（麦克风已关闭）";
+    setPhaseLine();
+    log("系统", "已暂停聆听。点「恢复聆听」继续；也可以直接在下面打字。");
     return;
   }
 
-  S.recording = false;
-  $("btnRec").disabled = true;
-  $("btnRec").textContent = "按下说话";
-  // T0 = 用户说完的**那一刻**，必须在等分片上传落地之前取。
-  // 如果放在 stopCapture() 之后，上传耗时就被悄悄排除了，
-  // 首字响应会算得比用户真实感知的更快——那是自欺型数字。
-  const t0 = performance.now();
-  const stat = await stopCapture();
-  if (!stat.samples) {
-    log("系统", "这一轮没采到音频，已忽略。");
-    $("btnRec").disabled = false;
-    return;
-  }
-  log("系统", "采集结束：共 " + stat.frames + " 帧 / " + stat.samples + " 采样（" +
-      (stat.samples / 16000).toFixed(2) + " 秒）" +
-      (stat.dropped ? "，本地丢帧 " + stat.dropped : ""));
   try {
-    await sendTurn({ audio_streamed: true, audio_dropped: stat.dropped }, t0);
-  } finally {
-    $("btnRec").disabled = false;
+    await startCapture();
+    S.autoMode = true;
+    S.phase = "listening";
+    $("btnRec").textContent = "暂停聆听";
+    setPhaseLine();
+    log("系统", "已恢复聆听，直接说话即可。");
+  } catch (e) {
+    log("系统", "拿不到麦克风：" + (e && e.message ? e.message : e) + "（可改用下面打字）");
   }
 }
 
@@ -406,14 +538,27 @@ async function sendTurn(payload, t0) {
 
     S.turnId = d.turn_id;
     $("mTotal").textContent = d.latency.total_ms + " ms";
+    // 进入"客服说话"状态：从这一刻起麦克风转成"监听打断"用途
+    if (S.autoMode) {
+      S.phase = "agent";
+      S.bargeHits = 0;
+      setPhaseLine();
+    }
     speak(d.tts || { text: d.reply_text, mode: "browser" }, d.turn_id);
     refreshMetrics();
     refreshEvents();
   } catch (e) {
     log("系统", "请求失败：" + e.message);
+    if (S.autoMode) { S.phase = "listening"; setPhaseLine(); }
   } finally {
     S.busy = false;
     if (S.sessionId) $("btnSend").disabled = false;
+    // 兜底：这一轮如果没能进入播报（出错、空回复），别让状态卡死在"思考中"，
+    // 否则 VAD 再也不会推进，用户会觉得"它不理我了"。
+    if (S.autoMode && S.phase === "thinking") {
+      S.phase = "listening";
+      setPhaseLine();
+    }
   }
 }
 
@@ -441,7 +586,9 @@ function speak(tts, turnId) {
   // 服务端整句合成路线：<audio> 播 OSS 链接。不 fetch，所以不受 CORS 限制。
   if (tts && tts.mode === "url" && tts.audio_url) {
     const a = new Audio(tts.audio_url);
+    S.currentAudio = a;                       // 留个句柄，打断时要能 pause
     a.onplaying = () => report(false);
+    a.onended = () => { S.currentAudio = null; afterPlayback(); };
     a.onerror = () => { log("系统", "音频播放失败，改用浏览器播报"); browserSpeak(text, report); };
     a.play().catch(() => { log("系统", "自动播放被拦截，改用浏览器播报"); browserSpeak(text, report); });
     return;
@@ -456,36 +603,44 @@ function speak(tts, turnId) {
 // 任何一段失败就整体回落浏览器播报——只播半句话比不播更难解释。
 function playSegments(tts, turnId, report, fallbackText) {
   const queue = (tts.segments || []).slice();
+  const myToken = S.playToken;      // 打断时 playToken 会 +1，这里记住当初的值
   let restCount = tts.rest_count || 0;
   let reported = false;
   let aborted = false;
 
+  // 被用户打断之后，这个队列必须整体作废——不能"停一下再接着念"
+  const barged = () => myToken !== S.playToken;
+
   const fallback = () => {
-    if (aborted) return;
+    if (aborted || barged()) return;
     aborted = true;
     log("系统", "分段音频播放失败，改用浏览器播报");
     browserSpeak(fallbackText, report);
   };
 
   const playNext = () => {
-    if (aborted) return;
+    if (aborted || barged()) return;
 
     if (!queue.length) {
       // 队列空了：还有剩余段就去取一次，取到接着播
       if (restCount > 0) {
         restCount = 0;
         fetchRestSegments(turnId).then((segs) => {
-          if (aborted) return;
+          if (aborted || barged()) return;
           if (segs.length) { queue.push(...segs); playNext(); }
+          else afterPlayback();          // 取不到就直接收尾，别卡着
         });
+      } else {
+        afterPlayback();                 // 全部播完，回到聆听
       }
       return;
     }
 
     const seg = queue.shift();
     const a = new Audio(seg.audio_url);
+    S.currentAudio = a;
     a.onplaying = () => { if (!reported) { reported = true; report(false); } };
-    a.onended = playNext;
+    a.onended = () => { S.currentAudio = null; playNext(); };
     a.onerror = fallback;
     a.play().catch(fallback);
   };
@@ -516,6 +671,9 @@ function browserSpeak(text, report) {
   u.lang = "zh-CN";
   u.rate = 1.05;
   u.onstart = () => report(false);
+  // 播完要回到聆听状态。被打断时 cancel() 也会触发 onend，
+  // 但那时 phase 已经是 user，afterPlayback 里的判断会把它挡掉。
+  u.onend = () => afterPlayback();
   speechSynthesis.cancel();
   speechSynthesis.speak(u);
   // 兜底：个别浏览器不触发 onstart，1.5 秒后按"已开始播报"记一条估算值。
@@ -543,13 +701,16 @@ async function reportMetric(turnId, ms, estimate) {
 
 async function endCall() {
   if (!S.sessionId) return;
-  // 挂断时如果还在采集，先停掉：否则麦克风会一直开着，音频还会往已结束的会话里发
-  if (S.recording) {
-    S.recording = false;
-    $("btnRec").textContent = "按下说话";
+  // 挂断时先把状态机停掉，再关麦克风：否则正在播的声音会继续，
+  // 而 VAD 还在拿"已结束会话"的音频做判定。
+  S.autoMode = false;
+  S.phase = "idle";
+  stopPlayback();
+  if (A.node) {
     await stopCapture();
     $("audioLine").textContent = "麦克风已关闭。";
   }
+  $("btnRec").textContent = "暂停聆听";
   await fetch("/api/call/end", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: S.sessionId, token: S.token })
