@@ -1,7 +1,10 @@
 # 运行时生成，不进仓库
-data/
+# 注意这里是 /data/（只锚定仓库根目录）。写成 data/ 会把 mock_business/data/
+# 里的沙箱数据一起忽略掉——那是要进仓库的测试数据，不是运行产物。
+/data/
 *.db
 *.db-journal
+mock_business/data/tickets.json
 
 # Python
 __pycache__/
