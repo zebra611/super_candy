@@ -42,8 +42,9 @@ events.init_db()
 import config_loader  # noqa: E402
 import contracts  # noqa: E402
 import app as app_mod  # noqa: E402
-from app import (_acquire, _audio_state, _auth, _release, end_call,  # noqa: E402
-                 handle_turn, ingest_audio_chunk, record_barge_in,
+from app import (_acquire, _audio_state, _auth, _has_interrupt_content,  # noqa: E402
+                 _release, end_call, handle_turn, ingest_audio_chunk,
+                 probe_speech, record_barge_in,
                  report_client_metric, start_call)
 from modules import dialogue, eval as eval_mod, tools, voice  # noqa: E402
 
@@ -583,8 +584,10 @@ def main():
     sess_x = app_mod._SESSIONS[sid_x]
     sess_x.setdefault("tts_rest", {})[tid_x] = ([], [None, "u2"], ["头段", "尾段"])
     before = bool(sess_x["tts_rest"].get(tid_x))
-    res_b = record_barge_in(sid_x, tid_x, "user_speech")
+    res_b = record_barge_in(sid_x, tid_x, "user_speech", "等一下")
     after = bool(sess_x["tts_rest"].get(tid_x))
+    ev_b = [e for e in events.list_events(sid_x) if e["type"] == "barge_in"]
+    heard = str(ev_b[-1].get("payload")) if ev_b else ""
     check("打断：写 barge_in 事件，并丢掉这一轮没播完的音频",
           "barge_in" in event_types(sid_x) and before and not after
           and res_b.get("dropped_pending") is True,
@@ -592,6 +595,10 @@ def main():
            "该轮待播音频：打断前 %s → 打断后 %s" % (before, after),
            "返回 dropped_pending = %s" % res_b.get("dropped_pending"),
            "事件链：%s" % " → ".join(event_types(sid_x))])
+    check("打断事件里记下「为什么打断」（用户到底说了什么）",
+          "等一下" in heard and "heard" in heard,
+          ["barge_in.payload = %s" % heard[:160],
+           "留存这句话才能复盘：用户是喊停、否定，还是噪声误判"])
 
     # 打断不能把会话弄坏：接着还能正常来一轮
     r_x2 = handle_turn(sid_x, user_text="我姓张")
@@ -600,6 +607,113 @@ def main():
           ["上一轮 turn_id=%s，这一轮 turn_id=%s" % (tid_x, r_x2.get("turn_id")),
            "回复：%s" % str(r_x2.get("reply_text"))[:50]])
     end_call(sid_x)
+
+    print()
+    print("=" * 74)
+    print("证据 9c：打断要先确认是「人话」，不能咳嗽一声就停")
+    print("=" * 74)
+    print("为什么单独测这条：原来的实现是能量一超阈值就停播，60ms 就够。")
+    print("咳嗽、碰麦、椅子响都能把客服打断，而且打断了不可逆——")
+    print("那半句话用户再也听不到，得重听一遍。")
+
+    # 判定规则是纯函数，逐条列表验证，不依赖网络
+    cases = [
+        ("", False, "纯噪声，一个字都没识别出"),
+        ("。，！", False, "只有标点"),
+        ("嗯。", False, "随口应一声"),
+        ("嗯嗯啊", False, "全是语气词"),
+        ("啊", False, "单个语气词"),
+        ("我", False, "单个字，不是打断意图"),
+        ("停", True, "单个字但明确要求停"),
+        ("不是", True, "两个字，有实义"),
+        ("等一下", True, "最典型的插话"),
+        ("喂你好", True, "打招呼式插话"),
+        ("我我我", True, "结巴，但确实在说话"),
+        # 以下三条来自真云识别的实测发现：ASR 遇到噪声会吐高频短语
+        ("Thank you.", False, "白噪声实测识别成了这句，不能算插话"),
+        ("うん。", False, "「嗯」被识别成日文假名"),
+        ("OK", False, "纯英文：中文外呼场景下多半是幻觉"),
+        ("好的OK", True, "中英混合，只要有汉字且有实义就算"),
+    ]
+    rows_c = []
+    wrong = []
+    for t, exp, why in cases:
+        got = _has_interrupt_content(t)
+        rows_c.append("  %-10r → %-5s （期望 %-5s）%s"
+                      % (t, got, exp, why))
+        if got != exp:
+            wrong.append((t, exp, got))
+    check("插话判定：语气词不算，实义文字才算",
+          not wrong,
+          rows_c + (["不符预期：%s" % wrong] if wrong else []))
+
+    # probe 接口本身：走本地假识别服务，确认它把 text 翻成 has_content
+    class _FixedASR(http.server.BaseHTTPRequestHandler):
+        spoken = "等一下"
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            body = json.dumps({"choices": [{"message": {
+                "content": _FixedASR.spoken}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv_p = http.server.HTTPServer(("127.0.0.1", 0), _FixedASR)
+    threading.Thread(target=srv_p.serve_forever, daemon=True).start()
+    orig_cfg_p, orig_sec_p = config_loader.asr_config, config_loader.secret
+    orig_env_p = os.environ.get("DASHSCOPE_API_KEY")
+    os.environ["DASHSCOPE_API_KEY"] = "test-key-not-used"   # 队友机器上也要能跑
+    config_loader.asr_config = lambda: {
+        "provider": "dashscope", "model": "m", "timeout_sec": 3,
+        "silence_rms": 0.0,          # 关掉静音闸门，保证真的发出请求
+        "endpoint": "http://127.0.0.1:%d/asr" % srv_p.server_address[1]}
+    try:
+        pcm_speech = b"".join(struct.pack("<h", int(9000 * math.sin(i / 6.0)))
+                              for i in range(8000))          # 0.5 秒非静音
+
+        _FixedASR.spoken = "等一下"
+        out_yes = probe_speech(sid_x, pcm_speech)
+        check("探针：识别出「等一下」→ 判定该打断",
+              out_yes.get("text") == "等一下" and out_yes.get("has_content") is True,
+              ["识别文本 = %r" % out_yes.get("text"),
+               "has_content = %s" % out_yes.get("has_content"),
+               "耗时 = %s ms" % out_yes.get("asr_ms")])
+
+        _FixedASR.spoken = "嗯。"
+        out_no = probe_speech(sid_x, pcm_speech)
+        check("探针：只识别出「嗯」→ 判定不该打断（客服继续说）",
+              out_no.get("text") == "嗯。" and out_no.get("has_content") is False,
+              ["识别文本 = %r" % out_no.get("text"),
+               "has_content = %s（False 才对，否则清嗓子就能打断客服）"
+               % out_no.get("has_content")])
+
+        out_empty = probe_speech(sid_x, b"")
+        check("探针：没传音频时不报错，直接判不打断",
+              out_empty.get("has_content") is False
+              and out_empty.get("reason") == "empty_audio",
+              ["has_content = %s，reason = %s"
+               % (out_empty.get("has_content"), out_empty.get("reason"))])
+
+        # 探针不能污染业务：它只识别，不该推进状态机、不该多出轮次
+        n_before = len(event_types(sid_x))
+        probe_speech(sid_x, pcm_speech)
+        check("探针不写任何业务事件（不能推进状态机）",
+              len(event_types(sid_x)) == n_before,
+              ["探针前后事件条数：%d → %d" % (n_before, len(event_types(sid_x)))])
+    finally:
+        config_loader.asr_config, config_loader.secret = orig_cfg_p, orig_sec_p
+        if orig_env_p is None:
+            os.environ.pop("DASHSCOPE_API_KEY", None)
+        else:
+            os.environ["DASHSCOPE_API_KEY"] = orig_env_p
+        srv_p.shutdown()
+        srv_p.server_close()
 
     print()
     print("=" * 74)

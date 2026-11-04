@@ -99,6 +99,9 @@ const S = { sessionId: null, token: null, busy: false, turnId: 0, t0: 0,
             // 连续通话状态机：idle → listening → user → thinking → agent → (打断) → user
             phase: "idle", autoMode: false,
             silentFrames: 0, bargeHits: 0,
+            // 打断的两段式状态：idle（等声音）→ suspect（疑似，已压低音量）
+            // → probing（正在识别这段到底说了什么）。只有 identify 出实义文字才真停。
+            bargeState: "idle", bargeBuf: [], ducked: false,
             currentAudio: null, playToken: 0 };
 
 // VAD 判定参数。逐帧（20ms）算 RMS，不用模型，纯能量。
@@ -108,8 +111,13 @@ const VAD = {
   speechRms: 0.020,      // 一帧超过它 = 有人在说话（约 -34dBFS）
   silenceRms: 0.010,     // 低于它算静音
   endpointFrames: 35,    // 连续 35 帧静音 = 700ms，判"说完了"
-  bargeRms: 0.035,       // 打断阈值，**故意高于说话阈值**
-  bargeFrames: 3,        // 连续 3 帧（60ms）才判打断，挡咳嗽和碰撞声
+  bargeRms: 0.035,       // 疑似插话阈值，**故意高于说话阈值**
+  bargeFrames: 3,        // 连续 3 帧（60ms）才算"疑似"，挡瞬时碰撞声
+  // 以下是"疑似之后"的两段式参数。光有能量不算插话，要等这段说完、
+  // 识别出实义文字才停播——否则清个嗓子就能把客服打断，而且不可逆。
+  probeSilenceFrames: 18,  // 疑似之后静音 18 帧（360ms）= 这一句说完了
+  bargeMaxFrames: 160,     // 最多攒 160 帧（3.2 秒），防止用户一直说导致永远不判
+  duckVolume: 0.12,        // 疑似期间把播报压到 12%（约 -18dB）
 };
 
 const $ = (id) => document.getElementById(id);
@@ -308,6 +316,10 @@ function onFrame(d) {
     if (S.phase === "listening" || S.phase === "user") {
       A.batch.push(pcm);
       if (A.batch.length >= BATCH_FRAMES) flushBatch();
+    } else if (S.bargeState === "suspect") {
+      // 疑似插话期间单独攒一小段，用来问"这到底是不是人话"。
+      // 千万不能进 A.batch：那会把客服自己的播报声混进本轮识别。
+      S.bargeBuf.push(pcm);
     }
   }
   updateAudioLine();
@@ -326,11 +338,7 @@ function frameRms(pcm) {
 // VAD 状态推进。每个 20ms 帧调一次，是整套连续对话的心脏。
 function vadTick(rms) {
   if (S.phase === "agent") {
-    // 播报中：只关心"用户是不是在插话"。
-    // 阈值比说话阈值高，是因为外放时麦克风会收到自己播的声音——
-    // AEC 只能压 20~30dB，不保证干净。宁可偶尔打不断，也不能自己打断自己。
-    S.bargeHits = rms >= VAD.bargeRms ? S.bargeHits + 1 : 0;
-    if (S.bargeHits >= VAD.bargeFrames) doBargeIn();
+    agentTick(rms);
     return;
   }
   if (S.phase === "thinking") return;         // 等响应，不判任何东西
@@ -357,28 +365,135 @@ function vadTick(rms) {
   }
 }
 
-// 打断：用户插话时立刻让客服闭嘴。
-// 顺序很重要——先静音再发通知。网络请求可以慢，但"闭嘴"不能慢。
-function doBargeIn() {
-  if (S.phase !== "agent") return;
-  stopPlayback();
-  S.phase = "user";              // 用户已经在说话了，直接进 user 继续收
+// 播报中每帧调一次。这里分两段判定，别把它压成"能量超了就算打断"。
+//
+// 为什么必须两段：实测发现 60ms 的咳嗽、碰麦、椅子响就能把客服打断，
+// 而打断是不可逆的——那半句话用户再也听不到了，得重听一遍。
+// 所以能量只当"疑似"，真正停播要等这段说完、识别出实义文字。
+// 代价是"客服多说了半句"，但这在半双工电话里听起来像正常的反应延迟。
+function agentTick(rms) {
+  if (S.bargeState === "probing") return;   // 正在识别，等结果，别重复触发
+
+  if (S.bargeState === "suspect") {
+    // 已经在疑似状态：等这段说完（静音 360ms）或者攒满 3.2 秒
+    if (rms >= VAD.speechRms) S.silentFrames = 0;
+    else S.silentFrames += 1;
+    S.bargeHits += 1;
+    if (S.silentFrames >= VAD.probeSilenceFrames ||
+        S.bargeHits >= VAD.bargeMaxFrames) {
+      confirmBargeIn();
+    }
+    return;
+  }
+
+  // 空闲：攒够 3 帧（60ms）超阈值的能量，进"疑似"
+  S.bargeHits = rms >= VAD.bargeRms ? S.bargeHits + 1 : 0;
+  if (S.bargeHits >= VAD.bargeFrames) startBargeSuspect();
+}
+
+// 疑似插话：先压低播报音量，开始攒音频。**不暂停**。
+// 为什么用压低而不是暂停：万一是我误判（多半是），暂停再恢复会有一个
+// 明显的断音，而音量压下去再抬回来，用户几乎察觉不到。
+function startBargeSuspect() {
+  S.bargeState = "suspect";
+  S.bargeBuf = [];
   S.silentFrames = 0;
   S.bargeHits = 0;
-  log("系统", "⚠ 打断：客服已停止播报");
+  duckPlayback(true);
+  setPhaseLine();
+}
+
+// 这段说完了，拿去识别：到底是不是在说话、说的是什么。
+async function confirmBargeIn() {
+  const frames = S.bargeBuf;
+  S.bargeBuf = [];
+  S.bargeState = "probing";
+
+  if (!frames.length) {
+    dismissBargeIn("没攒到音频");
+    return;
+  }
+
+  let total = 0;
+  for (const f of frames) total += f.length;
+  const merged = new Int16Array(total);
+  let off = 0;
+  for (const f of frames) { merged.set(f, off); off += f.length; }
+
+  let d = null;
+  try {
+    const q = "?session_id=" + encodeURIComponent(S.sessionId) +
+              "&token=" + encodeURIComponent(S.token);
+    const r = await fetch("/api/asr/probe" + q, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: merged.buffer
+    });
+    d = await r.json();
+  } catch (e) {
+    dismissBargeIn("识别请求失败");
+    return;
+  }
+
+  if (d && d.has_content) {
+    doBargeIn(d.text || "", frames);
+  } else {
+    dismissBargeIn(d && d.text ? "只听到「" + d.text + "」，不算插话" : "没识别出内容");
+  }
+}
+
+// 否决：这不是插话。抬回音量继续播，就当没发生过。
+function dismissBargeIn(why) {
+  S.bargeState = "idle";
+  S.bargeBuf = [];
+  S.silentFrames = 0;
+  S.bargeHits = 0;
+  duckPlayback(false);
+  setPhaseLine();
+  if (why) log("系统", "疑似插话已忽略：" + why);
+}
+
+// 确认打断：到这里才真的让客服闭嘴。
+// 顺序很重要——先停播再发通知。网络请求可以慢，但"闭嘴"不能慢。
+function doBargeIn(heardText, preBuf) {
+  if (S.phase !== "agent") return;
+  S.bargeState = "idle";
+  S.bargeBuf = [];
+  S.bargeHits = 0;
+  S.silentFrames = 0;
+  stopPlayback();
+  // 插话开头那几个字（"等一下""不是"）不能丢：用户是连着往下说的，
+  // 把这段接到本轮缓冲的最前面，等他说完一起识别。
+  if (preBuf && preBuf.length) {
+    for (const f of preBuf) A.batch.push(f);
+  }
+  S.phase = "user";              // 用户已经在说话了，直接进 user 继续收
+  log("系统", "打断：听到「" + (heardText || "") + "」，客服已停止播报");
   setPhaseLine();
   // 通知服务端记 barge_in、丢掉这一轮没播完的音频
   const sid = S.sessionId, tok = S.token, tid = S.turnId;
   fetch("/api/call/barge_in", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sid, token: tok, turn_id: tid, reason: "user_speech" })
+    body: JSON.stringify({ session_id: sid, token: tok, turn_id: tid,
+                           reason: "user_speech", text: heardText || "" })
   }).catch(() => {});
+}
+
+// 压低/恢复播报音量。分段播放时每段是新的 Audio 对象，
+// 所以 playNext / speak 里都要按 S.ducked 补一次音量。
+function duckPlayback(on) {
+  S.ducked = !!on;
+  const a = S.currentAudio;
+  if (a) {
+    try { a.volume = on ? VAD.duckVolume : 1.0; } catch (e) { /* 某些浏览器只读 */ }
+  }
 }
 
 // 立刻停掉正在播的声音，并让所有待播队列失效
 function stopPlayback() {
   S.playToken += 1;              // 队列里每一段都会检查这个值，变了就不再播
+  S.ducked = false;
   if (S.currentAudio) {
     try { S.currentAudio.pause(); } catch (e) { /* 已经停了 */ }
     S.currentAudio = null;
@@ -392,6 +507,11 @@ function afterPlayback() {
   S.phase = "listening";
   S.silentFrames = 0;
   S.bargeHits = 0;
+  // 播完时如果还卡在"疑似"里（用户刚好在最后一刻出声），一并清掉：
+  // 客服已经说完了，这时候再确认插话没有意义，只会把用户拖进一次空轮。
+  S.bargeState = "idle";
+  S.bargeBuf = [];
+  S.ducked = false;
   setPhaseLine();
   // 播报期间麦克风一直开着（为了能打断），这段音频里混着客服自己的声音，
   // 不清掉的话下一轮识别会把它们当成用户说的话。
@@ -404,9 +524,12 @@ function afterPlayback() {
 }
 
 function setPhaseLine() {
-  const label = { idle: "未开始", listening: "在听……请直接说话",
-                  user: "正在听你说", thinking: "正在处理",
-                  agent: "客服在说（可随时插话打断）" }[S.phase] || S.phase;
+  let label = { idle: "未开始", listening: "在听……请直接说话",
+                user: "正在听你说", thinking: "正在处理",
+                agent: "客服在说（可随时插话打断）" }[S.phase] || S.phase;
+  // 补一句"正在确认"：不然用户会觉得"我说话了但客服没停"，其实是在识别。
+  if (S.bargeState === "suspect") label = "听到你说话了……（客服即将停下）";
+  else if (S.bargeState === "probing") label = "正在确认你说了什么……";
   const el = $("phaseLine");
   if (el) el.textContent = "状态：" + label;
   const b = $("btnRec");
@@ -587,6 +710,7 @@ function speak(tts, turnId) {
   if (tts && tts.mode === "url" && tts.audio_url) {
     const a = new Audio(tts.audio_url);
     S.currentAudio = a;                       // 留个句柄，打断时要能 pause
+    if (S.ducked) a.volume = VAD.duckVolume;  // 疑似插话期间新起一段也要保持压低
     a.onplaying = () => report(false);
     a.onended = () => { S.currentAudio = null; afterPlayback(); };
     a.onerror = () => { log("系统", "音频播放失败，改用浏览器播报"); browserSpeak(text, report); };
@@ -639,6 +763,7 @@ function playSegments(tts, turnId, report, fallbackText) {
     const seg = queue.shift();
     const a = new Audio(seg.audio_url);
     S.currentAudio = a;
+    if (S.ducked) a.volume = VAD.duckVolume;  // 切段时也要保持压低
     a.onplaying = () => { if (!reported) { reported = true; report(false); } };
     a.onended = () => { S.currentAudio = null; playNext(); };
     a.onerror = fallback;
