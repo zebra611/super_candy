@@ -41,8 +41,10 @@ events.init_db()
 
 import config_loader  # noqa: E402
 import contracts  # noqa: E402
+import app as app_mod  # noqa: E402
 from app import (_acquire, _audio_state, _auth, _release, end_call,  # noqa: E402
-                 handle_turn, ingest_audio_chunk, report_client_metric, start_call)
+                 handle_turn, ingest_audio_chunk, record_barge_in,
+                 report_client_metric, start_call)
 from modules import dialogue, eval as eval_mod, tools, voice  # noqa: E402
 
 # 自检默认不真的调云端合成：既慢又要花钱，还会让"没有密钥的队友"跑不过。
@@ -571,6 +573,36 @@ def main():
 
     print()
     print("=" * 74)
+    print("证据 9b：打断要闭嘴、要记账、还要能接着聊")
+    print("=" * 74)
+    sid_x = start_call()["session_id"]
+    r_x = handle_turn(sid_x, user_text="是我，尾号8866")
+    tid_x = r_x["turn_id"]
+
+    # 假装这一轮还有没播完的音频挂在那儿（真实运行时由 wait_first_only 留下）
+    sess_x = app_mod._SESSIONS[sid_x]
+    sess_x.setdefault("tts_rest", {})[tid_x] = ([], [None, "u2"], ["头段", "尾段"])
+    before = bool(sess_x["tts_rest"].get(tid_x))
+    res_b = record_barge_in(sid_x, tid_x, "user_speech")
+    after = bool(sess_x["tts_rest"].get(tid_x))
+    check("打断：写 barge_in 事件，并丢掉这一轮没播完的音频",
+          "barge_in" in event_types(sid_x) and before and not after
+          and res_b.get("dropped_pending") is True,
+          ["barge_in 在事件链里：%s" % ("barge_in" in event_types(sid_x)),
+           "该轮待播音频：打断前 %s → 打断后 %s" % (before, after),
+           "返回 dropped_pending = %s" % res_b.get("dropped_pending"),
+           "事件链：%s" % " → ".join(event_types(sid_x))])
+
+    # 打断不能把会话弄坏：接着还能正常来一轮
+    r_x2 = handle_turn(sid_x, user_text="我姓张")
+    check("打断之后仍能正常进入下一轮",
+          bool(r_x2.get("reply_text")) and r_x2["turn_id"] > tid_x,
+          ["上一轮 turn_id=%s，这一轮 turn_id=%s" % (tid_x, r_x2.get("turn_id")),
+           "回复：%s" % str(r_x2.get("reply_text"))[:50]])
+    end_call(sid_x)
+
+    print()
+    print("=" * 74)
     print("证据 10：会话 token 与并发保护")
     print("=" * 74)
     started = start_call()
@@ -676,8 +708,11 @@ def main():
            % json.dumps(payload_of(sid_i, "asr_result"), ensure_ascii=False)])
 
     st_after = _audio_state(sess_i)
-    check("一轮结束后缓冲被清空（下一轮不会串上这一轮的音频）",
-          st_after["samples"] == 0 and st_after["frames"] == 0 and st_after["expect_seq"] == 0,
+    # 注意 expect_seq **不该**归零：连续通话时采集常开，seq 全局单调递增，
+    # 一归零下一轮的每一片都会被判成"序号倒退"。要清的是音频内容，不是序号基准。
+    check("一轮结束后缓冲被清空，但帧序号基准保留（连续采集不能倒回 0）",
+          st_after["samples"] == 0 and st_after["frames"] == 0
+          and len(st_after["buf"]) == 0 and st_after["expect_seq"] > 0,
           ["清空后状态：samples=%d, frames=%d, expect_seq=%d, buf=%d 字节"
            % (st_after["samples"], st_after["frames"], st_after["expect_seq"],
               len(st_after["buf"]))])
@@ -703,9 +738,10 @@ def main():
         return 1
     print("全部通过。这只证明上面这些行为是真的，不代表整个系统都完成了：")
     print("  已经是真的：云端识别（qwen3-asr-flash）、云端合成（qwen3-tts-flash）、")
-    print("            采集分帧上传、静音闸门、超时分档、合成失败回落。")
-    print("  仍然是占位的：真 VAD（现在是「松手即说完」）、打断、语义级合规、")
-    print("            流式下发（识别与合成都是整段调用）、模拟用户跑批。")
+    print("            采集分帧上传、静音闸门、超时分档、合成失败回落、")
+    print("            前端能量 VAD 端点检测与自动提交、打断（停播＋记账＋丢待播音频）。")
+    print("  仍然是占位的：语义级合规、模拟用户跑批、")
+    print("            真流式（识别与合成仍是整段 HTTP，没有 WebSocket 双向通道）。")
     return 0
 
 

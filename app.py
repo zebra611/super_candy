@@ -297,13 +297,33 @@ def flush_audio(sess, dropped=0):
         "frame_ms": contracts.FRAME_MS,
     }
     st["buf"] = bytearray()
-    st["expect_seq"] = 0
+    # 注意：**不重置 expect_seq**。
+    # 半双工时代每轮重新开采集，seq 从 0 起；现在采集在通话期间常开，
+    # seq 全局单调递增。一重置，下一轮的每一片都会被判成"序号倒退"。
     st["frames"] = 0
     st["samples"] = 0
     st["gaps"] = 0
     st["duplicates"] = 0
     st["started_ts"] = 0.0
     return pcm, stat
+
+
+def reset_audio_buffer(sess):
+    """丢弃缓冲里堆着的音频，返回丢了多少字节。
+
+    连续对话时必须清：播报期间麦克风是开着的（要用来判打断），
+    客服自己的声音会被采进来。不清理的话，这些音频会混进下一轮识别，
+    轻则识别出一堆噪声，重则把"客服说的话"当成"用户说的话"。
+    """
+    st = _audio_state(sess)
+    n = len(st["buf"])
+    st["buf"] = bytearray()
+    st["frames"] = 0
+    st["samples"] = 0
+    st["gaps"] = 0
+    st["duplicates"] = 0
+    st["started_ts"] = 0.0
+    return n
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +614,31 @@ def start_call():
             "opening_tts": opening_tts}
 
 
+def record_barge_in(session_id, turn_id=0, reason="user_speech"):
+    """记录一次用户打断，并丢弃那一轮还没播完的音频。
+
+    为什么必须丢弃剩余音频：用户插话之后，那半句话已经没有意义了。
+    不丢的话，用户说完新一轮、前端回头再取一次，会在新一轮对话中间
+    突然冒出上一轮的残句——听起来像客服在自言自语。
+
+    注意这里不取消正在处理的请求：HTTP 请求发出后服务端无法中止，
+    强行装作取消只会让状态更难对齐。打断的**听觉效果**由前端负责
+    （立刻 pause），服务端只负责记账和清理。
+    """
+    tid = int(turn_id or 0)
+    events.write_event(session_id, "barge_in",
+                       {"reason": reason, "turn_id": tid}, turn_id=tid)
+    sess = _SESSIONS.get(session_id)
+    dropped = 0
+    if sess:
+        rest = sess.get("tts_rest") or {}
+        if rest.pop(tid, None) is not None:
+            dropped = 1
+        # 清掉缓冲：播报声（含回声）不该进下一轮识别
+        reset_audio_buffer(sess)
+    return {"ok": True, "turn_id": tid, "dropped_pending": bool(dropped)}
+
+
 def end_call(session_id):
     """挂断：记一条 call_ended，返回这通电话的简单结论（是否闭环）。
 
@@ -805,6 +850,32 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/turn/metric":
             self._handle_metric(body)
+            return
+
+        if path == "/api/call/barge_in":
+            sid = body.get("session_id") or ""
+            sess, err, code = _auth(sid, body.get("token"))
+            if err:
+                self._send_json(err, code)
+                return
+            try:
+                tid = int(body.get("turn_id") or 0)
+            except (TypeError, ValueError):
+                self._send_json({"error": "BAD_JSON",
+                                 "detail": "turn_id 必须是整数"}, 400)
+                return
+            self._send_json(record_barge_in(
+                sid, tid, body.get("reason") or "user_speech"))
+            return
+
+        if path == "/api/audio/reset":
+            sid = body.get("session_id") or ""
+            sess, err, code = _auth(sid, body.get("token"))
+            if err:
+                self._send_json(err, code)
+                return
+            self._send_json({"ok": True,
+                             "discarded_bytes": reset_audio_buffer(sess)})
             return
 
         if path == "/api/call/end":
