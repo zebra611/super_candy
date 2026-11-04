@@ -104,6 +104,20 @@ def tts_config():
     return dict(load().get("tts", {}) or {})
 
 
+def nlg_config():
+    """话术改写（M3 的措辞层）参数。默认关闭，见 docs/17。
+
+    默认必须是 template：队友 clone 下来没有密钥也要能跑，
+    自检和跑批也不能每跑一次就调 30 次模型。
+    """
+    return dict(load().get("nlg", {}) or {})
+
+
+def tools_config():
+    """工具数据源参数。默认 mock（写死的假数据），见 docs/17 第 4 节。"""
+    return dict(load().get("tools", {}) or {})
+
+
 def budget_config():
     """成本与容量闸门。字段含义见 config/scene.json 的 budget 段。
 

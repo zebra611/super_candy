@@ -46,7 +46,7 @@ from app import (_acquire, _audio_state, _auth, _has_interrupt_content,  # noqa:
                  _release, end_call, handle_turn, ingest_audio_chunk,
                  probe_speech, record_barge_in,
                  report_client_metric, start_call)
-from modules import dialogue, eval as eval_mod, tools, voice  # noqa: E402
+from modules import dialogue, eval as eval_mod, nlg, tools, voice  # noqa: E402
 
 # 自检默认不真的调云端合成：既慢又要花钱，还会让"没有密钥的队友"跑不过。
 # TTS 的真实请求构造与失败回落，下面用本地假接口单独测（见证据 9 之后那段）。
@@ -720,6 +720,59 @@ def main():
             os.environ["DASHSCOPE_API_KEY"] = orig_env_p
         srv_p.shutdown()
         srv_p.server_close()
+
+    print()
+    print("=" * 74)
+    print("证据 9d：话术改写的接缝（任务2 的落点）")
+    print("=" * 74)
+    print("契约见 docs/17 第 3 节。这里只守两件事：默认关着、出事事不抛异常。")
+    print("为什么守这两条：改写层在外呼主链路上，它一抛异常整通电话就断；")
+    print("而默认关着是为了队友 clone 下来没密钥也能跑、跑批也不会调 30 次模型。")
+
+    base = "为了核对身份，请说一下手机号后四位。"
+    out_default = nlg.say({}, base, "IDENTITY")
+    check("改写默认关闭：原样返回骨架话术，行为与接入前一致",
+          out_default == base,
+          ["provider = %s" % config_loader.nlg_config().get("provider"),
+           "输入 %r" % base,
+           "输出 %r（必须一字不差）" % out_default])
+
+    orig_nlg = config_loader.nlg_config
+    config_loader.nlg_config = lambda: {"provider": "dashscope", "timeout_ms": 400}
+    try:
+        out_open = nlg.say({}, base, "IDENTITY")
+    finally:
+        config_loader.nlg_config = orig_nlg
+    check("改写开启但实现未完成时退回骨架，不抛异常（降级不能断掉通话）",
+          out_open == base,
+          ["输出 %r" % out_open,
+           "此刻 _rewrite() 还是空实现，返回 None → 上层退回骨架，这是预期行为"])
+
+    check("空话术不炸（沉默/异常路径会走到）",
+          nlg.say({}, "", "GREETING") == "" and nlg.say({}, None, "GREETING") == "",
+          ["空串 → %r，None → %r"
+           % (nlg.say({}, "", "GREETING"), nlg.say({}, None, "GREETING"))])
+
+    # 兜底与挂断必须豁免改写。用"总是改写"的假函数来验，而不是读源码找字符串——
+    # 读源码只能证明"有个 if"，证明不了"这个 if 真的起了作用"。
+    orig_say = nlg.say
+    nlg.say = lambda s, t, st="": "【被改写了】" + (t or "")
+    try:
+        s_fb = dialogue.new_session("s_fallback_probe")
+        out_fb = dialogue.safe_fallback(s_fb)                 # intent=error
+        out_end = dialogue.forced_end(
+            dialogue.new_session("s_forced_probe"), "max_turns")
+        out_norm = dialogue.respond(s_fb, "是我，尾号8866")     # 正常流程
+    finally:
+        nlg.say = orig_say
+    check("兜底与挂断话术不走改写，正常流程走改写",
+          "被改写了" not in out_fb["reply_text"]
+          and "被改写了" not in out_end["reply_text"]
+          and "被改写了" in out_norm["reply_text"],
+          ["编排出错时：%r" % out_fb["reply_text"][:40],
+           "强制收尾时：%r" % out_end["reply_text"][:40],
+           "正常一轮：%r（这条应该被改写）" % out_norm["reply_text"][:40],
+           "为什么：出错时要的是确定和简短，挂断话术不能被换成别的说法"])
 
     print()
     print("=" * 74)

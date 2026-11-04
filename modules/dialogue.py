@@ -22,7 +22,7 @@
 """
 
 import config_loader
-from modules import tools
+from modules import nlg, tools
 
 # ---------------------------------------------------------------------------
 # 意图关键词表
@@ -137,6 +137,18 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     质检统计"回写环节说没说要说的那句话"时就查不到。
     """
     stage_now = stage_label or session["stage"]
+
+    # 话术收口：所有回复都从这一个函数出去，所以 LLM 改写只在这里接一次
+    # （契约见 docs/17 第 3.1 节）。默认 provider=template，nlg.say 原样返回，
+    # 行为与接入前完全一致——verify 53/53 就是用来守这条的。
+    #
+    # 但下面两类不改写：
+    #   intent=error/empty —— 编排出错、用户沉默时，要的是确定和简短，
+    #                         不能引入"模型换个说法"的不确定性；
+    #   end_reason 有值     —— 挂断/拒绝话术，"再见"不能被改写成"拜拜下次聊"。
+    if not end_reason and intent not in ("error", "empty"):
+        text = nlg.say(session, text, stage_now)
+
     if next_stage:
         session["stage"] = next_stage
     out = {
