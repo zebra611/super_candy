@@ -430,7 +430,15 @@ function speak(tts, turnId) {
     reportMetric(turnId, performance.now() - t0, estimate);
   };
 
-  // 服务端合成路线：<audio> 播 OSS 链接。不 fetch，所以不受 CORS 限制。
+  // 分段合成路线：第一段先出声，后面的段自动接上。
+  // 服务端把长回复切成 3–5 字的头段 + 若干尾段并发合成，
+  // 首字不用再等整句念完（30 字整句要 1.7 秒，切完头段约 0.35 秒）。
+  if (tts && tts.mode === "segments" && Array.isArray(tts.segments) && tts.segments.length) {
+    playSegments(tts, turnId, report, text);
+    return;
+  }
+
+  // 服务端整句合成路线：<audio> 播 OSS 链接。不 fetch，所以不受 CORS 限制。
   if (tts && tts.mode === "url" && tts.audio_url) {
     const a = new Audio(tts.audio_url);
     a.onplaying = () => report(false);
@@ -440,6 +448,62 @@ function speak(tts, turnId) {
   }
 
   browserSpeak(text, report);
+}
+
+// 顺序播放分段音频。第一段出声就算"首字响应"。
+// 服务端只等第一段就返回响应，剩下的段落在后台合成；这里播完首段再去取，
+// 所以用户听到声音的时间不再取决于整句话有多长。
+// 任何一段失败就整体回落浏览器播报——只播半句话比不播更难解释。
+function playSegments(tts, turnId, report, fallbackText) {
+  const queue = (tts.segments || []).slice();
+  let restCount = tts.rest_count || 0;
+  let reported = false;
+  let aborted = false;
+
+  const fallback = () => {
+    if (aborted) return;
+    aborted = true;
+    log("系统", "分段音频播放失败，改用浏览器播报");
+    browserSpeak(fallbackText, report);
+  };
+
+  const playNext = () => {
+    if (aborted) return;
+
+    if (!queue.length) {
+      // 队列空了：还有剩余段就去取一次，取到接着播
+      if (restCount > 0) {
+        restCount = 0;
+        fetchRestSegments(turnId).then((segs) => {
+          if (aborted) return;
+          if (segs.length) { queue.push(...segs); playNext(); }
+        });
+      }
+      return;
+    }
+
+    const seg = queue.shift();
+    const a = new Audio(seg.audio_url);
+    a.onplaying = () => { if (!reported) { reported = true; report(false); } };
+    a.onended = playNext;
+    a.onerror = fallback;
+    a.play().catch(fallback);
+  };
+
+  playNext();
+}
+
+// 取剩余段。失败就当作没有——少播一句也不能让播报卡死在那里。
+async function fetchRestSegments(turnId) {
+  if (!S.sessionId || !S.token) return [];
+  try {
+    const r = await fetch("/api/tts/rest?session_id=" + encodeURIComponent(S.sessionId) +
+                          "&token=" + encodeURIComponent(S.token) +
+                          "&turn_id=" + encodeURIComponent(turnId));
+    if (!r.ok) return [];
+    const d = await r.json();
+    return Array.isArray(d.segments) ? d.segments : [];
+  } catch (e) { return []; }
 }
 
 // 降级路线：浏览器 speechSynthesis。音色机械，但保证"有声音"。
