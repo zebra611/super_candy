@@ -1,0 +1,46 @@
+# 一键起全套：通话服务 + Mock 业务系统
+#
+#   docker compose up --build      起两个服务
+#   浏览器打开 http://127.0.0.1:8000        通话页
+#              http://127.0.0.1:8000/dashboard  指标看板
+#   停：Ctrl+C 或 docker compose down
+#
+# 两个已知的取舍：
+#   1. 没有配 DASHSCOPE_API_KEY 也能起来——语音回落成占位实现，链路照样跑通。
+#      这是故意的：评委/队友 clone 下来第一件事应该是"能打开"，不是"先找我要密钥"。
+#   2. data/ 挂成本地目录而不是命名卷。好处是 `data/events.db` 用 SQLite 工具
+#      直接就能看；代价是不能多机共享。骨架阶段选前者。
+
+services:
+  app:
+    build: .
+    container_name: super_candy_app
+    ports:
+      - "8000:8000"
+    environment:
+      PORT: "8000"
+      # 有就真语音，没有就回落占位；不设也能跑
+      DASHSCOPE_API_KEY: "${DASHSCOPE_API_KEY:-}"
+      # 想换场景：APP_SCENE=retail_recall，对应 config/scenes/retail_recall.json
+      APP_SCENE: "${APP_SCENE:-}"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      mock:
+        condition: service_started
+    restart: unless-stopped
+
+  mock:
+    build: .
+    container_name: super_candy_mock
+    # 同一个镜像，换入口：Mock 业务系统是独立服务，不跟通话进程绑在一起
+    command: ["python", "mock_business/service.py"]
+    environment:
+      MOCK_PORT: "8100"
+      MOCK_HOST: "0.0.0.0"
+    ports:
+      - "8100:8100"
+    volumes:
+      # 工单存档要持久化，否则重建容器后幂等记录全丢，演示会对不上账
+      - ./mock_business/data:/app/mock_business/data
+    restart: unless-stopped
