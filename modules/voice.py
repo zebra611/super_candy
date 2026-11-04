@@ -296,7 +296,7 @@ def _asr_dashscope(pcm):
             return _extract_text(json.loads(raw.decode("utf-8")))
         except urllib.error.HTTPError as e:
             raw = e.read().decode("utf-8", "replace")[:300]
-            last_err = RuntimeError("识别接口返回 %d：%s" % (e.code, raw))
+            last_err = _friendly_http_error(e.code, raw, "识别")
             if e.code == 429:
                 time.sleep(_THROTTLE_WAIT)   # 限流是瞬时的，等一下再试
             elif 400 <= e.code < 500:
@@ -507,6 +507,32 @@ def tts(text, wait_first_only=False):
     }
 
 
+def _friendly_http_error(code, raw, what):
+    """把接口返回的错误翻成"看了就知道该干什么"的话。
+
+    400 不都是"请求写错了"。实测撞过两种完全不同的 400：
+        - 账号欠费（Arrearage / overdue-payment）
+        - 参数不合法
+    只报"返回 400"会让人去翻代码，而真正该做的是去充值。
+    演示前最可能撞的就是欠费，所以这一支必须单独说清楚。
+
+    what：识别 / 合成
+    """
+    low = raw.lower()
+    if code == 400 and ("arrearage" in low or "overdue" in low
+                        or "good standing" in low):
+        return RuntimeError(
+            "%s不可用：阿里云账户欠费或免费额度已用尽。"
+            "去百炼控制台充值后自动恢复，代码不用改。原始返回：%s"
+            % (what, raw[:120]))
+    if code in (401, 403):
+        return RuntimeError(
+            "%s鉴权失败（%d）：API Key 无效、被禁用或权限不足。"
+            "检查 config/secrets.json 里的 dashscope_api_key。原始返回：%s"
+            % (what, code, raw[:120]))
+    return RuntimeError("%s接口返回 %d：%s" % (what, code, raw))
+
+
 def _tts_dashscope(text):
     """调 qwen3-tts-flash 合成，返回可播放的音频 URL。
 
@@ -558,7 +584,7 @@ def _tts_dashscope(text):
             return url
         except urllib.error.HTTPError as e:
             raw = e.read().decode("utf-8", "replace")[:200]
-            last_err = RuntimeError("合成接口返回 %d：%s" % (e.code, raw))
+            last_err = _friendly_http_error(e.code, raw, "合成")
             if e.code == 429:
                 # 实测被限流过：分段合成把 QPS 配额打爆，接口直接 429。
                 # 它属于 4xx 但和"请求写错了"完全不同——等一会儿就能过。
