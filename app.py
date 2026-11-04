@@ -35,6 +35,8 @@ from urllib.parse import urlparse, parse_qs
 
 import config_loader
 import contracts
+import cost_guard
+import dashboard as dashboard_mod
 import events
 from modules import dialogue, eval as eval_mod, tools, voice
 
@@ -852,6 +854,10 @@ class Handler(BaseHTTPRequestHandler):
             # 聚合指标（分位数、计数、成本），不含任何个人信息，保持匿名可读
             self._send_json(events.metrics())
             return
+        if path == "/api/cost":
+            # 当天成本快照与闸门开关状态。给看板和运维脚本用，同样不含个人信息。
+            self._send_json(cost_guard.snapshot())
+            return
         if path == "/api/events":
             sid = (qs.get("session_id") or [""])[0]
             token = (qs.get("token") or [""])[0]
@@ -901,6 +907,38 @@ class Handler(BaseHTTPRequestHandler):
                 return
             handle = (sess.get("tts_rest") or {}).pop(tid, None)
             self._send_json({"segments": voice.collect_rest(handle) if handle else []})
+            return
+
+        # ---- 指标看板（M5）----
+        # 只读，不碰在线链路：路由里只做参数整形，聚合逻辑在 dashboard.py。
+        # 单独一个页面而不是改 index.html：index.html 是 1 号的地盘，
+        # 看板是 4 号的交付物，两块分开，谁改谁的不打架。
+        if path in ("/dashboard", "/dashboard.html"):
+            self._send_file(os.path.join(WEB_DIR, "dashboard.html"),
+                            "text/html; charset=utf-8")
+            return
+        if path == "/api/dashboard/summary":
+            days_raw = (qs.get("days") or [""])[0].strip()
+            try:
+                days = int(days_raw) if days_raw else None
+            except ValueError:
+                self._send_json({"error": "BAD_QUERY",
+                                 "detail": "days 必须是整数（不传=全部历史）"}, 400)
+                return
+            if days is not None and days <= 0:
+                days = None
+            try:
+                limit = int((qs.get("limit") or ["10"])[0])
+            except ValueError:
+                limit = 10
+            # 上限 50：逐会话质检要读整通事件，放太大等于让看板把库扫一遍
+            limit = max(1, min(limit, 50))
+            self._send_json(dashboard_mod.summary(days=days, session_limit=limit))
+            return
+        if path == "/api/scenes":
+            # 场景清单：谁都能看，切换才是敏感操作（见 POST /api/scene）
+            self._send_json({"current": config_loader.describe(),
+                             "scenes": config_loader.available_scenes()})
             return
 
         self._send_json({"error": "NOT_FOUND", "path": path}, 404)
@@ -974,6 +1012,30 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(end_call(sid))
             return
 
+        # 运行时切场景（M8 的演示点）：换一套配置，下一轮回复就变。
+        # 只允许本机：切场景会改变所有在线会话的话术，不能让外部随手调。
+        if path == "/api/scene":
+            if not self._is_loopback():
+                self._send_json({"error": "FORBIDDEN",
+                                 "detail": "切换场景只允许本机操作"}, 403)
+                return
+            name = (body.get("name") or "").strip()
+            if not name:
+                self._send_json({"error": "BAD_JSON",
+                                 "detail": "缺少 name（场景名或配置文件路径）"}, 400)
+                return
+            try:
+                applied = config_loader.set_scene(name)
+            except FileNotFoundError as e:
+                self._send_json({"error": "NOT_FOUND", "detail": str(e)}, 404)
+                return
+            config_loader.load(force=True)
+            dashboard_mod.invalidate()
+            print("[场景] 已切换到 %s" % applied)
+            self._send_json({"ok": True, "path": applied,
+                             "scene": config_loader.describe()})
+            return
+
         self._send_json({"error": "NOT_FOUND", "path": path}, 404)
 
     def _handle_turn(self, body):
@@ -982,6 +1044,14 @@ class Handler(BaseHTTPRequestHandler):
         sess, err, code = _auth(sid, body.get("token"))
         if err:
             self._send_json(err, code)
+            return
+
+        # 成本与速率闸门（默认关闭）。关着的时候 allow() 直接返回 True，
+        # 只有 budget.guard_enabled=true 才会真的拦——演示前不动配置就等于没有这一层。
+        # 返回 429 而不是 400：这是"现在不行、等会儿再来"，不是"你请求写错了"。
+        guard_ok, guard_reason, guard_detail = cost_guard.allow(sid)
+        if not guard_ok:
+            self._send_json({"error": guard_reason, "detail": guard_detail}, 429)
             return
 
         # 两条音频来路，二选一：
