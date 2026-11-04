@@ -32,6 +32,7 @@ import io
 import json
 import socket
 import struct
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -42,6 +43,46 @@ import config_loader
 # 重试间隔（秒）。不要改成 0：对端刚掐断连接时立刻重连，大概率撞上同一个问题，
 # 0.15 秒足够让对端把旧连接清掉，又短到不影响首字响应。
 _RETRY_BACKOFF = 0.15
+
+# 识别请求的两轮时限，每轮是 (socket 超时, 墙钟总上限)，单位秒。
+# 为什么第一轮只给 2 秒：正常请求只要 400ms，有 5 倍余量；超了基本可判定撞上
+# 云端长尾（实测同一段 2 秒音频，正常 398ms，最坏 5404ms，差 13 倍）。
+# 提成模块级常量而不是写在函数里，是为了让自检能注入更短的值——
+# 否则测一次闸门要真等 5 秒。
+_ASR_TIMEOUT_PLAN = ((2.0, 2.0), (3.0, 3.0))
+
+
+def _post_with_deadline(req, socket_timeout, deadline_sec):
+    """发 POST 并强制"墙钟"总时长上限，超时抛 socket.timeout。
+
+    为什么单靠 urllib 的 timeout 不够（这是实测踩出来的）：
+        它的 timeout 只作用于**单次 socket 操作**。一次请求要走
+        DNS → 建连 → TLS 握手 → 发送 → 等响应 → 读数据，每一步都没超时，
+        加起来却可以远超那个值。实测出现过 timeout 设为 5 秒、
+        实际却耗了 5.4 秒的情况——等意识到时用户已经干等完了。
+
+        所以这里另起一个线程跑请求，主线程只等 deadline_sec。
+        到点就放弃，不等它。工作线程是 daemon，socket 超时会让它自己收尾，
+        不会拖住进程。
+    """
+    box = {}
+
+    def _work():
+        try:
+            with urllib.request.urlopen(req, timeout=socket_timeout) as resp:
+                box["body"] = resp.read()
+        except BaseException as e:      # 线程里的异常必须兜住，否则会静默丢失
+            box["err"] = e
+
+    th = threading.Thread(target=_work, daemon=True)
+    th.start()
+    th.join(deadline_sec)
+    if th.is_alive():
+        raise socket.timeout("墙钟超过 %.1f 秒未返回" % deadline_sec)
+    if "err" in box:
+        raise box["err"]
+    return box["body"]
+
 import contracts
 
 
@@ -240,16 +281,15 @@ def _asr_dashscope(pcm):
         headers={"Authorization": "Bearer " + key,
                  "Content-Type": "application/json"},
         method="POST")
-    timeout = float(cfg.get("timeout_sec", 5))
-    # 超时必须短。实测有一轮 1.9 秒的音频（三轮里最短）让接口耗了 15.5 秒，
-    # 原因不在音频长度，而是同步单次调用的长尾——这类慢请求重试只会更慢。
-    # 所以策略是：宁可早点告诉用户"没听清，再说一遍"，也不让他干等。
-    # 只对"连接被掐断/连不上"重试：那种失败通常几十毫秒就返回，重试不占用户时间。
+    # 实测长尾：两段几乎一样长的音频（2080ms 与 2040ms），一个 398ms 就回来，
+    # 另一个耗了 5404ms——差 13 倍，与音频长度无关，是云端排队或抖动。
+    # 对策不是"把超时调大让它等"，而是：短时限 → 超了就重试 → 都超才降级。
+    plan = _ASR_TIMEOUT_PLAN
     last_err = None
-    for attempt in (1, 2):
+    for attempt, (sock_to, deadline) in enumerate(plan, 1):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return _extract_text(json.loads(resp.read().decode("utf-8")))
+            raw = _post_with_deadline(req, sock_to, deadline)
+            return _extract_text(json.loads(raw.decode("utf-8")))
         except urllib.error.HTTPError as e:
             raw = e.read().decode("utf-8", "replace")[:300]
             last_err = RuntimeError("识别接口返回 %d：%s" % (e.code, raw))
@@ -258,16 +298,16 @@ def _asr_dashscope(pcm):
         except urllib.error.URLError as e:
             # urlopen 把 socket 超时包在 URLError.reason 里，得拆开看
             if isinstance(e.reason, socket.timeout):
-                raise RuntimeError("识别超时（%g 秒），这段音频没能出结果" % timeout)
-            last_err = RuntimeError("连不上识别接口：%s" % e)
+                last_err = RuntimeError("识别超时（%.0f 秒）" % deadline)
+            else:
+                last_err = RuntimeError("连不上识别接口：%s" % e)
         except socket.timeout:
-            raise RuntimeError("识别超时（%g 秒），这段音频没能出结果" % timeout)
+            last_err = RuntimeError("识别超时（%.0f 秒）" % deadline)
         except (http.client.HTTPException, ConnectionError) as e:
-            # 关键：对端收下请求却不给响应就断开，抛的是
-            # http.client.RemoteDisconnected，它既不是 HTTPError 也不是 URLError。
-            # 以前漏了这一支，重试逻辑形同虚设——断连直接逃到最外层回落。
+            # 对端收下请求却不给响应就断开，抛的是 http.client.RemoteDisconnected，
+            # 它既不是 HTTPError 也不是 URLError。漏了这一支，重试就是摆设。
             last_err = RuntimeError("识别连接被中断：%s" % e)
-        if attempt == 1:
+        if attempt < len(plan):
             time.sleep(_RETRY_BACKOFF)
     raise last_err
 
@@ -374,14 +414,15 @@ def _tts_dashscope(text):
         headers={"Authorization": "Bearer " + key,
                  "Content-Type": "application/json"},
         method="POST")
-    timeout = float(cfg.get("timeout_sec", 10))
+    timeout = float(cfg.get("timeout_sec", 4))
     # 合成比识别更该重试：它是幂等的、纯函数式调用，重试不会产生副作用，
     # 而失败的表现是"客服突然不说话了"，比多等一会儿难看得多。
+    # 同样加墙钟闸门：socket timeout 约束不了总时长（见 _post_with_deadline）。
     last_err = None
     for attempt in (1, 2):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
+            raw = _post_with_deadline(req, timeout, timeout + 0.5)
+            payload = json.loads(raw.decode("utf-8"))
             url = ((payload.get("output") or {}).get("audio") or {}).get("url")
             if not url:
                 raise RuntimeError("返回体里没有音频链接：%s"
@@ -399,10 +440,11 @@ def _tts_dashscope(text):
                 raise last_err
         except urllib.error.URLError as e:
             if isinstance(e.reason, socket.timeout):
-                raise RuntimeError("合成超时（%g 秒）" % timeout)
-            last_err = RuntimeError("连不上合成接口：%s" % e)
+                last_err = RuntimeError("合成超时（%g 秒）" % timeout)
+            else:
+                last_err = RuntimeError("连不上合成接口：%s" % e)
         except socket.timeout:
-            raise RuntimeError("合成超时（%g 秒）" % timeout)
+            last_err = RuntimeError("合成超时（%g 秒）" % timeout)
         except (http.client.HTTPException, ConnectionError) as e:
             # 实测真的撞上过：对端收下请求后直接断连，抛 RemoteDisconnected。
             # 它不是 HTTPError 也不是 URLError，漏掉这一支重试就白写了。

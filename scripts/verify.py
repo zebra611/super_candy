@@ -354,7 +354,8 @@ def main():
     class _SlowASR(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
             self.rfile.read(int(self.headers.get("Content-Length") or 0))
-            time.sleep(3)                    # 比 timeout 长，必定触发超时
+            hits["n"] += 1
+            time.sleep(2)                    # 比注入的时限长，必定触发超时
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -363,14 +364,19 @@ def main():
         def log_message(self, *a):
             pass
 
-    srv = http.server.HTTPServer(("127.0.0.1", 0), _SlowASR)
+    hits = {"n": 0}
+    # 用 Threading 版：重试的第二个请求不该排在第一个后面
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _SlowASR)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     orig_cfg, orig_secret = config_loader.asr_config, config_loader.secret
+    orig_plan = voice._ASR_TIMEOUT_PLAN
     orig_env = os.environ.get("DASHSCOPE_API_KEY")
     # 队友机器上没配密钥也要能跑这条：请求打到本地假接口，key 不被校验
     os.environ["DASHSCOPE_API_KEY"] = "test-key-not-used"
+    # 注入更短的时限，否则测一次闸门要真等 5 秒
+    voice._ASR_TIMEOUT_PLAN = ((0.6, 0.6), (0.6, 0.6))
     config_loader.asr_config = lambda: {
-        "provider": "dashscope", "model": "m", "timeout_sec": 1,
+        "provider": "dashscope", "model": "m",
         "silence_rms": 0.0,               # 关掉静音闸门，保证真的发出请求
         "endpoint": "http://127.0.0.1:%d/asr" % srv.server_address[1]}
     try:
@@ -379,14 +385,17 @@ def main():
         t_slow = time.time()
         out_slow = voice.asr(wave_pcm)
         cost_slow = (time.time() - t_slow) * 1000
-        check("识别超时按配置时限触发，不让用户干等",
-              "超时" in str(out_slow.get("error")) and cost_slow < 2500,
-              ["假接口拖 3 秒，配置超时 1 秒 → 实际耗时 %.0f ms" % cost_slow,
+        check("识别超时由墙钟闸门截断，且超时会重试一次",
+              "超时" in str(out_slow.get("error"))
+              and cost_slow < 2000 and hits["n"] == 2,
+              ["假接口要 2 秒，注入时限 0.6 秒 → 实际耗时 %.0f ms" % cost_slow,
+               "请求次数 = %d（期望 2：首轮超时 + 重试）" % hits["n"],
                "error = %s" % out_slow.get("error"),
                "失败时 text 为空且 fake=True（不会被当成识别成功）：%r / %s"
                % (out_slow.get("text"), out_slow.get("fake"))])
     finally:
         config_loader.asr_config, config_loader.secret = orig_cfg, orig_secret
+        voice._ASR_TIMEOUT_PLAN = orig_plan
         if orig_env is None:
             os.environ.pop("DASHSCOPE_API_KEY", None)
         else:
