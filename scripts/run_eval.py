@@ -18,13 +18,28 @@
 
 import json
 import os
+import shutil
 import sys
+import tempfile
+from atexit import register as _atexit
 
 # 让脚本能从任意目录运行：把项目根目录加进 sys.path
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
 import events                     # noqa: E402
+
+# 事件库指向临时目录。这一行是必须的，不是可选的：
+# 以前跑批直接写 data/events.db，跑一次 30 条用例就多 30 个 session。
+# 实测后果——库里 305 个会话里 300 个是跑批产物，真人通话只有 5 通，
+# 而且测试用例的 asr_result 耗时是 0.0ms，混进分位数会把首字 P50
+# 拉到几十毫秒，看着漂亮实则是假的。评测数据绝不能和真实通话混在一个库里。
+_tmp = tempfile.mkdtemp(prefix="sc_eval_")
+events.DATA_DIR = _tmp
+events.DB_PATH = os.path.join(_tmp, "eval.db")
+events.init_db()
+_atexit(lambda: shutil.rmtree(_tmp, ignore_errors=True))
+
 import config_loader              # noqa: E402
 
 # 跑批只验"业务流程对不对"，不真的合成音频。
@@ -108,12 +123,9 @@ def main():
     fresh = "--fresh" in sys.argv
 
     if fresh:
-        # 清库只为让这一轮的统计干净，不代表线上数据
-        db = events.DB_PATH
-        if os.path.exists(db):
-            os.remove(db)
-        events.init_db()
-        print("已清空事件库，开始新一轮评测\n")
+        # 现在每轮都跑在全新的临时库里，--fresh 已经没有实际作用。
+        # 保留这个参数只是不让老命令报错，顺便把"它以前会删生产库"这件事说清楚。
+        print("提示：跑批已改用临时库，--fresh 不再需要（也不会删 data/events.db）\n")
 
     all_cases = load_cases()
     cases = [c for c in all_cases if (not args or c["id"] in args)]
