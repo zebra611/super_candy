@@ -481,9 +481,16 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
                         "replaced": guard["replaced"]},
                        turn_id=turn_id, latency_ms=llm_ms)
 
-    # ⑧ TTS：骨架阶段服务端不合成，只告诉前端"你自己念"（真实实现替换这里）
-    tts_out = voice.tts(reply_text)
-    events.write_event(session_id, "tts_start", tts_out, turn_id=turn_id)
+    # ⑧ TTS：只等第一段就返回，剩余段在后台合成、由前端播完首段后来取。
+    # 为什么必须这样：分段并发如果仍然等全部段落合成完，响应时间不会变，
+    # 用户照样要等 1.6 秒——分段就成了只让内部指标好看的花架子。
+    tts_out = voice.tts(reply_text, wait_first_only=True)
+    rest_handle = tts_out.pop("_rest", None)
+    if rest_handle:
+        sess.setdefault("tts_rest", {})[turn_id] = rest_handle
+    events.write_event(session_id, "tts_start",
+                       {k: v for k, v in tts_out.items() if not k.startswith("_")},
+                       turn_id=turn_id)
 
     # ⑨ 收尾：处理耗时与"服务端下界首字"都写进 turn_end。
     # server_first_audio_ms 是"请求到达 → 首包就绪"，不含网络回程与浏览器起播，
@@ -497,7 +504,13 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
                         "source": source, "processing_ms": total_ms,
                         "server_first_audio_ms": server_first_audio_ms,
                         "asr_ms": asr_ms, "llm_ms": llm_ms,
-                        "tts_ms": tts_out.get("latency_ms", 0),
+                        # tts_ms 是服务端真的等了多久（分段合成要等全部段落），
+                        # 与 processing_ms 同一口径；tts_first_ms 才是"第一段可播"
+                        # 的耗时，也就是用户实际开始听到声音的那一段。
+                        # 两个数会差一倍以上，只看一个会误判。
+                        "tts_ms": tts_out.get("total_ms", tts_out.get("latency_ms", 0)),
+                        "tts_first_ms": tts_out.get("latency_ms", 0),
+                        "tts_segments": len(tts_out.get("segments") or []),
                         "est_cost_cny": turn_cost},
                        turn_id=turn_id, latency_ms=total_ms)
     sess["turn"] = turn_id
@@ -516,7 +529,8 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
         "latency": {
             "asr_ms": asr_ms,
             "llm_ms": llm_ms,
-            "tts_ms": tts_out.get("latency_ms", 0),
+            "tts_ms": tts_out.get("total_ms", tts_out.get("latency_ms", 0)),
+            "tts_first_ms": tts_out.get("latency_ms", 0),
             "total_ms": total_ms,
             # 服务端下界，不是门槛口径；前端的实测值通过 /api/turn/metric 回传
             "server_first_audio_ms": server_first_audio_ms,
@@ -563,8 +577,14 @@ def start_call():
     # 开场白也要真合成。原来这里只把 voice.tts() 的返回值塞进事件就丢了，
     # 结果服务端花了 1 秒多、花了钱合成一段音频，前端却拿不到——
     # 用户听到的第一句永远是浏览器机械音，而后面的句子是真声音，非常割裂。
-    opening_tts = voice.tts(opening)
-    events.write_event(session_id, "tts_start", opening_tts, turn_id=0)
+    # 同样只等首段：点"开始通话"后不该让用户干等整句 28 个字念完。
+    opening_tts = voice.tts(opening, wait_first_only=True)
+    rest_handle = opening_tts.pop("_rest", None)
+    if rest_handle:
+        sess.setdefault("tts_rest", {})[0] = rest_handle
+    events.write_event(session_id, "tts_start",
+                       {k: v for k, v in opening_tts.items() if not k.startswith("_")},
+                       turn_id=0)
 
     return {"session_id": session_id, "read_token": sess["read_token"],
             "scene": config_loader.scene_name(),
@@ -734,6 +754,26 @@ class Handler(BaseHTTPRequestHandler):
                 "compliance": eval_mod.compliance_report(sid),
                 "score": eval_mod.score_session(sid),
             })
+            return
+
+        # 取分段的剩余音频。前端在首段播完后调用，播报不需要等它。
+        # 这里最多等 3 秒：等不到就返回已有部分，用户听到的是一句被截断的话，
+        # 但那比"播报卡住不动"好——后者看起来像程序挂了。
+        if path == "/api/tts/rest":
+            sid = (qs.get("session_id") or [""])[0]
+            token = (qs.get("token") or [""])[0]
+            sess, err, code = _auth(sid, token)
+            if err:
+                self._send_json(err, code)
+                return
+            try:
+                tid = int((qs.get("turn_id") or ["0"])[0])
+            except ValueError:
+                self._send_json({"error": "BAD_QUERY",
+                                 "detail": "turn_id 必须是整数"}, 400)
+                return
+            handle = (sess.get("tts_rest") or {}).pop(tid, None)
+            self._send_json({"segments": voice.collect_rest(handle) if handle else []})
             return
 
         self._send_json({"error": "NOT_FOUND", "path": path}, 404)

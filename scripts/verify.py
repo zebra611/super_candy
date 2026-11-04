@@ -406,6 +406,18 @@ def main():
     # ---- TTS：真实请求构造 + 合成失败必须回落，不能静音 ----
     seen_tts = []
 
+    # 先测切句（纯逻辑，不联网）。切分的意义是让第一段短到几百毫秒就能出声，
+    # 所以这里盯的是"第一段有多短"，不是"分了几段"。
+    _short = "好的。"
+    _long = "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。"
+    p_short, p_long = voice._split_for_tts(_short), voice._split_for_tts(_long)
+    check("短句不切，长句切开头且首段足够短",
+          p_short == [_short] and len(p_long) >= 2 and len(p_long[0]) <= 6
+          and "".join(p_long) == _long,
+          ["%r → %s" % (_short, p_short),
+           "%d 字 → %s（首段 %d 字）" % (len(_long), p_long, len(p_long[0])),
+           "切完拼回原句是否一致：%s" % ("".join(p_long) == _long)])
+
     class _FakeTTS(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
             n = int(self.headers.get("Content-Length") or 0)
@@ -506,6 +518,50 @@ def main():
         finally:
             srv_drop.shutdown()
             srv_drop.server_close()
+
+        # 分段必须真的只等首段：3 段那种切法会触发接口 QPS 限流（实测 429），
+        # 所以规则是"只切一刀"。这里验证首段先回来、剩余段后补。
+        seg_hits = {"n": 0}
+
+        class _SegTTS(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                seg_hits["n"] += 1
+                time.sleep(0.35)
+                body = json.dumps({"output": {"audio": {
+                    "url": "https://example.com/seg%d.mp3" % seg_hits["n"]}}}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        srv_seg = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _SegTTS)
+        threading.Thread(target=srv_seg.serve_forever, daemon=True).start()
+        try:
+            config_loader.tts_config = lambda: _tts_cfg(
+                "http://127.0.0.1:%d/seg" % srv_seg.server_address[1])
+            out_seg = voice.tts(
+                "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+                wait_first_only=True)
+            segs = out_seg.get("segments") or []
+            rest = voice.collect_rest(out_seg.get("_rest"))
+            check("长回复只等首段就返回，剩余段后台补齐",
+                  out_seg.get("mode") == "segments" and len(segs) == 1
+                  and out_seg.get("rest_count") == 1 and len(rest) == 1
+                  and seg_hits["n"] == 2
+                  and out_seg.get("latency_ms", 9999) < 600,
+                  ["首段返回 %s ms（假接口每段 350ms）" % out_seg.get("latency_ms"),
+                   "首段 1 段 + 剩余 %s 段，接口共请求 %d 次"
+                   % (out_seg.get("rest_count"), seg_hits["n"]),
+                   "首段文本 = %s" % [s["text"] for s in segs],
+                   "剩余文本 = %s" % [s["text"] for s in rest]])
+        finally:
+            srv_seg.shutdown()
+            srv_seg.server_close()
     finally:
         config_loader.tts_config = _orig_tts_config
         if orig_tts_key_env is None:

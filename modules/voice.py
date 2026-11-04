@@ -44,6 +44,10 @@ import config_loader
 # 0.15 秒足够让对端把旧连接清掉，又短到不影响首字响应。
 _RETRY_BACKOFF = 0.15
 
+# 被限流（429）后的等待。比普通重试间隔长得多：配额恢复需要时间，
+# 0.15 秒立刻重连基本还会撞上 429。
+_THROTTLE_WAIT = 0.8
+
 # 识别请求的两轮时限，每轮是 (socket 超时, 墙钟总上限)，单位秒。
 # 为什么第一轮只给 2 秒：正常请求只要 400ms，有 5 倍余量；超了基本可判定撞上
 # 云端长尾（实测同一段 2 秒音频，正常 398ms，最坏 5404ms，差 13 倍）。
@@ -293,8 +297,10 @@ def _asr_dashscope(pcm):
         except urllib.error.HTTPError as e:
             raw = e.read().decode("utf-8", "replace")[:300]
             last_err = RuntimeError("识别接口返回 %d：%s" % (e.code, raw))
-            if 400 <= e.code < 500:
-                raise last_err          # 请求本身有问题，重试不会变好
+            if e.code == 429:
+                time.sleep(_THROTTLE_WAIT)   # 限流是瞬时的，等一下再试
+            elif 400 <= e.code < 500:
+                raise last_err                # 其他 4xx 是请求本身有问题，重试没用
         except urllib.error.URLError as e:
             # urlopen 把 socket 超时包在 URLError.reason 里，得拆开看
             if isinstance(e.reason, socket.timeout):
@@ -330,18 +336,126 @@ def _extract_text(payload):
     return ""
 
 
-def tts(text):
+def _split_for_tts(text, single_max=16, head_max=12):
+    """把一句回复切成 1–2 段，让第一段尽量短。
+
+    为什么要切（实测数据）：
+        合成耗时随字数近似线性——3 字 344ms、14 字 694ms、24 字 1056ms、
+        30 字 1684ms。用户抱怨"最后一句特别慢"，那句恰好是 30 字。
+        整句合成意味着"第一个字要等最后一个字念完"。
+
+        切开之后第一段只有 3–5 字，约 300–400ms 就能出声，
+        用户不再需要等整句话念完才听到第一个字。
+
+    切在哪：
+        优先在逗号/句号后切，且第一段不少于 3 字（"好，"这种一字段没意义，
+        切出来反而把一句话拆得更碎）。真实客服说话本来就在这些地方停顿，
+        所以分段后的节奏不会显得生硬。
+
+    为什么最多两段：
+        接口有 QPS 配额。切 3 段时一轮要 3 个请求，并发直接 429 限流；
+        就算串行，后台也要合成两次，前端播完首段还得干等 2 秒才有后续。
+        只切一刀，剩余部分一次合成完，正好接上首段的播放。
+    """
+    text = (text or "").strip()
+    if len(text) <= single_max:
+        return [text]
+
+    punct = "，。！？；,.!?;"
+    cuts = [i for i, ch in enumerate(text) if ch in punct]
+    if not cuts:
+        mid = len(text) // 2          # 没有任何标点，只能硬切
+        return [text[:mid], text[mid:]]
+
+    head_end = None
+    for c in cuts:
+        if 3 <= c + 1 <= head_max:
+            head_end = c + 1
+            break
+    if head_end is None:
+        head_end = cuts[0] + 1
+
+    head, tail = text[:head_end], text[head_end:]
+    if not tail:
+        return [head]
+    # 只切两段，不再往下切。原因是实测：切 3 段时后台要串行合成两次，
+    # 前端播完首段（约 1.2 秒音频）还得再等 2.1 秒才拿到剩余两段，中间有明显空档。
+    # 只切一刀，剩余部分一次合成完（约 1.2 秒），正好接上首段的播放。
+    return [head, tail]
+
+
+def _tts_dashscope_multi(text, wait_first_only=False):
+    """把文本切段后**串行**合成，第一段合成完就可以返回。
+
+    为什么是串行，不是并发（这是踩过坑之后改的）：
+        一开始写成并发，结果把接口的 QPS 配额打爆了——
+        `Throttling.RateQuota`，429。一轮回复本来只要 1 个请求，
+        切成 3 段就变成 3 个，而限流是按请求数算的。
+        更糟的是 429 属于 4xx，会被判成"请求有问题不重试"，直接回落成浏览器机械音。
+
+        串行其实不亏：第一段本来就排在最前面，合成完立刻返回，
+        首字依然是几百毫秒；剩下的段在后台一段接一段跑，
+        用户还在听第一段时它们就陆续好了。
+
+    返回 (首段列表, 首段就绪耗时ms, 剩余句柄)。
+    """
+    parts = _split_for_tts(text)
+    if len(parts) <= 1:
+        return [{"text": parts[0], "audio_url": _tts_dashscope(parts[0])}], None, None
+
+    t0 = time.time()
+    urls = [None] * len(parts)
+    errors = []
+
+    urls[0] = _tts_dashscope(parts[0])          # 首段必等
+    head_ms = round((time.time() - t0) * 1000, 1)
+    head = [{"text": parts[0], "audio_url": urls[0]}]
+
+    def _rest_worker():
+        for i in range(1, len(parts)):
+            try:
+                urls[i] = _tts_dashscope(parts[i])
+            except Exception as e:              # 线程里必须兜住
+                errors.append((i, e))
+
+    if wait_first_only:
+        rest_thread = threading.Thread(target=_rest_worker, daemon=True)
+        rest_thread.start()
+        return head, head_ms, ([rest_thread], urls, parts)
+
+    _rest_worker()
+    if errors:
+        raise errors[0][1]
+    return ([{"text": p, "audio_url": u} for p, u in zip(parts, urls)],
+            head_ms, ([], urls, parts))
+
+
+def collect_rest(handle, timeout=3.0):
+    """取出剩余段（前端播完首段后调）。等不到就跳过，不让用户卡住。"""
+    if not handle:
+        return []
+    threads, urls, parts = handle
+    for th in threads:
+        th.join(timeout)
+    return [{"text": p, "audio_url": u}
+            for p, u in zip(parts[1:], urls[1:]) if u]
+
+
+def tts(text, wait_first_only=False):
     """把回复文本变成语音。
 
     两条路：
-        dashscope → 服务端合成，返回一个音频 URL，前端用 <audio> 播；
+        dashscope → 服务端合成，返回音频 URL（单段或分段），前端用 <audio> 播；
         browser   → 服务端不合成，前端用 speechSynthesis 念（占位/降级）。
     为什么保留降级：合成服务抖动时宁可声音机械一点，也不能突然没声——
     外呼里沉默比音色难听严重得多。
 
+    wait_first_only=True 时只合成并返回第一段，剩余段落后台继续，
+    由 app 层暂存、前端播完首段后再来取（见 collect_rest）。
+
     音色与语速来自 config/scene.json 的 tts 段：换音色属于业务决策，不该改代码。
 
-    返回：dict(mode, text, voice, rate, latency_ms[, audio_url, error])
+    返回：dict(mode, text, voice, rate, latency_ms[, audio_url | segments, _rest])
     """
     cfg = config_loader.tts_config()
     provider = (cfg.get("provider") or "browser").strip()
@@ -349,18 +463,27 @@ def tts(text):
 
     if provider == "dashscope":
         try:
-            url = _tts_dashscope(text)
-            return {
-                "mode": "url",
+            segs, first_ms, handle = _tts_dashscope_multi(text, wait_first_only)
+            common = {
                 "text": text,
                 # 这里必须是云端音色 ID。之前错填成浏览器音色名，排查时
                 # 会以为"用的是 Xiaoxiao 却发出了 Cherry 的声音"而绕远路。
                 "voice": cfg.get("voice_name", ""),
                 "rate": float(cfg.get("rate", 1.0)),
-                "audio_url": url,
                 "provider": provider,
-                "latency_ms": round((time.time() - t0) * 1000, 1),
             }
+            if len(segs) == 1 and handle is None:
+                return dict(common, mode="url", audio_url=segs[0]["audio_url"],
+                            latency_ms=round((time.time() - t0) * 1000, 1))
+
+            out = dict(common, mode="segments", segments=segs,
+                       latency_ms=first_ms or round((time.time() - t0) * 1000, 1))
+            if handle is not None:
+                out["rest_count"] = len(handle[2]) - 1
+                out["_rest"] = handle       # 下划线开头＝内部字段，app 取走后不下发
+            if not wait_first_only:
+                out["total_ms"] = round((time.time() - t0) * 1000, 1)
+            return out
         except Exception as e:
             # 合成失败不掐断通话：退回浏览器播报，并把原因留痕
             return {
@@ -436,7 +559,11 @@ def _tts_dashscope(text):
         except urllib.error.HTTPError as e:
             raw = e.read().decode("utf-8", "replace")[:200]
             last_err = RuntimeError("合成接口返回 %d：%s" % (e.code, raw))
-            if 400 <= e.code < 500:
+            if e.code == 429:
+                # 实测被限流过：分段合成把 QPS 配额打爆，接口直接 429。
+                # 它属于 4xx 但和"请求写错了"完全不同——等一会儿就能过。
+                time.sleep(_THROTTLE_WAIT)
+            elif 400 <= e.code < 500:
                 raise last_err
         except urllib.error.URLError as e:
             if isinstance(e.reason, socket.timeout):
