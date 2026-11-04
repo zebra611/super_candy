@@ -47,6 +47,11 @@
 | **质检五项** | 闭环、辱骂、虚假承诺、诱导、隐私、必说话术，判不了的标 `skipped` 而不是蒙一个 |
 | **时延双口径** | 服务端处理耗时 + 浏览器实测首字响应（T4−T0），两个数分开统计，不混着报 |
 | **失败不静默** | 识别两轮墙钟闸门 2s→3s（`urllib` 的 timeout 只管单次 socket，管不住总时长）；429 限流退避重试；合成失败回落浏览器播报；断连会重试而不是直接没声 |
+| **指标看板** | `/dashboard` 一个页面看完：时延双口径、闭环分布、事件类型、逐通摘要、质检汇总、库体积。只读，15 秒缓存 |
+| **多场景切换** | `config/scenes/` 放多套话术，`APP_SCENE=xxx` 或 `POST /api/scene` 运行时切；切之前会告诉你**有几通电话正在用旧场景** |
+| **成本闸门** | 日成本上限 + 每分钟轮次限制，**默认关闭**（演示前不动配置就等于没有这一层） |
+| **Mock 业务系统** | `mock_business/` 独立起一个服务（:8100）：查客户 / 查订单 / 建工单，幂等 + 错误码 |
+| **事件归档** | `scripts/archive_events.py` 把 N 天前的数据搬到 `data/archive/`，**校验写成功才从主库删** |
 
 ### 还没做的（不是忘了，是排期在后面）
 
@@ -59,10 +64,9 @@
 - **对话措辞仍是骨架话术，没有大模型**。`modules/nlg.py` 里的 `say()` 是接缝，
   `_rewrite()` 返回 `None`（= 不改写），所以行为跟接之前一模一样。契约在
   **[docs/17](docs/17_任务2接口契约.md)**，等 2A 佟欣填。
-- **工具仍返回写死数据**（`modules/tools.py`），等 2B 潘柏亦接。
+- **工具仍返回写死数据**（`modules/tools.py`），等 2B 潘柏亦接；
+  Mock 业务服务（`mock_business/`）已经是真的了，可以直接对着它写适配器。
 - **没有说话人分离**：环境里别人说话，会被当成用户说的话。
-- **M5/M8（看板、成本闸门、多场景、Mock 业务）不在 `main` 上**——它们在
-  `feat/platform-m5-m8` 分支（PR #1），审核结论是"修改后合并"，还没合。
 
 其余：语义级合规、RSI 自进化。
 
@@ -112,6 +116,24 @@
 
 > 线上那份要有真语音，同样得在部署环境里注入 `DASHSCOPE_API_KEY`，
 > 否则会静默回落成占位识别——本地能跑、点开链接却听不到真识别，多半是这个原因。
+
+### 想看板 / 想换场景 / 想连 Mock 业务系统（平台与交付，4 号）
+
+```bash
+python app.py            # 通话页：http://127.0.0.1:8000
+                         # 看板：  http://127.0.0.1:8000/dashboard
+
+python config_loader.py --list      # 看有哪些场景，当前用的是哪个
+APP_SCENE=retail_recall python app.py   # 换一套场景跑（话术、禁语、回写字段全换）
+
+python mock_business/service.py     # Mock 业务系统：http://127.0.0.1:8100/mock/health
+```
+
+一键起全套（含 Mock，两个窗口）：双击 **`启动全部.bat`**。
+容器化：`docker compose up --build`。
+
+详细说明：**[docs/18_事件流与看板.md](docs/18_事件流与看板.md)**、
+**[docs/19_部署与一键启动.md](docs/19_部署与一键启动.md)**。
 
 ---
 
@@ -219,6 +241,16 @@
 | [docs/08_方案审查与待确认清单.md](docs/08_方案审查与待确认清单.md) | 9 处实测缺陷的来龙去脉 + 修复记录 + 还没做的 | 全员 |
 | [docs/14_接口与代码地图.md](docs/14_接口与代码地图.md) | 接口表与错误码、文件归属、现在哪些还是假的 | 全员 |
 
+### 平台与交付（4 号）的文档
+
+| 文档 | 内容 | 谁该读 |
+|---|---|---|
+| [docs/18_事件流与看板.md](docs/18_事件流与看板.md) | 事件表结构与 4 个索引、连接复用、看板七个区块、归档 | 全员 |
+| [docs/19_部署与一键启动.md](docs/19_部署与一键启动.md) | 四种跑法、Docker、场景配置中心、schema 校验、Mock 业务、成本闸门 | 全员 |
+| [docs/20_技术方案书.md](docs/20_技术方案书.md) | 提交材料：架构、关键决策、选型、评测、已知不足 | 答辩用 |
+| [docs/21_答辩提纲与演示脚本.md](docs/21_答辩提纲与演示脚本.md) | 7 分钟答辩逐段稿 + 5 分钟视频分镜 + 现场兜底预案 | 全员 |
+| [docs/22_项目看板.md](docs/22_项目看板.md) | 里程碑 K0–K6 状态、按人待办、风险清单、决策记录 | 全员 |
+
 ---
 
 ## 六、代码长什么样
@@ -227,19 +259,26 @@
 app.py            HTTP 路由 + 串联链路 + 会话边界 + 音频分片 + 打断/探针接口
 contracts.py      禁改区：16 种事件、六环节、工具签名、首字门槛、PCM 常量
 events.py         SQLite 事件流，转写/质检/时延/成本全从这里派生
-config_loader.py  读 config/scene.json 与密钥（环境变量优先）
+dashboard.py      看板聚合（只读）：把事件读成 KPI、分布、逐通摘要
+cost_guard.py     日成本闸门与速率限制（默认关闭）
+config_loader.py  读配置（支持多场景 + schema 校验）与密钥（环境变量优先）
+config/scenes/    可切换的场景包：换一个文件 = 换一套话术与禁语
 modules/
   voice.py        静音闸门、墙钟闸门、识别、合成（长句切段）、断连重试
   dialogue.py     规则版状态机：意图、槽位、话术、改口；回复统一从 _reply() 出
   nlg.py          措辞改写接缝：say() 就位，_rewrite() 未实现（默认不改写）
   tools.py        工单工具（幂等、改口更新）
   eval.py         五项质检与闭环打分
-web/index.html    AudioWorklet 采集、五态状态机、能量 VAD、三段式打断、双口径面板
-scripts/          verify（57 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
-                  clean_events（库体检）/ check_key（验密钥）/ 试听 / 录音验识别
-CODEOWNERS        谁的文件谁审（GitHub 账号对照）
-.githooks/        pre-push：禁止直接推 main（要 git config core.hooksPath .githooks）
-reviews/          PR 审核记录
+web/index.html      AudioWorklet 采集、五态状态机、能量 VAD、三段式打断、双口径面板
+web/dashboard.html  指标看板：KPI、时延双口径、事件分布、质检汇总、库体检
+dashboard.py        看板聚合（只读）
+cost_guard.py       日成本闸门与速率限制（默认关闭）
+mock_business/      独立 Mock 业务服务：查客户 / 查订单 / 建工单（幂等）
+scripts/            verify（61 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
+                    clean_events · archive_events（库体检/归档）/ check_key / 试听 / 录音验识别
+CODEOWNERS          谁的文件谁审（GitHub 账号对照）
+.githooks/          pre-push：禁止直接推 main（要 git config core.hooksPath .githooks）
+reviews/            PR 审核记录
 ```
 
 改代码前，先看 [docs/14](docs/14_接口与代码地图.md) 确认这个文件归谁、哪些是禁改区。
@@ -249,8 +288,10 @@ reviews/          PR 审核记录
 ## 七、怎么验证我改的东西没坏
 
 ```bash
-python scripts/verify.py       # 57 条行为断言，用临时库，不污染 data/
+python scripts/verify.py       # 61 条行为断言，用临时库，不污染 data/
 python scripts/run_eval.py     # 30 条用例跑批（离线，不调云端）
+python config_loader.py        # 配置结构与占位符校验（一秒出结果）
+python scripts/archive_events.py --stats   # 事件库体检：体积、行数、索引
 ```
 
 `verify.py` 每条都打出**实际事件链和字段值**，不是只打个 PASS——
@@ -282,25 +323,54 @@ git config core.hooksPath .githooks
 | 分支 | 状态 | 内容 |
 |---|---|---|
 | `main` | 唯一可信基线 | 本 README 描述的一切都在这里 |
-| `feat/platform-m5-m8` | **未合并**（PR #1，11 个提交） | 看板、成本闸门、多场景切换、Mock 业务系统、Docker |
+| `feat/platform-m5-m8` | **已合并**（PR #1，11 个提交） | 看板、成本闸门、多场景切换、Mock 业务系统、Docker |
 
-**PR #1 没合的原因不是"忘了"**：它有 4 个文件与 `main` 冲突（`app.py` 最关键，
-要同时保留它的 4 个新路由和本线的 `/api/asr/probe`），另外两个问题已写在
-[reviews/PR1_审核意见.md](reviews/PR1_审核意见.md) 里——其中一个是安全洞：
+**PR #1 已于 2026-11-04 合入 `main`，但不是原样合**：审核发现的 4 个缺陷先修再进，
+修复明细见 [reviews/PR1_审核意见.md](reviews/PR1_审核意见.md)，最关键的一个是安全洞：
 
-> `/api/scenes`、`/api/sessions` 靠"请求来自 127.0.0.1"判断本机。线上走反向代理，
-> 源地址就是 127.0.0.1，所以这道门在线上是**开着的**（实测线上 `/api/sessions`
-> 不带凭证也返回 200）。`/api/sessions` 是既有缺陷，`/api/scene` 是**写操作**，
-> 等于拿到分享链接的人能切全局场景。
+> `/api/scenes`、`/api/sessions` 原来靠"请求来自 127.0.0.1"判断本机。线上走反向代理，
+> 源地址就是 127.0.0.1，这道门在线上是**开着的**（实测线上 `/api/sessions`
+> 不带凭证也返回 200）。已重写为 Host 头 + 转发头 + `PORT` 环境变量三重闸门，
+> 托管环境下运维接口一律 403（实测通过）。
 
-所以：**在 PR #1 合并之前，不要在任何材料里写"我们有指标看板/多场景切换"**。
-被问到就说"在 PR 里，卡在安全问题没合"，这比说了之后现场打不开好得多。
+合并后顺带修掉：`/api/scenes` 泄露本机绝对路径、通话中切场景无任何提示（现在返回
+`active_sessions` 与 `warning`）、归档工具同月重跑撞主键且失败仍删主库（改为回读校验
+后才删）。回归：`verify.py` **61/61**，`run_eval.py` 30/30。
 
 分支规则见 [docs/12](docs/12_团队使用规范.md) 规矩三，审核记录都在 [reviews/](reviews/)。
 
 ---
 
 ## 最近一次改动
+
+2026-11-04（PR #1 合并并修复）：`feat/platform-m5-m8` 合入 `main`，合并前修掉
+审核发现的 4 个缺陷——线上运维接口裸奔（重写为 Host 头 + 转发头 + `PORT` 三闸门）、
+`/api/scenes` 泄露本机绝对路径、通话中切场景无提示（现在带 `active_sessions` 与
+`warning`）、归档工具撞主键且失败仍删主库（改为回读校验后才删，默认 dry-run）。
+新增 `_pycheck.bat` 公共 Python 探测（三个 bat 全 ASCII），文档编号 17~21 顺移为
+18~22。回归：`verify.py` **61/61**，`run_eval.py` 30/30。
+
+2026-11-04（平台与交付，M5/M8）：
+事件流补上连接复用（线程局部、以库路径为键）、WAL 与 4 个索引；新增归档工具
+`scripts/archive_events.py`（默认 dry-run，搬前自动备份）。
+新增指标看板 `/dashboard` 与 `/api/dashboard/summary`——时延双口径并列、
+闭环只认 `writeback`、质检未完成就标黄。
+配置中心支持多场景（`config/scenes/`、`APP_SCENE`、`python config_loader.py --list`），
+并在启动时做 schema 校验（连"话术里写了不认识的占位符"都能提前拦下）。
+新增独立 Mock 业务服务 `mock_business/`（三接口 + 幂等 + 错误码）、
+`cost_guard.py`（日成本闸门与限速，默认关闭）、`Dockerfile` / `docker-compose.yml`、
+`启动全部.bat`。文档：[18 事件流与看板](docs/18_事件流与看板.md)、
+[19 部署与一键启动](docs/19_部署与一键启动.md)、
+[20 技术方案书](docs/20_技术方案书.md)、
+[21 答辩提纲与演示脚本](docs/21_答辩提纲与演示脚本.md)、
+[22 项目看板](docs/22_项目看板.md)。
+
+2026-11-04（更早）：接上云端合成（`qwen3-tts-flash`，音色 Serena），声音不再是浏览器机械音。
+顺带修掉三个实测暴露的缺陷：开场白的合成结果被服务端丢弃、`latency_report` 的轮次
+恒为 0、以及**重试对 `RemoteDisconnected` 完全失效**（异常类型没捕获，重试从未生效）。
+另外补上事件类型写入校验、评测跑批的离线隔离，删掉 5 处死代码。
+
+回归：`verify.py` 52/52（当时基线），`run_eval.py` 30/30（闭环 11/30）。
 
 2026-11-04（晚）：打断从"一有声音就停"改成**三段式**——能量只当疑似（音量压到 12%），
 把这段送 `/api/asr/probe` 识别，认出实义文字才真停。实测挖出一个坑：**白噪声会被

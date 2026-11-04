@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>super_candy · 指标看板</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --line: #e6e8eb;
+    --text: #1f2329;
+    --sub: #6b7280;
+    --blue: #2563eb;
+    --green: #12805c;
+    --amber: #b45309;
+    --red: #c0392b;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  header {
+    background: var(--card);
+    border-bottom: 1px solid var(--line);
+    padding: 14px 22px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .scene {
+    font-size: 12px; color: var(--sub);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 2px 10px;
+  }
+  header .spacer { flex: 1; }
+  select, button {
+    font: inherit; font-size: 13px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: #fff; color: var(--text);
+    padding: 5px 10px; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: #cbd2da; }
+  button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+  main { padding: 18px 22px 40px; max-width: 1180px; margin: 0 auto; }
+
+  .grid { display: grid; gap: 12px; }
+  .kpis { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 12px; }
+  .kpi {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 12px 14px;
+  }
+  .kpi .label { font-size: 12px; color: var(--sub); }
+  .kpi .value { font-size: 24px; font-weight: 600; letter-spacing: -.4px; margin-top: 2px; }
+  .kpi .value small { font-size: 12px; font-weight: 400; color: var(--sub); margin-left: 3px; }
+  .kpi .hint { font-size: 11px; color: var(--sub); margin-top: 2px; }
+  .kpi.ok .value { color: var(--green); }
+  .kpi.warn .value { color: var(--amber); }
+  .kpi.bad .value { color: var(--red); }
+
+  .cols { grid-template-columns: 1.15fr .85fr; }
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 14px 16px; margin-bottom: 12px;
+  }
+  .card h2 {
+    font-size: 13px; font-weight: 600; margin: 0 0 10px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card h2 .tag {
+    font-size: 11px; font-weight: 400; color: var(--sub);
+    border: 1px solid var(--line); border-radius: 999px; padding: 0 8px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); }
+  th { font-weight: 500; color: var(--sub); font-size: 12px; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+
+  .pill {
+    display: inline-block; font-size: 11px; line-height: 18px;
+    padding: 0 8px; border-radius: 999px; border: 1px solid transparent;
+  }
+  .pill.yes { color: var(--green); background: #e8f5ef; }
+  .pill.no  { color: var(--sub);   background: #f1f3f5; }
+  .pill.bad { color: var(--red);   background: #fdecea; }
+
+  .bar-row { display: flex; align-items: center; gap: 10px; margin: 5px 0; }
+  .bar-row .name { width: 128px; font-size: 12px; color: var(--sub); flex: none; }
+  .bar-row .track { flex: 1; height: 8px; background: #f0f2f4; border-radius: 999px; overflow: hidden; }
+  .bar-row .fill { height: 100%; background: var(--blue); border-radius: 999px; }
+  .bar-row .n { width: 42px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+  .days { display: flex; align-items: flex-end; gap: 4px; height: 92px; margin-top: 6px; }
+  .days .col { flex: 1; background: #dbe7fd; border-radius: 3px 3px 0 0; min-height: 2px; position: relative; }
+  .days .col:hover { background: var(--blue); }
+  .days-x { display: flex; justify-content: space-between; font-size: 11px; color: var(--sub); margin-top: 4px; }
+
+  .note {
+    font-size: 12px; color: var(--sub); background: #fafbfc;
+    border: 1px dashed var(--line); border-radius: 8px;
+    padding: 8px 10px; margin-top: 10px;
+  }
+  .warn-banner {
+    background: #fff8e6; border: 1px solid #f5e1b3; color: var(--amber);
+    border-radius: var(--radius); padding: 10px 14px; font-size: 12.5px;
+    margin-bottom: 12px;
+  }
+  footer { text-align: center; color: var(--sub); font-size: 12px; padding: 6px 0 26px; }
+  .empty { color: var(--sub); font-size: 13px; padding: 12px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>指标看板</h1>
+  <span class="scene" id="scene">加载中…</span>
+  <span class="spacer"></span>
+  <label style="font-size:12px;color:var(--sub)">窗口</label>
+  <select id="days">
+    <option value="">全部</option>
+    <option value="1">近 1 天</option>
+    <option value="7" selected>近 7 天</option>
+    <option value="30">近 30 天</option>
+  </select>
+  <label style="font-size:12px;color:var(--sub)">场景</label>
+  <select id="scene-switch" title="切换后下一轮对话即生效"></select>
+  <button class="primary" id="refresh">刷新</button>
+</header>
+
+<main>
+  <div class="warn-banner" id="quality-warn" style="display:none"></div>
+
+  <section class="grid kpis" id="kpis"></section>
+
+  <section class="grid cols">
+    <div>
+      <div class="card">
+        <h2>时延 <span class="tag">两套口径，不许混报</span></h2>
+        <table>
+          <thead>
+            <tr><th>指标</th><th class="num">P50</th><th class="num">P95</th><th>说明</th></tr>
+          </thead>
+          <tbody id="latency-body"></tbody>
+        </table>
+        <div class="note" id="latency-note"></div>
+      </div>
+
+      <div class="card">
+        <h2>最近通话 <span class="tag" id="sessions-tag"></span></h2>
+        <table>
+          <thead>
+            <tr><th>会话</th><th class="num">轮次</th><th>闭环</th><th>最后环节</th><th class="num">打断</th><th class="num">错误</th><th class="num">成本(元)</th></tr>
+          </thead>
+          <tbody id="sessions-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>事件类型分布 <span class="tag">来自事件流</span></h2>
+        <div id="by-type"></div>
+      </div>
+
+      <div class="card">
+        <h2>近 30 天事件量</h2>
+        <div class="days" id="days-chart"></div>
+        <div class="days-x"><span id="days-left"></span><span id="days-right"></span></div>
+      </div>
+
+      <div class="card">
+        <h2>质检汇总 <span class="tag">口径来自 modules/eval.py</span></h2>
+        <div id="quality"></div>
+      </div>
+
+      <div class="card">
+        <h2>成本与事件库</h2>
+        <div id="db"></div>
+      </div>
+    </div>
+  </section>
+</main>
+<footer>super_candy · 平台与交付（4 号）· 每 10 秒自动刷新 · 数据只读，不影响通话</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let timer = null;
+
+function fmt(n, digits) {
+  if (n === null || n === undefined) return "—";
+  const v = Number(n);
+  if (!isFinite(v)) return "—";
+  return digits === undefined ? String(v) : v.toFixed(digits);
+}
+function pct(v) { return (Number(v || 0) * 100).toFixed(0) + "%"; }
+function kpi(label, value, unit, hint, cls) {
+  return `<div class="kpi ${cls || ""}">
+    <div class="label">${label}</div>
+    <div class="value">${value}${unit ? `<small>${unit}</small>` : ""}</div>
+    <div class="hint">${hint || ""}</div>
+  </div>`;
+}
+function esc(s) {
+  return String(s === null || s === undefined ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+async function load() {
+  const days = $("days").value;
+  const url = "/api/dashboard/summary?limit=10" + (days ? "&days=" + days : "");
+  try {
+    const r = await fetch(url, { cache: "no-store" });
+    const d = await r.json();
+    render(d);
+  } catch (e) {
+    $("scene").textContent = "连接失败：" + e.message;
+  }
+}
+
+function render(d) {
+  const h = d.headline || {};
+  const scene = d.scene || {};
+  $("scene").textContent = (scene.scene_name || "未命名") +
+    " · " + (scene.agent_name || "-") + " · 配置问题 " + (scene.problems || 0) + " 处";
+
+  const gateOk = h.first_audio_p50_ms > 0 && h.first_audio_p50_ms <= h.gate_ms;
+  const hasVoice = (h.first_audio_samples || 0) > 0;
+  $("kpis").innerHTML = [
+    kpi("会话数", fmt(h.sessions), "", "窗口内去重会话"),
+    kpi("轮次", fmt(h.turns), "", "turn_end 事件数"),
+    kpi("闭环率", pct(h.close_rate), "", `${h.closed_sessions || 0} 通走到回写`,
+        h.close_rate >= 0.5 ? "ok" : ""),
+    kpi("首字 P50", hasVoice ? fmt(h.first_audio_p50_ms, 0) : "—",
+        hasVoice ? "ms" : "",
+        hasVoice ? `门槛 ${h.gate_ms}ms · 样本 ${h.first_audio_samples} 轮` : "还没有语音轮样本",
+        hasVoice ? (gateOk ? "ok" : "bad") : ""),
+    kpi("首字 P95", h.first_audio_p95_ms ? fmt(h.first_audio_p95_ms, 0) : "—",
+        h.first_audio_p95_ms ? "ms" : "", "样本 < 20 时不出 P95"),
+    kpi("成本估算", fmt(h.cost_cny, 2), "元", "按配置单价折算，仅告警用"),
+    kpi("打断", fmt(h.barge_ins), "次", "barge_in 事件"),
+    kpi("错误", fmt(h.errors), "条", "error 事件", h.errors ? "warn" : ""),
+  ].join("");
+
+  const L = d.latency || {};
+  $("latency-body").innerHTML = `
+    <tr><td>首字响应（T4−T0）</td>
+        <td class="num">${fmt(L.first_audio_p50_ms, 0)}</td>
+        <td class="num">${L.first_audio_p95_ms ? fmt(L.first_audio_p95_ms, 0) : "—"}</td>
+        <td>浏览器实测，语音轮；赛题门槛口径</td></tr>
+    <tr><td>服务端处理耗时</td>
+        <td class="num">${fmt(L.processing_p50_ms, 0)}</td>
+        <td class="num">${L.processing_p95_ms ? fmt(L.processing_p95_ms, 0) : "—"}</td>
+        <td>收到请求 → 返回回复，不含播放</td></tr>
+    <tr><td>打字轮首字（参考）</td>
+        <td class="num">${fmt(L.first_audio_text_p50_ms, 0)}</td>
+        <td class="num">—</td>
+        <td>不是门槛口径，仅判断服务端是否拖慢</td></tr>`;
+  $("latency-note").textContent =
+    (L.note || "") +
+    ` 估算条数 ${L.first_audio_estimated || 0}；超时（≥10s）${L.first_audio_timeouts || 0} 条已剔除。`;
+
+  // 事件类型分布：按数量降序，取前 12
+  const types = Object.entries((d.volume || {}).by_type || {});
+  const max = Math.max(1, ...types.map(([, n]) => n));
+  $("by-type").innerHTML = types.length ? types.slice(0, 12).map(([k, n]) => `
+    <div class="bar-row">
+      <div class="name" title="${esc(k)}">${esc(k)}</div>
+      <div class="track"><div class="fill" style="width:${(n / max * 100).toFixed(1)}%"></div></div>
+      <div class="n">${n}</div>
+    </div>`).join("") : `<div class="empty">窗口内还没有事件。</div>`;
+
+  // 近 30 天（接口返回倒序，画图要正序）
+  const days = ((d.volume || {}).by_day || []).slice().reverse();
+  const dmax = Math.max(1, ...days.map(x => x.events));
+  $("days-chart").innerHTML = days.length ? days.map(x => `
+    <div class="col" style="height:${(x.events / dmax * 100).toFixed(1)}%"
+         title="${esc(x.date)} · ${x.events} 条事件 · ${x.sessions} 通会话"></div>`
+  ).join("") : `<div class="empty">还没有数据。</div>`;
+  $("days-left").textContent = days.length ? days[0].date : "";
+  $("days-right").textContent = days.length ? days[days.length - 1].date : "";
+
+  const ss = d.sessions || [];
+  $("sessions-tag").textContent = `最近 ${ss.length} 通`;
+  $("sessions-body").innerHTML = ss.length ? ss.map(s => `
+    <tr>
+      <td class="mono" title="${esc(s.session_id)}">${esc(String(s.session_id).slice(0, 10))}</td>
+      <td class="num">${s.turns}</td>
+      <td>${s.closed ? '<span class="pill yes">已回写</span>' : '<span class="pill no">未闭环</span>'}</td>
+      <td class="mono">${esc(s.stage || "—")}</td>
+      <td class="num">${s.barge_ins || 0}</td>
+      <td class="num">${s.errors ? `<span class="pill bad">${s.errors}</span>` : 0}</td>
+      <td class="num">${fmt(s.cost_cny, 3)}</td>
+    </tr>`).join("") : `<tr><td colspan="7" class="empty">还没有通话记录。先跑一通电话。</td></tr>`;
+
+  const q = d.quality || {};
+  const failed = Object.entries(q.failed_checks || {});
+  $("quality").innerHTML = `
+    <div style="display:flex;gap:18px;margin-bottom:8px">
+      <div><div class="label" style="font-size:12px;color:var(--sub)">检查会话</div>
+           <div style="font-size:20px;font-weight:600">${q.sessions_checked || 0}</div></div>
+      <div><div class="label" style="font-size:12px;color:var(--sub)">闭环</div>
+           <div style="font-size:20px;font-weight:600">${q.closed || 0}</div></div>
+      <div><div class="label" style="font-size:12px;color:var(--sub)">平均分</div>
+           <div style="font-size:20px;font-weight:600">${fmt(q.avg_score, 2)}</div></div>
+    </div>
+    ${failed.length
+      ? failed.map(([k, n]) => `<div class="bar-row"><div class="name">${esc(k)}</div>
+          <div class="track"><div class="fill" style="width:${(n / Math.max(1, q.sessions_checked) * 100).toFixed(0)}%;background:var(--red)"></div></div>
+          <div class="n">${n}</div></div>`).join("")
+      : `<div class="empty" style="padding:4px 0">本次检查没有失败项。</div>`}
+    <div class="note">${esc(q.note || "")}</div>`;
+
+  const warn = $("quality-warn");
+  if (q.is_placeholder) {
+    warn.style.display = "block";
+    warn.textContent = "质检仍为占位实现（语义级合规、模拟用户跑批未完成）。看板上的质检查询结果只能说明" +
+      "词表与必说话术过没过，不能当作最终合规率对外汇报。";
+  } else {
+    warn.style.display = "none";
+  }
+
+  const db = d.db || {};
+  const cost = d.cost || {};
+  $("db").innerHTML = `
+    <table><tbody>
+      <tr><th>今日成本</th><td class="num">${fmt(cost.today_cny, 4)} 元
+        <span class="pill ${cost.over_limit ? "bad" : (cost.warn ? "no" : "yes")}">
+          ${cost.over_limit ? "已超硬上限" : (cost.enabled ? "闸门开启" : "闸门关闭")}</span></td></tr>
+      <tr><th>日上限 / 告警线</th><td class="num">${fmt(cost.daily_hard_limit_cny, 0)} / ${fmt(cost.daily_warn_cny, 0)} 元</td></tr>
+      <tr><th>库体积</th><td class="num">${fmt(db.size_mb, 2)} MB</td></tr>
+      <tr><th>事件行数</th><td class="num">${fmt(db.events)}</td></tr>
+      <tr><th>会话数</th><td class="num">${fmt(db.sessions)}</td></tr>
+      <tr><th>索引</th><td class="num">${fmt(db.index_count)} 个</td></tr>
+    </tbody></table>
+    <div class="note mono">${esc(db.db_path || "")}</div>`;
+
+  loadScenes(d.scene);
+}
+
+async function loadScenes(current) {
+  try {
+    const r = await fetch("/api/scenes", { cache: "no-store" });
+    const d = await r.json();
+    const cur = (d.current || {}).path || "";
+    $("scene-switch").innerHTML = (d.scenes || []).map(s =>
+      `<option value="${esc(s.id)}"${s.path === cur ? " selected" : ""}>${esc(s.id)}</option>`
+    ).join("") || `<option value="">（无 scenes 目录）</option>`;
+    $("scene-switch").dataset.current = cur;
+  } catch (e) { /* 场景列表拿不到不影响看板主体 */ }
+}
+
+$("scene-switch").addEventListener("change", async (e) => {
+  const name = e.target.value;
+  if (!name) return;
+  try {
+    const r = await fetch("/api/scene", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name })
+    });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    // 服务端会告诉我们有多少通电话正在用旧场景。切场景会立刻影响它们
+    // （话术是每轮现读配置的），演示时误点一下就会让正在演示的电话换业务，
+    // 所以这条提示不能吞掉。
+    const d = await r.json();
+    if (d.warning) alert(d.warning);
+    load();
+  } catch (err) {
+    alert("切换失败：" + err.message);
+  }
+});
+
+$("refresh").addEventListener("click", load);
+$("days").addEventListener("change", load);
+load();
+timer = setInterval(load, 10000);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { clearInterval(timer); timer = null; }
+  else if (!timer) { load(); timer = setInterval(load, 10000); }
+});
+</script>
+</body>
+</html>

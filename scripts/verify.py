@@ -901,6 +901,79 @@ def main():
     end_call(sid_j)
     end_call(sid_i)
 
+    # ---- 证据 12：平台侧（M5/M8 合并进来之后必须守住的三条边界）----
+    print()
+    print("=" * 74)
+    print("证据 13：运维接口准入、对外不吐绝对路径、归档搬丢不删数据")
+    print("=" * 74)
+
+    class _FakeReq:
+        """只带 _is_loopback 用到的两个属性，够用就行。"""
+
+        def __init__(self, headers=None, addr=("127.0.0.1", 0)):
+            self.headers = headers or {}
+            self.client_address = addr
+
+    os.environ.pop("PORT", None)
+    cases = [
+        ("本机直连", _FakeReq({"Host": "127.0.0.1:8000"}), True),
+        ("Host 是域名（隧道 / DNS 重绑定）", _FakeReq({"Host": "evil.example.com"}), False),
+        ("带反代转发头", _FakeReq({"Host": "localhost", "X-Forwarded-For": "1.2.3.4"}), False),
+        ("带 X-Real-IP", _FakeReq({"Host": "localhost", "X-Real-IP": "1.2.3.4"}), False),
+        ("源地址不是本机", _FakeReq({"Host": "localhost"}, addr=("10.0.0.5", 0)), False),
+    ]
+    got = [(name, app_mod.Handler._is_loopback(req), exp) for name, req, exp in cases]
+    os.environ["PORT"] = "8000"          # 托管环境：平台会注入 PORT
+    hosted = app_mod.Handler._is_loopback(_FakeReq({"Host": "127.0.0.1:8000"}))
+    os.environ.pop("PORT", None)
+    check("运维接口不能只看源地址——线上反代下源地址就是 127.0.0.1",
+          all(g == e for _, g, e in got) and hosted is False,
+          ["%s → %s（期望 %s）" % (n, g, e) for n, g, e in got]
+          + ["托管环境（PORT 存在）→ %s（期望 False）" % hosted,
+             "只看源地址的话，线上 /api/sessions 不带凭证就能拿到会话列表"])
+
+    scenes = config_loader.available_scenes()
+    leaked = [x.get("path") for x in scenes if os.path.isabs(x.get("path") or "")]
+    desc_p = config_loader.describe().get("path") or ""
+    db_p = events.db_stats().get("db_path") or ""
+    check("对外接口不吐服务器绝对路径（/api/scenes、describe、看板的库信息）",
+          not leaked and not os.path.isabs(desc_p) and not os.path.isabs(db_p),
+          ["场景清单里的绝对路径：%s" % (leaked or "无"),
+           "describe().path = %s" % desc_p,
+           "db_stats().db_path = %s" % db_p,
+           "绝对路径会暴露开发机目录结构，对外只给相对路径或文件名"])
+
+    sid_k = start_call()["session_id"]
+    n_active = app_mod.active_session_count()
+    end_call(sid_k)
+    n_after = app_mod.active_session_count()
+    check("能数出还在进行的通话数（切场景前要告诉调用方影响多少通）",
+          n_active >= 1 and n_after == n_active - 1,
+          ["开一通后 active=%d，挂断后 active=%d" % (n_active, n_after),
+           "切场景会立刻改变进行中通话的下一句，不提示就会当场串台"])
+
+    # 归档：搬出去的行必须真的在归档库里，而且失败时一行都不许从主库删
+    conn = events._connect()
+    old_ts = events.now_ms() - 40 * 86400 * 1000
+    conn.execute("INSERT INTO events (session_id, turn_id, ts, type, payload, latency_ms, version)"
+                 " VALUES (?,?,?,?,?,?,?)",
+                 ("s_archive_probe", 0, old_ts, "turn_start", "{}", 0, 1))
+    conn.commit()
+    before_main = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    moved = events.archive_events(before_days=30)
+    after_main = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    left = conn.execute("SELECT COUNT(*) FROM events WHERE session_id = 's_archive_probe'"
+                        ).fetchone()[0]
+    again = events.archive_events(before_days=30)
+    check("归档是「搬走」不是「删掉」：校验通过才删，重复跑不撞主键",
+          moved.get("moved", 0) >= 1 and left == 0
+          and after_main == before_main - moved["moved"]
+          and again.get("dry_run") is True,
+          ["本次搬走 %d 行，主库 %d → %d" % (moved.get("moved", 0), before_main, after_main),
+           "搬走的那条在主库里还剩 %d 条（期望 0）" % left,
+           "再跑一次：moved=%s dry_run=%s（没有可搬的就该什么都不做）"
+           % (again.get("moved"), again.get("dry_run"))])
+
     print()
     print("=" * 74)
     total = len(results)

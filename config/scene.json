@@ -76,7 +76,11 @@
     "price_per_min_asr": 0.0144,
     "price_per_1k_chars_tts": 0.08,
     "price_per_1m_tokens": 0.6,
-    "_todo": "单价按 2026-11 公开价格折算，仅用于估算告警；真实成本按账单核对"
+    "_todo": "单价按 2026-11 公开价格折算，仅用于估算告警；真实成本按账单核对",
+    "daily_hard_limit_cny": 50.0,
+    "rate_limit_per_min": 60,
+    "guard_enabled": false,
+    "_guard_todo": "guard_enabled=false 是刻意的：骨架阶段硬熔断会让演示莫名失败。要真的限流/限成本，把它改成 true，再按需调 daily_hard_limit_cny 与 rate_limit_per_min。"
   },
   "privacy": {
     "mask_digits_in_events": true,

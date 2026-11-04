@@ -35,6 +35,8 @@ from urllib.parse import urlparse, parse_qs
 
 import config_loader
 import contracts
+import cost_guard
+import dashboard as dashboard_mod
 import events
 from modules import dialogue, eval as eval_mod, tools, voice
 
@@ -104,6 +106,19 @@ def _release(sess):
     with _STORE_LOCK:
         sess["busy"] = False
         sess["last_active_ts"] = time.time()
+
+
+def active_session_count():
+    """还没挂断的会话数。
+
+    为什么切场景要关心这个：话术是每轮现读配置的，所以切完之后
+    **正在进行的那通电话下一句就换了套业务**——实测过：开场说"京东客服中心的小采"，
+    切到复购场景后下一句变成"会员礼包 20 元券"，同一通电话里两个业务。
+    演示时现场对比两套场景是这个功能的设计意图，但误点一下就会毁掉正在演示的电话，
+    所以至少要能告诉调用方"现在有 N 通电话在用旧场景"。
+    """
+    with _STORE_LOCK:
+        return sum(1 for v in _SESSIONS.values() if not v.get("closed"))
 
 
 def _auth(session_id, token):
@@ -826,8 +841,39 @@ class Handler(BaseHTTPRequestHandler):
         return self.rfile.read(length)
 
     def _is_loopback(self):
-        """请求是否来自本机。仅用于 /api/sessions 这类运维接口。"""
+        """请求是否**真的**来自本机。仅用于 /api/sessions、/api/scene 这类运维接口。
+
+        ⚠️ 只看 `client_address` 是不够的，这是实测踩出来的：
+        线上是反向代理，后端看到的源地址就是 127.0.0.1。加了这条判断之后，
+        打线上 `/api/sessions` 不带任何凭证仍然返回 200 + 全量会话列表——
+        等于这道门在线上一直是开着的。
+
+        所以改成四道闸门，全过才算本机：
+          ① 托管环境（平台注入 PORT）→ 整个运维接口直接关掉，线上不需要它们；
+          ② 有转发头（X-Forwarded-For / X-Real-IP / Forwarded）→ 前面有人，源地址无意义；
+          ③ Host 不是本机名 → 说明是经域名/隧道访问的，可能是 DNS 重绑定；
+          ④ 最后才看源地址。
+
+        宁可线上把这几个接口关掉（少一个演示点），也不能让它对公网可写。
+        """
+        if os.environ.get("PORT"):
+            return False
+        for h in ("X-Forwarded-For", "X-Real-IP", "Forwarded"):
+            if self.headers.get(h):
+                return False
+        host = (self.headers.get("Host") or "").split(":")[0].strip("[]").lower()
+        if host not in ("", "localhost", "127.0.0.1", "::1"):
+            return False
         return self.client_address[0] in ("127.0.0.1", "::1")
+
+    def _ops_denied(self, what):
+        """运维接口被拒时的统一响应。把"为什么被拒"说清楚，别让人猜。"""
+        detail = "%s只允许本机访问" % what
+        if os.environ.get("PORT"):
+            detail += "；当前服务运行在托管环境（检测到 PORT 环境变量），这类接口已自动关闭"
+        elif self.headers.get("X-Forwarded-For") or self.headers.get("X-Real-IP"):
+            detail += "；检测到反向代理转发头，源地址不可信，故拒绝"
+        self._send_json({"error": "FORBIDDEN", "detail": detail}, 403)
 
     def log_message(self, fmt, *args):
         """压掉默认的逐请求日志，只保留我们自己关心的输出。"""
@@ -860,6 +906,10 @@ class Handler(BaseHTTPRequestHandler):
             # 聚合指标（分位数、计数、成本），不含任何个人信息，保持匿名可读
             self._send_json(events.metrics())
             return
+        if path == "/api/cost":
+            # 当天成本快照与闸门开关状态。给看板和运维脚本用，同样不含个人信息。
+            self._send_json(cost_guard.snapshot())
+            return
         if path == "/api/events":
             sid = (qs.get("session_id") or [""])[0]
             token = (qs.get("token") or [""])[0]
@@ -872,8 +922,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/sessions":
             # 会话列表会暴露别人的 session_id，只允许本机运维查看
             if not self._is_loopback():
-                self._send_json({"error": "FORBIDDEN",
-                                 "detail": "该接口只允许本机访问"}, 403)
+                self._ops_denied("会话列表")
                 return
             self._send_json({"sessions": events.recent_sessions(limit=20)})
             return
@@ -909,6 +958,38 @@ class Handler(BaseHTTPRequestHandler):
                 return
             handle = (sess.get("tts_rest") or {}).pop(tid, None)
             self._send_json({"segments": voice.collect_rest(handle) if handle else []})
+            return
+
+        # ---- 指标看板（M5）----
+        # 只读，不碰在线链路：路由里只做参数整形，聚合逻辑在 dashboard.py。
+        # 单独一个页面而不是改 index.html：index.html 是 1 号的地盘，
+        # 看板是 4 号的交付物，两块分开，谁改谁的不打架。
+        if path in ("/dashboard", "/dashboard.html"):
+            self._send_file(os.path.join(WEB_DIR, "dashboard.html"),
+                            "text/html; charset=utf-8")
+            return
+        if path == "/api/dashboard/summary":
+            days_raw = (qs.get("days") or [""])[0].strip()
+            try:
+                days = int(days_raw) if days_raw else None
+            except ValueError:
+                self._send_json({"error": "BAD_QUERY",
+                                 "detail": "days 必须是整数（不传=全部历史）"}, 400)
+                return
+            if days is not None and days <= 0:
+                days = None
+            try:
+                limit = int((qs.get("limit") or ["10"])[0])
+            except ValueError:
+                limit = 10
+            # 上限 50：逐会话质检要读整通事件，放太大等于让看板把库扫一遍
+            limit = max(1, min(limit, 50))
+            self._send_json(dashboard_mod.summary(days=days, session_limit=limit))
+            return
+        if path == "/api/scenes":
+            # 场景清单：谁都能看，切换才是敏感操作（见 POST /api/scene）
+            self._send_json({"current": config_loader.describe(),
+                             "scenes": config_loader.available_scenes()})
             return
 
         self._send_json({"error": "NOT_FOUND", "path": path}, 404)
@@ -987,6 +1068,40 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(end_call(sid))
             return
 
+        # 运行时切场景（M8 的演示点）：换一套配置，下一轮回复就变。
+        # 只允许本机：切场景会改变所有在线会话的话术，不能让外部随手调。
+        if path == "/api/scene":
+            if not self._is_loopback():
+                self._ops_denied("切换场景")
+                return
+            name = (body.get("name") or "").strip()
+            if not name:
+                self._send_json({"error": "BAD_JSON",
+                                 "detail": "缺少 name（场景名或配置文件路径）"}, 400)
+                return
+            # 先数一遍：切完之后，正在进行的这些电话下一句就会换套业务。
+            # 不拦（演示时现场对比两套场景就是这个功能的用途），但要如实告知。
+            active = active_session_count()
+            try:
+                applied = config_loader.set_scene(name)
+            except FileNotFoundError as e:
+                self._send_json({"error": "NOT_FOUND", "detail": str(e)}, 404)
+                return
+            config_loader.load(force=True)
+            dashboard_mod.invalidate()
+            scene_name = os.path.splitext(os.path.basename(applied))[0]
+            print("[场景] 已切换到 %s（%d 通进行中的电话会受影响）" % (scene_name, active))
+            self._send_json({
+                "ok": True,
+                "name": scene_name,          # 不返回绝对路径，见 config_loader._exposed_path
+                "scene": config_loader.describe(),
+                "active_sessions": active,
+                # 前端可以把 warning 直接显示出来；为空表示没有正在进行的通话
+                "warning": ("有 %d 通电话正在进行，它们的下一句就会用新场景的话术"
+                            % active) if active else "",
+            })
+            return
+
         self._send_json({"error": "NOT_FOUND", "path": path}, 404)
 
     def _handle_turn(self, body):
@@ -995,6 +1110,14 @@ class Handler(BaseHTTPRequestHandler):
         sess, err, code = _auth(sid, body.get("token"))
         if err:
             self._send_json(err, code)
+            return
+
+        # 成本与速率闸门（默认关闭）。关着的时候 allow() 直接返回 True，
+        # 只有 budget.guard_enabled=true 才会真的拦——演示前不动配置就等于没有这一层。
+        # 返回 429 而不是 400：这是"现在不行、等会儿再来"，不是"你请求写错了"。
+        guard_ok, guard_reason, guard_detail = cost_guard.allow(sid)
+        if not guard_ok:
+            self._send_json({"error": guard_reason, "detail": guard_detail}, 429)
             return
 
         # 两条音频来路，二选一：

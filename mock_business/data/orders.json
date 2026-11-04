@@ -1,0 +1,66 @@
+[
+  {
+    "order_id": "O20261101001",
+    "customer_id": "C1001",
+    "amount": 2680.0,
+    "status": "已签收",
+    "product": "智能按摩椅 X3",
+    "created_at": "2026-11-01",
+    "warranty_days": 365
+  },
+  {
+    "order_id": "O20261101002",
+    "customer_id": "C1002",
+    "amount": 399.0,
+    "status": "运输中",
+    "product": "空气炸锅 4L",
+    "created_at": "2026-11-01",
+    "warranty_days": 180
+  },
+  {
+    "order_id": "O20261028003",
+    "customer_id": "C1001",
+    "amount": 158.0,
+    "status": "已签收",
+    "product": "按摩椅专用靠垫",
+    "created_at": "2026-10-28",
+    "warranty_days": 90
+  },
+  {
+    "order_id": "O20261025004",
+    "customer_id": "C1003",
+    "amount": 12600.0,
+    "status": "已签收",
+    "product": "办公人体工学椅 ×20",
+    "created_at": "2026-10-25",
+    "warranty_days": 730
+  },
+  {
+    "order_id": "O20261021005",
+    "customer_id": "C1004",
+    "amount": 899.0,
+    "status": "已签收",
+    "product": "扫地机器人 S1",
+    "created_at": "2026-10-21",
+    "warranty_days": 365
+  },
+  {
+    "order_id": "O20261019006",
+    "customer_id": "C1004",
+    "amount": 129.0,
+    "status": "已签收",
+    "product": "耗材套装",
+    "created_at": "2026-10-19",
+    "warranty_days": 30
+  },
+  {
+    "order_id": "O20261015007",
+    "customer_id": "C1006",
+    "amount": 2199.0,
+    "status": "退货中",
+    "product": "除湿机 D2",
+    "created_at": "2026-10-15",
+    "warranty_days": 365,
+    "note": "客户投诉物流延迟，已发起退货"
+  }
+]
