@@ -1,0 +1,62 @@
+[
+  {
+    "customer_id": "C1001",
+    "name": "张伟",
+    "phone_tail": "8866",
+    "level": "金卡",
+    "city": "北京",
+    "tags": ["延保意向", "老客户"],
+    "registered_at": "2023-04-11",
+    "note": "近一年 3 笔订单，客单价偏高；客服记录里提到过说明书看不懂"
+  },
+  {
+    "customer_id": "C1002",
+    "name": "李娜",
+    "phone_tail": "2143",
+    "level": "普通",
+    "city": "杭州",
+    "tags": ["价格敏感"],
+    "registered_at": "2024-09-02",
+    "note": "曾咨询过退换货政策，话术里避免直接谈价格"
+  },
+  {
+    "customer_id": "C1003",
+    "name": "王强",
+    "phone_tail": "5521",
+    "level": "银卡",
+    "city": "成都",
+    "tags": ["企业采购"],
+    "registered_at": "2022-11-30",
+    "note": "以公司名义采购，回写时需带 order_id 便于对账"
+  },
+  {
+    "customer_id": "C1004",
+    "name": "赵敏",
+    "phone_tail": "7788",
+    "level": "金卡",
+    "city": "上海",
+    "tags": ["高频复购"],
+    "registered_at": "2021-06-18",
+    "note": "复购频次高，适合做权益类外呼的样本"
+  },
+  {
+    "customer_id": "C1005",
+    "name": "陈杰",
+    "phone_tail": "3312",
+    "level": "普通",
+    "city": "武汉",
+    "tags": ["沉默客户"],
+    "registered_at": "2025-02-14",
+    "note": "历史外呼多次未接，用于测试 no_answer 分支"
+  },
+  {
+    "customer_id": "C1006",
+    "name": "刘洋",
+    "phone_tail": "9042",
+    "level": "银卡",
+    "city": "深圳",
+    "tags": ["情绪敏感"],
+    "registered_at": "2023-08-07",
+    "note": "上次投诉过物流，用于测试情绪安抚与禁语拦截"
+  }
+]
