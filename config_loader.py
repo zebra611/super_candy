@@ -113,11 +113,6 @@ def nlg_config():
     return dict(load().get("nlg", {}) or {})
 
 
-def tools_config():
-    """工具数据源参数。默认 mock（写死的假数据），见 docs/17 第 4 节。"""
-    return dict(load().get("tools", {}) or {})
-
-
 def budget_config():
     """成本与容量闸门。字段含义见 config/scene.json 的 budget 段。
 
