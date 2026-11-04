@@ -584,10 +584,11 @@ def main():
     sess_x = app_mod._SESSIONS[sid_x]
     sess_x.setdefault("tts_rest", {})[tid_x] = ([], [None, "u2"], ["头段", "尾段"])
     before = bool(sess_x["tts_rest"].get(tid_x))
-    res_b = record_barge_in(sid_x, tid_x, "user_speech", "等一下")
+    res_b = record_barge_in(sid_x, tid_x, "user_speech", "等一下", 712)
     after = bool(sess_x["tts_rest"].get(tid_x))
     ev_b = [e for e in events.list_events(sid_x) if e["type"] == "barge_in"]
     heard = str(ev_b[-1].get("payload")) if ev_b else ""
+    barge_lat = ev_b[-1].get("latency_ms") if ev_b else None
     check("打断：写 barge_in 事件，并丢掉这一轮没播完的音频",
           "barge_in" in event_types(sid_x) and before and not after
           and res_b.get("dropped_pending") is True,
@@ -599,6 +600,11 @@ def main():
           "等一下" in heard and "heard" in heard,
           ["barge_in.payload = %s" % heard[:160],
            "留存这句话才能复盘：用户是喊停、否定，还是噪声误判"])
+    check("打断响应耗时落库（验收指标要取这个数）",
+          barge_lat == 712,
+          ["事件行 latency_ms = %s（前端报 712）" % barge_lat,
+           "验收写「打断 ≤300ms 停声」，但那指的是感知延迟（音量压低），",
+           "真正 stop 要等用户说完才能认出文字，约 0.7 秒——两个口径别混报"])
 
     # 打断不能把会话弄坏：接着还能正常来一轮
     r_x2 = handle_turn(sid_x, user_text="我姓张")

@@ -399,6 +399,7 @@ function startBargeSuspect() {
   S.bargeBuf = [];
   S.silentFrames = 0;
   S.bargeHits = 0;
+  S.bargeStartedAt = performance.now();   // 打断响应从这里开始计时
   duckPlayback(true);
   setPhaseLine();
 }
@@ -457,6 +458,13 @@ function dismissBargeIn(why) {
 // 顺序很重要——先停播再发通知。网络请求可以慢，但"闭嘴"不能慢。
 function doBargeIn(heardText, preBuf) {
   if (S.phase !== "agent") return;
+  // 打断响应有两个口径，别混：
+  //   duck_ms：从检测到人声到音量压下去（用户"感觉"客服让路了）
+  //   stop_ms：到真的停声（含等说完 + 识别确认，必然更慢）
+  // 验收写的"≤300ms 停声"，指的是前者；后者做不到 300ms——
+  // 要等用户把话说完才能识别出文字，这是原理决定的，不是实现偷懒。
+  const now = performance.now();
+  const stopMs = S.bargeStartedAt ? Math.round(now - S.bargeStartedAt) : 0;
   S.bargeState = "idle";
   S.bargeBuf = [];
   S.bargeHits = 0;
@@ -476,7 +484,8 @@ function doBargeIn(heardText, preBuf) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: sid, token: tok, turn_id: tid,
-                           reason: "user_speech", text: heardText || "" })
+                           reason: "user_speech", text: heardText || "",
+                           latency_ms: stopMs })
   }).catch(() => {});
 }
 

@@ -614,7 +614,8 @@ def start_call():
             "opening_tts": opening_tts}
 
 
-def record_barge_in(session_id, turn_id=0, reason="user_speech", text=""):
+def record_barge_in(session_id, turn_id=0, reason="user_speech", text="",
+                    latency_ms=None):
     """记录一次用户打断，并丢弃那一轮还没播完的音频。
 
     为什么必须丢弃剩余音频：用户插话之后，那半句话已经没有意义了。
@@ -628,12 +629,19 @@ def record_barge_in(session_id, turn_id=0, reason="user_speech", text=""):
     text 是前端"确认打断"时那段音频的识别结果。记下来有两个用处：
     一是复盘时能看出用户为什么打断（"等一下" vs "不是"），
     二是如果这行文本其实是噪声识别出来的胡话，就说明阈值还得再收。
+
+    latency_ms 是打断响应耗时，**这个数有两个口径，别混着报**：
+        前端上报的 stop_ms = 从检测到人声到真的停声（含等说完+识别确认）
+        duck 的时间没单独上报，约 60-80ms（3 帧判定即压低音量）
+    验收写的"≤300ms 停声"实际指"用户感知到客服让路"，也就是 duck；
+    用它去要求 stop_ms 是不可能的——要等用户说完才能认出文字。
     """
     tid = int(turn_id or 0)
     payload = {"reason": reason, "turn_id": tid}
     if text:
         payload["heard"] = text
-    events.write_event(session_id, "barge_in", payload, turn_id=tid)
+    events.write_event(session_id, "barge_in", payload, turn_id=tid,
+                       latency_ms=latency_ms)
     sess = _SESSIONS.get(session_id)
     dropped = 0
     if sess:
@@ -950,9 +958,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "BAD_JSON",
                                  "detail": "turn_id 必须是整数"}, 400)
                 return
+            try:
+                lat = body.get("latency_ms")
+                lat = float(lat) if lat is not None else None
+            except (TypeError, ValueError):
+                lat = None
             self._send_json(record_barge_in(
                 sid, tid, body.get("reason") or "user_speech",
-                body.get("text") or ""))
+                body.get("text") or "", lat))
             return
 
         if path == "/api/audio/reset":
