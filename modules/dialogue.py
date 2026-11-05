@@ -135,17 +135,23 @@ CLARIFY_MAX = 2
 #     内置默认是为了配置没补齐时也能跑（4 号补配置不用改代码）。
 # ---------------------------------------------------------------------------
 FALLBACK_SCENES = {
-    "asr": ("reply_asr",
+    # 键名必须与 config/scene.json 里 fallback 段的**实际键名**逐字一致。
+    # 这里踩过一个坑：原本写成 reply_asr / reply_timeout / reply_business / reply_fail，
+    # 而配置里叫 reply_asr_fail / reply_tool_timeout / reply_business_reject，
+    # 结果只有 tool 和 error 两条真正读了配置，其余四条一直用代码里的兜底句——
+    # 改了配置话术一个字都不变，测试却全绿（因为"不同原因不同话术"是代码里就不同的）。
+    # 新增原因时，先往三个场景包的 fallback 段加键，再来这里登记。
+    "asr": ("reply_asr_fail",
             "不好意思，这边没听清，您再说一遍好吗？"),
     "error": ("reply",
               "抱歉，我这边刚才没处理好，麻烦您再说一遍好吗？"),
-    "timeout": ("reply_timeout",
+    "timeout": ("reply_tool_timeout",
                 "我这边查询有点慢，稍后让专员给您回电说明，可以吗？"),
-    "business": ("reply_business",
+    "business": ("reply_business_reject",
                  "这个情况我这边处理不了，稍后让专员跟您说明，可以吗？"),
     "tool": ("reply_tool",
              "我这边查得有点慢，稍后让专员给您回电说明，可以吗？"),
-    "writeback": ("reply_fail",
+    "writeback": ("reply_writeback",
                   "我这边登记时出了点问题，稍后会有专员联系您确认。感谢您的接听，再见。"),
 }
 _KEY_TO_REASON = dict((v[0], k) for k, v in FALLBACK_SCENES.items())
@@ -759,6 +765,12 @@ MEMORY_TEXT_MAX = 60
 RECALL_MARKS = ("我刚才说", "我刚说", "我之前说", "我说过", "你还记得",
                 "还记得我", "前面说", "刚才提", "我说的是")
 
+# 只命中 RECALL_MARKS 还不够，必须同时有疑问特征才算"在问自己刚才说了什么"。
+# 踩过的坑：M04 用例里用户澄清"我说的是快递"，命中「我说的是」被当成回溯问句，
+# 于是既不复述也不记诉求，整通卡在 NEED——槽位完整率从 83.3% 掉到 81.5%。
+# "我说的是快递"是**陈述澄清**，"我说的是什么来着"才是**回溯提问**，差别就在这几个字。
+RECALL_HINTS = ("什么", "啥", "哪句", "哪一句", "来着", "吗")
+
 
 def _safe_text(text, limit=MEMORY_TEXT_MAX):
     """记忆里存的文本：先删禁语，再截断。
@@ -826,9 +838,15 @@ def memory_brief(session):
 
 
 def _is_recall_question(text):
-    """这句是不是在问"我刚才说了什么"。"""
+    """这句是不是在问"我刚才说了什么"。
+
+    两个条件同时成立才算：命中回溯词 + 有疑问特征。
+    只看回溯词的版本会把"我说的是快递"这种澄清句吃掉（见 RECALL_HINTS 上的说明）。
+    """
     t = text or ""
-    return any(w in t for w in RECALL_MARKS)
+    if not any(w in t for w in RECALL_MARKS):
+        return False
+    return any(h in t for h in RECALL_HINTS)
 
 
 def _recall(session, text):
@@ -841,6 +859,22 @@ def _recall(session, text):
         return None
     facts = (session.get("memory") or {}).get("facts") or {}
     need = facts.get("need")
+    if not need:
+        # 兜底：只有提问、没有陈述的通话，facts.need 永远是空的。
+        # 起因是 NEED 阶段的"提问"分支排在"记录诉求"之前——"包装压坏了，想问怎么处理"
+        # 会整句被当成提问（含"怎么"），需求不落库。实测表现是回溯返回 None，
+        # 落回正常流程后把上一句订单详情原样再念一遍。
+        # 退回最近一条用户原文：回溯的意义是"复述用户说过的话"，
+        # 有没有被归类成诉求，不影响这条记忆的有效性。
+        recent = [r.get("user") for r in
+                  ((session.get("memory") or {}).get("recent") or [])
+                  if (r.get("user") or "").strip()]
+        if recent:
+            need = recent[-1]
+            # 复述别人的原话，即使删过禁语也不带"这个我记着呢"的确认语气——
+            # 那句话暗示"我把它当成您的诉求登记了"，而这条路恰恰没登记。
+            return _reply(session, "您刚才提到的是：%s。这句我记着。" % need,
+                          intent="recall")
     if not need:
         return None
     return _reply(session, "您刚才提到的是：%s。这个我记着呢。" % need, intent="recall")
