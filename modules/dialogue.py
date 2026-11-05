@@ -57,7 +57,10 @@ HANGUP_WORDS = ("挂了", "先挂", "忙着", "没空", "不聊了", "别打了"
 ANGRY_WORDS = ("投诉", "骗子", "烦", "垃圾", "滚", "气死", "恶心", "骚扰")
 
 # 提问信号
-ASK_MARKS = ("吗", "？", "?", "多少", "多久", "怎么", "什么", "能不能", "是不是", "可以吗")
+# "到哪 / 哪了"是物流查询的高频问法（"这单到哪了"），不含它们就会被当成
+# 一条诉求记下来并推进到方案沟通——用户明明在问，客服却在推销。
+ASK_MARKS = ("吗", "？", "?", "多少", "多久", "怎么", "什么", "能不能", "是不是", "可以吗",
+             "到哪", "哪了")
 
 # 要求转人工。**故意不含"投诉"**：投诉是情绪信号（见 ANGRY_WORDS），
 # 要致歉承接后继续解决问题，不能一句"帮您转人工"就把电话挂掉。
@@ -181,6 +184,11 @@ def new_session(session_id):
         "identity_slots": {"tail": "", "name": ""},
         "slot_asks": {"tail": 0, "name": 0},
         "last_asked_slot": "",
+        # 每个槽位被提交过的值（按顺序）。用来判"这是不是改口"——
+        # 当前值查不到就会被清空，拿清空后的值比较会把中间那次改口弄丢。
+        "slot_history": {"tail": [], "name": []},
+        # 改口轨迹：[{slot, from, to, turn}]，同时会进 slots 与回写 payload
+        "corrections": [],
         # 这一轮用户话的识别置信度。由 respond 写入，_reply 读取后落进事件。
         "last_intent_conf": 0.0,
         # 第几版回写。用户改口时递增，配合幂等键让"同一张工单被更新"而不是新开一张。
@@ -258,13 +266,23 @@ def classify(text):
         flags["handoff"] = True
         strong.append(("handoff", CONF_EXACT))
 
-    # 手机尾号：连续 4 位数字
+    # 手机尾号：取**最后一个**孤立的 4 位数字段。
+    #
+    # 为什么是最后一个：改口几乎总是"不对，是XXXX"这个语序，先说的那个是错的。
+    # 旧代码取第一个，于是"尾号1234，不对是4321"会把错的 1234 记下来，
+    # C04 那条用例骂的就是这个。
+    #
+    # 为什么要"孤立"（前后不是数字）：8 位手机号 "12345678" 里也含 4 位数字段，
+    # 不判边界的话会截出 "5678" 当成尾号去核验，属于凭空造数据。
     digits = ""
     for i in range(len(t) - 3):
         seg = t[i:i + 4]
-        if seg.isdigit():
+        if not seg.isdigit():
+            continue
+        prev_ok = (i == 0) or not t[i - 1].isdigit()
+        next_ok = (i + 4 >= len(t)) or not t[i + 4].isdigit()
+        if prev_ok and next_ok:
             digits = seg
-            break
     flags["digits"] = digits
     if digits:
         strong.append(("info", CONF_DIGIT))
@@ -400,6 +418,12 @@ def _do_writeback(session, consent, changed=False):
         changed  是否是改口后的更正（决定用哪句播报话术）
     """
     cfg = config_loader.stage_config("WRITEBACK")
+
+    # 改口轨迹要在覆盖 consent **之前**取：覆盖完就比不出"从什么改成什么"了
+    old_consent = session["slots"].get("consent")
+    if changed and old_consent not in ("", None) and old_consent != consent:
+        _record_correction(session, "consent", old_consent, consent)
+
     session["slots"]["consent"] = consent
 
     version = int(session.get("writeback_version", 0)) + 1
@@ -412,6 +436,11 @@ def _do_writeback(session, consent, changed=False):
     content["writeback_version"] = version
     if session["slots"].get("order"):
         content["order_id"] = session["slots"]["order"].get("order_id")
+    # 改口轨迹跟着工单走：一个工单号从 v1 到 vN，改动过程留在同一个对象里。
+    # 只在真改过口时才加这个字段——没改过的工单，payload 与以前逐字节一致，
+    # 不给（将来的）回写校验器和下游系统添麻烦。
+    if session.get("corrections"):
+        content["corrections"] = list(session["corrections"])
 
     tool_call = {
         "name": "create_ticket",
@@ -570,17 +599,95 @@ def _extract_name(text):
     return ""
 
 
-def _next_identity_slot(session):
+def _record_correction(session, slot, old, new):
+    """记一次改口：哪个槽位、从什么改成什么、第几轮改的。
+
+    为什么要有这条轨迹：赛后如果有人问"用户说改口了，你们真的改了吗"，
+    光看最终 slots 只能看到结果，看不到过程——而"多轮纠错"考的就是过程。
+    轨迹同时进两个地方：
+        ① session["slots"]["corrections"] —— /api/turn 与上报快照里能直接看到
+        ② 回写 payload 的 corrections 字段 —— 工单自己带着改动过程
+
+    不新造事件类型，是因为事件类型被 contracts.EVENT_TYPES 白名单管着
+    （契约是禁改区）。真要做成独立事件，需要队长改契约，已在 PR 里提。
+    """
+    old = "" if old is None else old
+    # 三个跳过条件，每个都对应一类假轨迹：
+    #   old 为空   —— 第一次提交不是"改口"，记了会让每张工单都带一条空记录
+    #   new 为空   —— 清空不是用户的表态
+    #   old == new —— 重复说同一个值不是改口
+    # 另外不能写 `if not new`：consent 的改口值就是 False，
+    # 布尔 False 会被 `not` 判成"没值"，于是"同意→不要"这次改口就丢了。
+    if old in ("", None) or new in ("", None) or old == new:
+        return
+    item = {"slot": slot, "from": old, "to": new, "turn": int(session.get("turn", 0))}
+    session.setdefault("corrections", []).append(item)
+    # 同步进 slots，让"只看最后一轮 slots"的调用方也能看到（/api/turn 就只看这个）
+    session["slots"]["corrections"] = session["corrections"]
+
+
+def _submit_identity_slot(session, slot, value):
+    """提交一个槽位值：记历史、判是否改口、更新当前值。
+
+    判改口用的是"上一个提交过的值"，不是"当前值"——因为查不到就会被清空，
+    拿清空后的值比较，C03（李 → 张 → 张伟）的中间那次改口就丢了。
+    """
+    hist = session.setdefault("slot_history", {}).setdefault(slot, [])
+    old = hist[-1] if hist else ""
+    hist.append(value)
+    _record_correction(session, slot, old, value)
+    session["identity_slots"][slot] = value
+
+
+def _take_identity_slots(session, text, flags):
+    """从这一句里收身份槽位，返回这一轮提交了哪些槽位（列表）。
+
+    返回"提交了哪些"是给调用方决定下一句问什么的：刚报了尾号又核不上，
+    下一句该问姓名；再问尾号等于没听见用户说话。
+    """
+    took = []
+    if flags.get("digits"):
+        _submit_identity_slot(session, "tail", flags["digits"])
+        took.append("tail")
+    name = _extract_name(text)
+    if name:
+        _submit_identity_slot(session, "name", name)
+        took.append("name")
+    return took
+
+
+def _verify_identity(session):
+    """用当前槽位值查客户档案。核上返回 customer，核不上返回 None。
+
+    查不到就**清掉这个值**：不清的话下一轮会拿同一个错值再查一遍，
+    表现就是"用户明明改口了，系统还按旧号核验"。
+    """
+    for slot in ("tail", "name"):
+        val = session["identity_slots"].get(slot)
+        if not val:
+            continue
+        hit = tools.query_customer(val)
+        if hit.get("found"):
+            session["slots"]["identity_confirmed"] = True
+            session["slots"]["customer"] = hit.get("customer")
+            session["slots"]["identity_via"] = slot
+            return hit.get("customer")
+        session["identity_slots"][slot] = ""
+    return None
+
+
+def _next_identity_slot(session, prefer=None):
     """下一句该问哪个槽位。两个都问满了返回 None（该收尾了）。
 
-    排序键是"问得少的优先，其次优先问和上一轮不同的那个"——
+    排序键是"问得少的优先，其次优先问 prefer（没给就取和上一轮不同的那个）"——
     连问两遍同一件事（"您尾号多少" → "您尾号到底多少"）是明确该避免的。
     """
     asks = session.get("slot_asks") or {}
     last = session.get("last_asked_slot") or ""
-    want_other = "name" if last == "tail" else "tail"
+    if not prefer:
+        prefer = "name" if last == "tail" else "tail"
     order = sorted(("tail", "name"),
-                   key=lambda s: (asks.get(s, 0), 0 if s == want_other else 1))
+                   key=lambda s: (asks.get(s, 0), 0 if s == prefer else 1))
     for slot in order:
         if asks.get(slot, 0) < SLOT_ASK_MAX:
             return slot
@@ -603,6 +710,28 @@ def _ask_identity(session, slot, next_stage=None):
                   intent="identity_retry")
 
 
+# 指代词与"具体名词"两张小表（T3 的指代消解）。
+#
+# 只做一件事：判断"这句话除了指代，有没有实际信息"。
+# "就是那个" 只有指代，没有名词 → 不能记成诉求，要追问到底指什么；
+# "你刚说的那个权益" 有名词（权益）→ 是有效诉求，照常处理。
+# 不追求理解"那个"具体指什么——那需要上下文推理，规则层做不准，
+# 做不准的结果就是把一个含糊输入强行解释成一个具体诉求，比不解释更糟。
+REFER_WORDS = ("这个", "那个", "它", "刚才", "刚说", "上面说", "你说的", "之前说")
+CONCRETE_WORDS = ("订单", "保修", "快递", "包装", "物流", "发货", "退款", "售后",
+                  "质量", "权益", "费用", "收费", "钱", "有效期", "多久", "怎么用")
+
+
+def _is_reference_only(text):
+    """这句是不是"只有指代、没有内容"。"""
+    n = _norm(text)
+    if not n or len(n) > 8:
+        return False
+    if any(w in n for w in CONCRETE_WORDS):
+        return False
+    return any(w in n for w in REFER_WORDS)
+
+
 # ---------------------------------------------------------------------------
 # 各阶段的处理器
 # 约定：每个处理器拿 (session, text, flags)，返回 _reply(...) 的结果
@@ -622,35 +751,21 @@ def _stage_greeting(session, text, flags):
     if flags["hangup"]:
         return _finish(session, cfg.get("reply_hangup", "抱歉打扰您了，再见。"), "hangup")
 
-    # 用户主动报了尾号：当场核验，核上就直接跳到需求确认
-    if flags["digits"]:
-        hit = tools.query_customer(flags["digits"])
-        if hit.get("found"):
-            session["slots"]["identity_confirmed"] = True
-            session["slots"]["customer"] = hit.get("customer")
-            session["slots"]["identity_via"] = "tail"
-            identity_cfg = config_loader.stage_config("IDENTITY")
-            return _reply(session, _soothe(identity_cfg.get("reply_ok", ""), flags),
-                          next_stage="NEED", intent="identity_ok")
-        # 报了但核不上：直接改问姓名——刚报过的尾号再问一遍
-        # 是最没信息量的一句（用户会以为你没听见他说话）。
-        # 不把这个无效值存进槽位，是为了避免下一轮拿它再查一次。
-        return _ask_identity(session, "name", next_stage="IDENTITY")
-
-    # 主动报了姓名，同样当场核验。理由和报尾号一样：说了不能等于白说。
-    name = _extract_name(text)
-    if name:
-        hit = tools.query_customer(name)
-        if hit.get("found"):
-            session["slots"]["identity_confirmed"] = True
-            session["slots"]["customer"] = hit.get("customer")
-            session["slots"]["identity_via"] = "name"
-            session["identity_slots"]["name"] = name
-            identity_cfg = config_loader.stage_config("IDENTITY")
-            return _reply(session, _soothe(identity_cfg.get("reply_ok", ""), flags),
-                          next_stage="NEED", intent="identity_ok")
-        # 报了名字但库里没有：记下来，改问尾号（尾号唯一性更高）
-        session["identity_slots"]["name"] = name
+    # 用户这一句里报了尾号或姓名：当场核验，核上就直接跳到需求确认。
+    # 为什么要收下再查而不是各写一段：两条路径的"报了但核不上"处理是反的
+    # （报尾号要改问姓名、报姓名要改问尾号），写成两段必然有一边记不住。
+    took = _take_identity_slots(session, text, flags)
+    if _verify_identity(session):
+        identity_cfg = config_loader.stage_config("IDENTITY")
+        return _reply(session, _soothe(identity_cfg.get("reply_ok", ""), flags),
+                      next_stage="NEED", intent="identity_ok")
+    if took:
+        # 报了但对不上：问另一个槽位。刚报过的那个再问一遍是最没信息量的一句
+        # （用户会以为你没听见他说话）。
+        other = "name" if "tail" in took else "tail"
+        slot = _next_identity_slot(session, prefer=other) or _next_identity_slot(session)
+        if slot:
+            return _ask_identity(session, slot, next_stage="IDENTITY")
 
     # 其它任何应答都往下走：核对身份。这里就用"问尾号"那一句——
     # 它是这一环的第一个问题，走同一套话术与记账，别让第一问和后续追问
@@ -661,9 +776,6 @@ def _stage_greeting(session, text, flags):
 
 def _stage_identity(session, text, flags):
     """IDENTITY：核对身份。这是全流程的安全关口。
-
-    规则：拿到 4 位尾号或一个能查到的姓名 → 通过；否则允许重试一次，
-    两次都不行就结束（真实实现应转人工，当前用 DONE + end_reason 标记）。
 
     规则：
         1. 从这一句里尽量收槽位（尾号、姓名），收到就先拿去查；
@@ -684,32 +796,13 @@ def _stage_identity(session, text, flags):
     if flags["no"] or flags["hangup"]:
         return _finish(session, config_loader.stage_config("GREETING").get("reply_hangup", ""), "refused_identity")
 
-    slots = session["identity_slots"]
+    # ① 收槽位（后说的覆盖先说的，并记一条改口轨迹）
+    _take_identity_slots(session, text, flags)
 
-    # ① 先收槽位。用户这一轮说了什么就记什么，后说的覆盖先说的
-    #    （"不对，我姓张"要能盖掉前面的"我姓李"——写进一个值就不可能叠加）。
-    if flags["digits"]:
-        slots["tail"] = flags["digits"]
-    name = _extract_name(text)
-    if name:
-        slots["name"] = name
-
-    # ② 拿收到的值去查。尾号优先：它唯一性比姓名高（同名太常见）。
-    for slot in ("tail", "name"):
-        val = slots.get(slot)
-        if not val:
-            continue
-        hit = tools.query_customer(val)
-        if hit.get("found"):
-            session["slots"]["identity_confirmed"] = True
-            session["slots"]["customer"] = hit.get("customer")
-            # 留痕：这一通是靠什么核上的，事后能查（也方便看槽位完整率）
-            session["slots"]["identity_via"] = slot
-            return _reply(session, _soothe(cfg.get("reply_ok", ""), flags),
-                          next_stage="NEED", intent="identity_ok")
-        # 查不到：把这个值清掉。不清的话下一轮会拿同一个错值再查一遍，
-        # 表现为"用户明明改口了，系统还按旧号核验"。
-        session["identity_slots"][slot] = ""
+    # ② 查。尾号优先：它唯一性比姓名高（同名太常见）
+    if _verify_identity(session):
+        return _reply(session, _soothe(cfg.get("reply_ok", ""), flags),
+                      next_stage="NEED", intent="identity_ok")
 
     session["identity_attempts"] += 1
 
@@ -745,6 +838,11 @@ def _stage_need(session, text, flags):
 
     # 含糊/敷衍 → 追问，不把"说了等于没说"记成诉求
     if flags.get("vague"):
+        return _clarify(session, "NEED")
+
+    # 只有指代没有内容（"就是那个""你刚说的那个"）→ 同样不能记成诉求。
+    # 记下去的结果是工单的 need 字段写着一个"那个"，回写出去等于没写。
+    if _is_reference_only(text):
         return _clarify(session, "NEED")
 
     # 用户在提问 → 用查到的订单信息回答，仍停在本阶段
