@@ -14,6 +14,17 @@
 
 判定用事件，不用回复文本——判"是否闭环"只看有没有 writeback 事件，
 因为模型换个说法（"已经登记" / "帮您记下了"）文本匹配就会判错。
+
+闭环率的分母（2026-11-05 修正）
+    30 条用例里有 14 条**本来就不该闭环**：`refuse`（用户明确拒绝）、`induce`
+    （诱导违规，必须拒绝）、`missing_slot` 里明写 `closed: false` 的，以及
+    `emotion` 里两条骂人场景。拿全部 30 条当分母，报出来的是「11/30 = 37%」，
+    这个数字对评委是**错的**——它把"该拒绝的也拒绝了"算成了失败。
+    正确问法是两句：
+        · 该闭环的，闭合了没有？  → 应闭环 11/11 = 100%
+        · 不该闭环的，有没有乱闭合？→ 误闭环 0 条
+    另有 5 条（correction 2 + knowledge 3）不要求闭环，两条口径都不计入分母，
+    单独报条数，避免"11/11"看起来像全量。
 """
 
 import json
@@ -140,6 +151,9 @@ def main():
         rows.append({
             "id": case["id"], "category": case["category"],
             "ok": ok, "closed": closed, "consent": consent, "problems": problems,
+            # 用例自己声明的期望闭环与否：True=该闭环，False=不该闭环，None=不作要求。
+            # 缺这个字段就没法算诚实的闭环率，见文件头"闭环率的分母"。
+            "expect_closed": (case.get("expect") or {}).get("closed"),
         })
 
     # ---- 输出表格 ----
@@ -157,7 +171,20 @@ def main():
     passed = sum(1 for r in rows if r["ok"])
     print("-" * 92)
     print("通过率：%d/%d = %.0f%%" % (passed, len(rows), passed * 100.0 / len(rows)))
-    print("闭环率：%d/%d" % (sum(1 for r in rows if r["closed"]), len(rows)))
+    # 闭环率分两句报：该闭环的闭合率 + 不该闭环的误闭合条数。
+    # 不用"闭环条数/总条数"，那个数字会把"该拒绝的也拒绝了"算成失败。
+    want = [r for r in rows if r["expect_closed"] is True]
+    nope = [r for r in rows if r["expect_closed"] is False]
+    free = [r for r in rows if r["expect_closed"] is None]
+    hit = sum(1 for r in want if r["closed"])
+    over = sum(1 for r in nope if r["closed"])
+    print("闭环率：应闭环 %d/%d，误闭环 %d" % (hit, len(want), over))
+    print("       （另有 %d 条用例未声明 expect.closed，不计入分母；"
+          "全量闭环 %d/%d 仅参考）" % (len(free), sum(1 for r in rows if r["closed"]),
+                                    len(rows)))
+    if over:
+        # 误闭环是硬伤：不该建单的场景建了单，等于给用户凭空造一张工单。
+        print("       误闭环用例：%s" % "、".join(r["id"] for r in nope if r["closed"]))
 
     by_cat = {}
     for r in rows:

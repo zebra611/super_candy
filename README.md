@@ -14,6 +14,14 @@
 
 > 最新在最上面。每条改动都附当时的回归结果，断言数即验收标准。
 
+**2026-11-05 · 闭环率口径修正（R7）**：跑批原来把「闭环条数 / 全部 30 条」当闭环率报出去
+（37%），可分母里含 **14 条本来就不该闭环**的用例——`refuse` 4、`induce` 4、
+`missing_slot` 4、`emotion` 骂人 2。这些场景闭合了才是事故，却全被算成失败。
+改为两句报：**应闭环 11/11，误闭环 0**；另有 5 条不要求闭环（correction 2 + knowledge 3）
+单独报条数，不掺进分母。`verify` 新增证据 17 守住这条口径（86→88 条）；
+`docs/06` 补分母说明，`docs/20`（答辩材料）、`docs/22`（看板 K3）、`docs/23`（项目3 基线）同步。
+回归：`verify.py` **88/88**、`run_eval.py` 30/30（应闭环 11/11、误闭环 0）、`--check-all` 3/3。
+
 **2026-11-05 · 任务2 合入（R1 契约 + 场景包修复 + 2A 七项 + T17）**：三块一起进 main——
 `#3` R1 阶段0（writeback 改结构定义、tools 配置、kb 落位）、`#13` 场景包同步到 v2 契约
 （切场景不再静默退化，新增 `--check-all` 巡检未生效的场景包）、`#12` 2A 七项
@@ -24,7 +32,7 @@
 （"包装压坏了，想问怎么处理"被整句当提问，需求不落库，回溯只能念上一句）、
 **21 条知识条目的假溯源编号**（编造的章节号改成"占位:"前缀 + placeholder 标记）。
 另把 7 个自测脚本挂进 `verify` 总闸门（原来 2500 行新代码零覆盖）。
-回归：`verify.py` **86/86**、`run_eval.py` 30/30（闭环 11/30）、`--check-all` 3/3。
+回归：`verify.py` **86/86**、`run_eval.py` 30/30（闭环 11/30，当时口径）、`--check-all` 3/3。
 
 **2026-11-05 · S2 WebSocket 双向通道（角色 1：张博涵部分）**：`/ws/call` 落地——
 音频帧从 HTTP 分片改为 WS 直推、TTS 分段"就绪即推"（不再轮询 `/api/tts/rest`）、
@@ -345,7 +353,7 @@ wsproto.py         RFC 6455 编解码（纯标准库，可离线断言）
 web/index.html      AudioWorklet 采集、五态状态机、能量 VAD、三段式打断、双口径面板
 web/dashboard.html  指标看板：KPI、时延双口径、事件分布、质检汇总、库体检
 mock_business/      独立 Mock 业务服务：查客户 / 查订单 / 建工单（幂等）
-scripts/            verify（86 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
+scripts/            verify（88 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
                     task2_metrics（四项指标出数）/ check_realtime_asr（流式识别连通验证）
                     test_*（七项能力的离线自测，已作为证据 16 挂进 verify）
                     clean_events · archive_events（库体检/归档）/ check_key / 试听 / 录音验识别
@@ -361,7 +369,7 @@ reviews/            PR 审核记录
 ## 七、怎么验证我改的东西没坏
 
 ```bash
-python scripts/verify.py       # 86 条行为断言，用临时库，不污染 data/
+python scripts/verify.py       # 88 条行为断言，用临时库，不污染 data/
 python scripts/run_eval.py     # 30 条用例跑批（离线，不调云端）
 python config_loader.py        # 配置结构与占位符校验（一秒出结果）
 python scripts/archive_events.py --stats   # 事件库体检：体积、行数、索引

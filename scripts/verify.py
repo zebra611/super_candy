@@ -1207,6 +1207,31 @@ def main():
 
     print()
     print("=" * 74)
+    print("证据 17：闭环率的分母只算“应闭环”的用例（R7）")
+    print("=" * 74)
+    # 起因：跑批曾把「闭环条数 / 全部 30 条」直接当闭环率报出去（37%）。
+    # 分母里含 14 条本来就不该闭环的（拒绝/诱导/缺槽位），等于把“该拒绝的也拒绝了”
+    # 算成失败。评委问“闭环率多少”，报 37% 是错的，真实答案是 100%——但必须换口径。
+    _ev = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "run_eval.py"), "N01", "R01"],
+        cwd=ROOT, capture_output=True, text=True, timeout=180)
+    _ev_txt = (_ev.stdout or "") + (_ev.stderr or "")
+    check("跑批按“应闭环/误闭环”两句报（N01 该闭环、R01 该不闭环 → 1/1、0）",
+          "闭环率：应闭环 1/1，误闭环 0" in _ev_txt,
+          [l.strip() for l in _ev_txt.splitlines() if "闭环率" in l]
+          or ["输出里没有闭环率行（改坏了？）"])
+
+    _seed = json.load(open(os.path.join(ROOT, "eval", "seed_cases.json"),
+                           encoding="utf-8"))
+    _seed = _seed if isinstance(_seed, list) else (_seed.get("cases") or [])
+    _kinds = set((c.get("expect") or {}).get("closed") for c in _seed)
+    check("用例集里三态齐全：该闭环 / 不该闭环 / 不作要求（只剩一态，分母就没意义了）",
+          _kinds == {True, False, None},
+          ["expect.closed 取值：%s" % sorted(str(k) for k in _kinds),
+           "共 %d 条用例" % len(_seed)])
+
+    print()
+    print("=" * 74)
     total = len(results)
     passed = sum(1 for _, ok in results if ok)
     print("结果：%d/%d 通过" % (passed, total))
