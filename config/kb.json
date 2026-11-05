@@ -1,0 +1,35 @@
+{
+  "_comment": "知识条目库：一条一个问题。answer 是标准答法，source_id 必须能追到业务资料包的具体章节。",
+  "_schema": "id / patterns / answer / source_id / valid_from / valid_to / forbidden 全部必填，valid_* 可为 null",
+  "items": [
+    {
+      "id": "KB-FEE-001",
+      "patterns": [
+        "收费",
+        "花钱",
+        "要钱",
+        "付费",
+        "免费"
+      ],
+      "answer": "这份权益是免费的，不需要您额外付费。",
+      "source_id": "业务资料包/权益说明/第2节",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": []
+    },
+    {
+      "id": "KB-VALIDITY-001",
+      "patterns": [
+        "多久",
+        "有效期",
+        "多长时间",
+        "期限"
+      ],
+      "answer": "权益有效期是十二个月，从登记当天开始算。",
+      "source_id": "业务资料包/权益说明/第3节",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": []
+    }
+  ]
+}
