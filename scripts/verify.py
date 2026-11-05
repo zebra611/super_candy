@@ -1177,7 +1177,7 @@ def main():
     print("=" * 74)
 
     for _suite in ("test_kb", "test_fallback", "test_intent", "test_slots",
-                   "test_correction", "test_memory", "test_nlg"):
+                   "test_correction", "test_memory", "test_nlg", "test_tools"):
         _path = os.path.join(ROOT, "scripts", _suite + ".py")
         _run = subprocess.run([sys.executable, _path], cwd=ROOT,
                               capture_output=True, text=True, timeout=180)
