@@ -17,7 +17,8 @@
 后续待补充：
     - S2 已落地：/ws/call 双向通道（音频帧上行 + TTS 分段主动下发 + barge_in
       协议事件 + 可选流式识别字幕），见 ws_channel.py 与 modules/realtime_asr.py；
-    - TODO 加简单的访问日志与错误日志文件（当前只打到控制台）。
+    - 访问日志与错误日志落文件（data/logs/app.log，5MB × 5 轮转），见 setup_logging()。
+      控制台仍只打启动信息，避免刷屏；事后查问题看日志文件。
 """
 
 import base64
@@ -32,6 +33,8 @@ import time
 import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from logging.handlers import RotatingFileHandler
+import logging
 from urllib.parse import urlparse, parse_qs
 
 import config_loader
@@ -45,6 +48,65 @@ from modules import wsproto
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(_ROOT, "web")
+
+# ---------------------------------------------------------------------------
+# 日志（H3）：访问日志 + 错误日志落文件，带轮转
+# ---------------------------------------------------------------------------
+#
+# 为什么必须落文件：演示现场崩了，控制台窗口一关就什么都不剩；而"哪一轮出问题"
+# 只有日志里有。所以访问日志记 method/path/状态码/耗时，错误日志记 error 事件的
+# session_id + turn_id + code——照着这两个字段能直接回到事件流里那一条。
+#
+# 为什么自己 RotatingFileHandler 而不是 logrotate：纯标准库、零依赖是项目底线，
+# 而 Windows 上没有 logrotate。5MB × 5 = 最多 25MB，演示机不会撑爆。
+
+_LOG_DIR = os.path.join(_ROOT, "data", "logs")
+_LOG_PATH = os.path.join(_LOG_DIR, "app.log")
+
+_access_log = logging.getLogger("super_candy.access")
+_app_log = logging.getLogger("super_candy.app")
+_logging_ready = False
+
+
+def setup_logging(path=None, level=logging.INFO, max_bytes=5 * 1024 * 1024, backups=5):
+    """把访问日志与错误日志挂到文件上。重复调用不会重复挂 handler。
+
+    参数 path 可覆盖文件位置（测试用临时文件），默认 data/logs/app.log。
+    返回 (access_logger, app_logger)。
+    """
+    global _logging_ready
+    if _logging_ready:
+        return _access_log, _app_log
+
+    target = path or _LOG_PATH
+    try:
+        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+        handler = RotatingFileHandler(target, maxBytes=max_bytes,
+                                      backupCount=backups, encoding="utf-8")
+    except OSError as e:
+        # 日志目录建不出来不该让服务起不来——宁可退回控制台
+        print("[日志] 无法创建日志文件 %s：%s（退回控制台输出）" % (target, e))
+        handler = logging.StreamHandler()
+
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)-5s %(message)s", "%Y-%m-%d %H:%M:%S"))
+    for lg in (_access_log, _app_log):
+        lg.setLevel(level)
+        lg.propagate = False
+        lg.addHandler(handler)
+    _logging_ready = True
+    return _access_log, _app_log
+
+
+def log_turn_error(session_id, turn_id, code, detail=""):
+    """记一条错误日志，字段与事件流对齐，能直接对回去。
+
+    为什么不只依赖 events 表：事件表是给质检和看板用的，要查"刚才那一轮为什么
+    没回写"时，人第一时间看的是日志文件，而不是去 sqlite 里 select。
+    """
+    _app_log.warning("turn_error session=%s turn=%s code=%s %s",
+                     session_id, turn_id, code, str(detail)[:300])
+
 
 # 单次上传音频的大小上限（字节）。防止误传大文件把内存打爆。
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
@@ -410,6 +472,8 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
         events.write_event(session_id, "error",
                            {"code": "BUDGET_" + forced.upper(), "stage": sess["stage"]},
                            turn_id=turn_id)
+        log_turn_error(session_id, turn_id, "BUDGET_" + forced.upper(),
+                       "stage=%s" % sess["stage"])
         source = "budget"
         agent_out = dialogue.forced_end(sess, forced)
     else:
@@ -450,6 +514,7 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
                 events.write_event(session_id, "error",
                                    {"code": "ASR_FAILED", "detail": str(asr_out["error"])[:200],
                                     "provider": provider}, turn_id=turn_id)
+                log_turn_error(session_id, turn_id, "ASR_FAILED", asr_out["error"])
             # 有音频但一个字都没识别出来 = 用户按了说话却没出声（或识别失败）。
             # 这不是"用户说了一句空话"，必须按沉默处理，
             # 否则会把空字符串当成有效输入推进状态机——那是缺陷 3 的老路。
@@ -484,6 +549,7 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
             events.write_event(session_id, "error",
                                {"code": "DIALOGUE_FAILED", "detail": str(exc)[:200],
                                 "stage": sess["stage"]}, turn_id=turn_id)
+            log_turn_error(session_id, turn_id, "DIALOGUE_FAILED", exc)
             agent_out = dialogue.safe_fallback(sess)
         llm_ms = round((time.time() - t_llm) * 1000, 2)
 
@@ -501,6 +567,7 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
                 events.write_event(session_id, "error",
                                    {"code": "TOOL_FAILED", "detail": str(exc)[:200],
                                     "tool": tc.get("name")}, turn_id=turn_id)
+                log_turn_error(session_id, turn_id, "TOOL_FAILED", exc)
                 tool_result = {"error": "TOOL_FAILED", "_ms": 0.0}
 
             events.write_event(session_id, "tool_result", tool_result,
@@ -886,6 +953,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send_json(self, obj, code=200):
         """统一的 JSON 响应。中文不转义，方便直接看。"""
+        # 4xx/5xx 落错误日志：接口报错是"演示时突然不能用"最常见的形态，
+        # 控制台又不打请求日志，不写文件就等于没发生过。
+        if code >= 400:
+            _app_log.warning("%s %s -> %d %s",
+                             getattr(self, "command", "-"),
+                             (self.path or "").split("?")[0], code,
+                             json.dumps(obj, ensure_ascii=False)[:240])
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -971,6 +1045,17 @@ class Handler(BaseHTTPRequestHandler):
         """压掉默认的逐请求日志，只保留我们自己关心的输出。"""
         pass
 
+    def log_request(self, code="-", size="-"):
+        """访问日志：方法、路径、状态码、耗时（毫秒）。
+
+        **必须去掉查询串**：`/api/events?session_id=..&token=..` 里的 token
+        一旦落盘，日志就成了泄露源。所以只记 path 部分。
+        """
+        t0 = getattr(self, "_t0", None)
+        ms = (time.perf_counter() - t0) * 1000.0 if t0 else 0.0
+        _access_log.info("%s %s -> %s %.1fms", getattr(self, "command", "-"),
+                         (self.path or "").split("?")[0], code, ms)
+
     # ---- S2：WebSocket 升级与下行 ----
 
     def _handle_ws(self):
@@ -1022,6 +1107,7 @@ class Handler(BaseHTTPRequestHandler):
     # ---- 路由 ----
 
     def do_GET(self):
+        self._t0 = time.perf_counter()
         parsed = urlparse(self.path)
         path = parsed.path
         qs = parse_qs(parsed.query)
@@ -1139,6 +1225,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"error": "NOT_FOUND", "path": path}, 404)
 
     def do_POST(self):
+        self._t0 = time.perf_counter()
         path = urlparse(self.path).path
 
         # 音频分片走二进制体，必须在解析 JSON 之前分流，否则会被判成 BAD_JSON
@@ -1382,6 +1469,7 @@ def main():
     不想自动打开就设 NO_BROWSER=1。
     """
     events.init_db()
+    setup_logging()
     port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", "8000"))
     deployed = "PORT" in os.environ
     host = os.environ.get("HOST") or ("0.0.0.0" if deployed else "127.0.0.1")
@@ -1394,6 +1482,7 @@ def main():
     print("  监听：%s:%d" % (host, port))
     print("  本地地址：%s" % url)
     print("  事件库：%s" % events.DB_PATH)
+    print("  日志：  %s（5MB × 5 轮转）" % _LOG_PATH)
     print("  首字门槛：%d ms（口径 T4−T0，由浏览器上报）" % contracts.LATENCY_GATE_MS)
     print("  停止：Ctrl+C")
 

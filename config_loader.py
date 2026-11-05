@@ -88,6 +88,46 @@ def scene_path():
     return _resolve_path()
 
 
+def _scene_files():
+    """config/scenes/ 下每个场景的 (id, 绝对路径)。**内部用**，不对外吐。
+
+    为什么不复用 available_scenes()：那个函数返回的 path 是"相对项目根"的
+    展示用字符串，在别的目录下 open() 会失败。对外展示与内部读取要分开——
+    混用就会出现"在仓库根跑得好好的、换目录就报文件不存在"（H1）。
+    """
+    out = []
+    if not os.path.isdir(SCENES_DIR):
+        return out
+    for fn in sorted(os.listdir(SCENES_DIR)):
+        if fn.endswith(".json"):
+            out.append((fn[:-5], os.path.join(SCENES_DIR, fn)))
+    return out
+
+
+def _locate_scene(name_or_path):
+    """把"场景名 / 相对路径 / 绝对路径"统一解析成存在的绝对路径，找不到返回 None。
+
+    解析顺序：
+        1. 绝对路径且存在 → 直接用
+        2. 相对路径按**当前工作目录**试一次（用户显式 `APP_CONFIG=./x.json` 的直觉）
+        3. 相对路径按**项目根**再试一次（`config/scene.json` 这种写法 99% 指项目根）
+        4. 当作场景名，补成 config/scenes/<name>.json
+    第 2、3 步顺序不能反：显式给了 cwd 下的文件，就该优先尊重它。
+    """
+    if not name_or_path:
+        return None
+    cand = str(name_or_path)
+    if os.path.isabs(cand):
+        return os.path.abspath(cand) if os.path.exists(cand) else None
+    for base in (os.getcwd(), _ROOT):
+        full = os.path.normpath(os.path.join(base, cand))
+        if os.path.exists(full):
+            return full
+    name = cand if cand.endswith(".json") else cand + ".json"
+    full = os.path.join(SCENES_DIR, name)
+    return full if os.path.exists(full) else None
+
+
 def set_scene(name_or_path):
     """运行时切换场景。传场景名（retail_recall）或配置文件路径都行。
 
@@ -97,13 +137,8 @@ def set_scene(name_or_path):
     返回：实际生效的路径。文件不存在抛 FileNotFoundError（切错了要当场知道）。
     """
     global _active_path, _cache
-    candidate = name_or_path
-    if not os.path.isabs(candidate) and not os.path.exists(candidate):
-        cand = os.path.join(SCENES_DIR, candidate
-                            if candidate.endswith(".json") else candidate + ".json")
-        if os.path.exists(cand):
-            candidate = cand
-    if not os.path.exists(candidate):
+    candidate = _locate_scene(name_or_path)
+    if not candidate:
         raise FileNotFoundError("场景文件不存在：%s" % name_or_path)
     _active_path = os.path.abspath(candidate)
     _cache = None
@@ -120,13 +155,8 @@ def available_scenes():
     不是绝对路径：这个结果会直接吐给浏览器，绝对路径会暴露开发机目录结构。
     """
     out = []
-    if not os.path.isdir(SCENES_DIR):
-        return out
-    for fn in sorted(os.listdir(SCENES_DIR)):
-        if not fn.endswith(".json"):
-            continue
-        path = os.path.join(SCENES_DIR, fn)
-        item = {"id": fn[:-5], "path": _exposed_path(path),
+    for sid, path in _scene_files():
+        item = {"id": sid, "path": _exposed_path(path),
                 "scene_name": "", "agent_name": ""}
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -627,8 +657,8 @@ def validate_all():
     targets = []
     if os.path.exists(CONFIG_PATH):
         targets.append(("main", CONFIG_PATH))
-    for item in available_scenes():
-        targets.append((item["id"], item["path"]))
+    for sid, path in _scene_files():
+        targets.append((sid, path))
 
     rows = []
     for label, path in targets:
