@@ -47,9 +47,9 @@
   },
   "nlg": {
     "provider": "template",
-    "model": "qwen-turbo",
+    "model": "qwen-flash",
     "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    "timeout_ms": 400,
+    "timeout_ms": 600,
     "max_chars": 45,
     "temperature": 0.3,
     "_why": "provider=template 表示不改写，直接用 config 里的骨架话术。默认必须关着：队友 clone 下来没密钥也要能跑，自检和跑批也不能每跑一次调 30 次模型。",
@@ -69,9 +69,14 @@
     "reply_orchestrator_error": "抱歉，系统刚刚卡了一下，我们再试一次好吗？",
     "reply_tool_timeout": "我这边查得有点慢，稍后让专员给您回电说明，可以吗？",
     "reply_business_reject": "这个情况我这边处理不了，我帮您转给专员跟进，可以吗？",
-    "reply_handoff": "好的，我帮您转接人工坐席，请稍等。",
-    "reply_tool": "我这边查得有点慢，稍后让专员给您回电说明，可以吗？",
-    "_comment": "四类兜底 + 转人工各一句，互不相同；reply_tool 与 reply_tool_timeout 文案相同，是刻意保留的向后兼容（documents 与旧代码可能引用，删了会 KeyError）。"
+    "reply_handoff": "好的，我把您的情况记录下来，稍后会有专员跟您联系，感谢您的接听，再见。",
+    "reply_tool": "这个信息我这边暂时查不到，稍后让专员核实了再跟您说，可以吗？",
+    "reply_unclear_need": "不好意思，我这边没太听清。您方便再说一下主要想了解什么吗？",
+    "reply_unclear_need_2": "可能信号不太好。您是想了解产品使用，还是售后这方面的问题呢？",
+    "reply_unclear_offer": "我这边可能没讲清楚。您是想让我再讲一遍这个方案，还是有别的顾虑？",
+    "reply_unclear_offer_2": "那我确认一下您的意思：您现在是同意，还是暂时不需要？简单回我一句就行。",
+    "reply_writeback": "我这边登记时出了点问题，稍后会有专员联系您确认。感谢您的接听，再见。",
+    "_comment": "五类兜底（含回写失败）+ 转人工各一句，互不相同；reply_tool 是「查不到」、reply_tool_timeout 是「查得慢」——两条必须不同，否则按原因细分就是空话。"
   },
   "budget": {
     "max_turns": 40,
@@ -108,6 +113,10 @@
       "reply_retry": "没关系，那方便说一下您的姓名吗？我核对一下。",
       "reply_ok": "核对上了，感谢配合。您上次在我们这儿有一笔订单，想跟您确认下使用体验，现在方便吗？",
       "reply_fail": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+      "reply_ask_tail": "好的，为了核对身份，方便说一下您手机号的尾号吗？就是后四位。",
+      "reply_ask_tail_2": "那我换个方式核对：您手机号的最后四位是多少？说数字就行。",
+      "reply_ask_name": "没关系，那方便说一下您的姓名吗？我核对一下。",
+      "reply_ask_name_2": "您怎么称呼？说个姓也可以，我这边核对一下。",
       "must_say": [
         "核对身份"
       ],

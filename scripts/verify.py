@@ -46,7 +46,7 @@ from app import (_acquire, _audio_state, _auth, _has_interrupt_content,  # noqa:
                  _release, end_call, handle_turn, ingest_audio_chunk,
                  probe_speech, record_barge_in,
                  report_client_metric, start_call)
-from modules import dialogue, eval as eval_mod, nlg, tools, voice  # noqa: E402
+from modules import dialogue, eval as eval_mod, kb, nlg, tools, voice  # noqa: E402
 
 # 自检默认不真的调云端合成：既慢又要花钱，还会让"没有密钥的队友"跑不过。
 # TTS 的真实请求构造与失败回落，下面用本地假接口单独测（见证据 9 之后那段）。
@@ -1167,6 +1167,44 @@ def main():
           ["validate() 报：%s" % next((x for x in _nodef_probs if "缺 default" in x), "无"),
            "摊平对比：缺 default 后少了 %s" % (_lost or "无")])
 
+    # ---- 证据 16：任务2 七项能力的自测脚本 + 3 条直接断言 ----
+    # 起因：七项能力（W1/W2/W3/W4/W5/W6/W7/T17）带来 7 个自测脚本、2500+ 行新代码，
+    # 但 verify 里一条断言都没有——改坏 dialogue.py，verify 照样全绿。
+    # 这里把 7 个脚本挂进总闸门，再补 3 条"最容易悄悄坏掉"的直接断言。
+    print()
+    print("=" * 74)
+    print("证据 16：任务2 七项能力的自测脚本全部通过")
+    print("=" * 74)
+
+    for _suite in ("test_kb", "test_fallback", "test_intent", "test_slots",
+                   "test_correction", "test_memory", "test_nlg"):
+        _path = os.path.join(ROOT, "scripts", _suite + ".py")
+        _run = subprocess.run([sys.executable, _path], cwd=ROOT,
+                              capture_output=True, text=True, timeout=180)
+        _out = ((_run.stdout or "") + (_run.stderr or "")).strip().splitlines()
+        _last = _out[-1][:88] if _out else "(无输出)"
+        check("%s.py 通过（失败时这个总闸门会红）" % _suite, _run.returncode == 0,
+              ["退出码 %d；末行：%s" % (_run.returncode, _last)])
+
+    # 三条直接断言：都是"看起来对、其实配置没生效"的典型，子测试里容易被绕过。
+    _hit = kb.load().match("多久能上门")
+    check("知识库短词抢占已被更长的词压住（问上门时长不会答成权益有效期）",
+          (_hit or {}).get("id") == "KB-ONSITE-001",
+          ["match('多久能上门') -> %s / 命中词 %s"
+           % ((_hit or {}).get("id"), (_hit or {}).get("matched"))])
+
+    _mem = dialogue.memory_brief({"memory": {
+        "facts": {"need": "包装压坏了"},
+        "recent": [{"user": "包装压坏了", "stage": "NEED", "intent": "need"}]}})
+    check("记忆摘要能带出诉求（回溯与措辞层都依赖它）",
+          "包装压坏了" in _mem, ["memory_brief -> %r" % _mem])
+
+    _fb = dict((r, dialogue.fallback_for(r))
+               for r in ("asr", "timeout", "business", "tool", "writeback"))
+    check("五类兜底话术互不相同（按原因细分不是同一句话换个键名）",
+          len(set(_fb.values())) == 5,
+          ["%s -> %s" % (k, v[:24]) for k, v in _fb.items()])
+
     print()
     print("=" * 74)
     total = len(results)
@@ -1180,9 +1218,10 @@ def main():
     print("            采集分帧上传、静音闸门、墙钟闸门、断连/429 重试、合成失败回落、")
     print("            长句切段只等首段、前端能量 VAD 自动提交、")
     print("            三段式打断（疑似压低音量→探针识别→认出文字才停）、LLM 改写接缝、")
-    print("            S2 WebSocket 双向通道（音频帧上行 + TTS 分段主动下发 + barge_in 协议事件）。")
+    print("            S2 WebSocket 双向通道（音频帧上行 + TTS 分段主动下发 + barge_in 协议事件）、")
+    print("            任务2 七项（知识库检索/兜底细分/置信度分级/槽位追问/改口/记忆/T17 指标）。")
     print("  仍然是占位的：语义级合规、模拟用户跑批、说话人分离（环境人声会被当用户）、")
-    print("            LLM 措辞（nlg._rewrite 还没实现）、")
+    print("            nlg 改写默认关闭（provider=template；开启后受账号配额与\"期限表述\"规则影响）、")
     print("            流式识别默认关闭（asr.realtime=true 才启用，需真密钥验证连通）。")
     return 0
 

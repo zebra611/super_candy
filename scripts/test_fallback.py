@@ -43,8 +43,8 @@ class FallbackTextTest(unittest.TestCase):
         self.assertEqual(dialogue.fallback_for("error"), dialogue.fallback_for("不存在的原因"))
 
     def test_key_mapping(self):
-        self.assertEqual("reply_asr", dialogue.fallback_key("asr"))
-        self.assertEqual("reply_fail", dialogue.fallback_key("writeback"))
+        self.assertEqual("reply_asr_fail", dialogue.fallback_key("asr"))
+        self.assertEqual("reply_writeback", dialogue.fallback_key("writeback"))
         self.assertEqual("reply", dialogue.fallback_key("error"))
         # 未知原因也必须有键，不能抛 KeyError
         self.assertEqual("reply", dialogue.fallback_key("xxx"))
@@ -56,16 +56,19 @@ class FallbackTextTest(unittest.TestCase):
         self.assertEqual(want, dialogue.fallback_for("writeback"))
 
     def test_config_overrides_default(self):
-        """配置里写了的，必须盖过内置默认——这是 4 号改话术的唯一入口。"""
-        want = config_loader.fallback_text("reply_timeout")
-        if not want:
-            self.skipTest("当前配置没写 fallback.reply_timeout，跳过覆盖测试")
+        """配置里写了的，必须盖过内置默认——这是 4 号改话术的唯一入口。
+
+        这条以前会 skip：它查的是 fallback.reply_timeout，而配置里叫
+        reply_tool_timeout（键名对不上，等于没验）。现在两边对齐，必须真跑。
+        """
+        want = config_loader.fallback_text("reply_tool_timeout")
+        self.assertTrue(want, "配置里没有 fallback.reply_tool_timeout")
         self.assertEqual(want, dialogue.fallback_for("timeout"))
 
     def test_legacy_fallback_text(self):
-        """app.py:525 仍在调 fallback_text('reply_fail')，不能失效。"""
+        """app.py 回写失败那条仍按"键"取话术，键名必须一致。"""
         self.assertEqual(dialogue.fallback_for("writeback"),
-                         dialogue.fallback_text("reply_fail"))
+                         dialogue.fallback_text("reply_writeback"))
         # 不认识的键返回空串而不是抛异常：调用方要能判断"没配"
         self.assertEqual("", dialogue.fallback_text("一个不存在的键"))
 

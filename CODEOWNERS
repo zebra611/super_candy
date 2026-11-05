@@ -23,8 +23,9 @@
 # ===== 对话大脑与工具（2A 佟欣 / 2B 潘柏亦）=====
 /modules/dialogue.py   @tongxin-txtxtx @zebra611
 /modules/nlg.py        @tongxin-txtxtx @zebra611
-# 知识库引擎归 2A；条目内容 config/kb.json 落在 /config/ 下，由那条规则兜（4 号 + 队长）。
-# 这里不单独写 /config/kb.json：CODEOWNERS 是"最后匹配生效"，写在 /config/ 之前会被它覆盖，写了等于没写。
+# 知识库引擎归 2A。条目内容（config/kb*.json）也归 2A——她写条目、4 号管场景包结构。
+# 条目的 owner 规则必须写在 /config/ 那条**之后**：CODEOWNERS 最后匹配生效，
+# 写在前面的会被 /config/ 覆盖，等于没写（这个坑踩过一次）。
 /modules/kb.py         @tongxin-txtxtx @zebra611
 /modules/tools.py      @Peter13856981023 @zebra611
 /modules/adapters/     @Peter13856981023 @zebra611
@@ -36,6 +37,9 @@
 
 # ===== 工程平台与交付（4 号 黄睿哲）=====
 /config/               @yingbaoyue @zebra611
+# 知识条目内容例外：由 2A 维护。必须写在上一行之后才会生效（最后匹配优先）。
+/config/kb.json        @tongxin-txtxtx @zebra611
+/config/kb_retail_recall.json @tongxin-txtxtx @zebra611
 /mock_business/        @yingbaoyue @zebra611
 /scripts/clean_events.py @yingbaoyue @zebra611
 /cost_guard.py         @yingbaoyue @zebra611

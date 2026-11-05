@@ -522,7 +522,7 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
     # 因为回写那一轮所处的阶段是 CONFIRM/OFFER，不是 WRITEBACK。
     tc = agent_out.get("tool_call") or {}
     if tc.get("name") == "create_ticket" and not (tool_result or {}).get("ticket_id"):
-        agent_out["reply_text"] = dialogue.fallback_text("reply_fail")
+        agent_out["reply_text"] = dialogue.fallback_text("reply_writeback")
     guard = dialogue.compliance_guard(agent_out["reply_text"])
     reply_text = guard["text"]
 
