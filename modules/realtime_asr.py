@@ -41,12 +41,11 @@ import uuid
 import config_loader
 from modules import wsproto
 
-_HOST = "dashscope.aliyuncs.com"
-_PATH = "/api-ws/v1/inference"
+_DEFAULT_ENDPOINT = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
 
 # 喂给云端的最小片长。太小（每帧 20ms 就发）会产生海量小包，
 # 太大（整轮再发）就失去流式意义。100ms 是官方示例的量级。
-_FEED_CHUNK_MS = 100
+_FEED_CHUNK_BYTES = 3200        # 16kHz × 16bit = 每毫秒 32 字节 → 100ms 一片
 
 
 class RealtimeAsr:
@@ -61,9 +60,12 @@ class RealtimeAsr:
         self._started = False
         self.dead = False
         self._last_error = ""
+        # 已收走的最大句子号：旧句子的迟到结果一律忽略——
+        # paraformer 会反复推同一句（text 越来越长），收走之后再来的是过期重放
+        self._max_sid = 0
+        self._min_sid = 1          # 句子号从 1 起；收走之前不拦任何句子
         # 喂音频的节流缓冲
         self._pending = bytearray()
-        self._pending_ms = 0
 
     # ------------------------------------------------------------------
     # 建连
@@ -76,11 +78,12 @@ class RealtimeAsr:
         key = config_loader.secret("dashscope_api_key")
         if not key:
             raise RuntimeError("未配置 dashscope_api_key")
-        model = (config_loader.asr_config().get("realtime_model")
-                 or "paraformer-realtime-v2")
+        cfg = config_loader.asr_config()
+        model = cfg.get("realtime_model") or "paraformer-realtime-v2"
+        host, path = _endpoint_parts(cfg.get("realtime_endpoint"))
 
-        raw = socket.create_connection((_HOST, 443), timeout=timeout)
-        sock = ssl.create_default_context().wrap_socket(raw, server_hostname=_HOST)
+        raw = socket.create_connection((host, 443), timeout=timeout)
+        sock = ssl.create_default_context().wrap_socket(raw, server_hostname=host)
         sock.settimeout(timeout)
         # 客户端帧必须带掩码（RFC 6455），encode_frame 的 mask=True 就是干这个的
         handshake = (
@@ -91,7 +94,7 @@ class RealtimeAsr:
             "Sec-WebSocket-Key: %s\r\n"
             "Sec-WebSocket-Version: 13\r\n"
             "Authorization: bearer %s\r\n"
-            "\r\n" % (_PATH, _HOST, wsproto_handshake_key(), key)
+            "\r\n" % (path, host, wsproto_handshake_key(), key)
         )
         sock.sendall(handshake.encode("ascii"))
         status, headers = _read_handshake_response(sock)
@@ -99,15 +102,20 @@ class RealtimeAsr:
             sock.close()
             raise RuntimeError("实时识别握手被拒：HTTP %d" % status)
         accept = headers.get("sec-websocket-accept", "")
-        # 校验应答键：服务器算错（或中间设备劫持）时在这里暴露，而不是之后出怪事
-        if accept != wsproto.accept_key(_client_key_sent):
+        # 校验应答键：必须对"实际发出去的 base64 Key"算，而不是原始字符串——
+        # 服务端按 RFC 对收到的 Key 做 SHA1，我们发的是 base64 编码后的值。
+        # 校验错对象会把自己人拦在门外，还以为是网络问题。
+        if accept != wsproto.accept_key(wsproto_handshake_key()):
             sock.close()
             raise RuntimeError("实时识别握手应答键不匹配")
 
-        task_id = uuid.uuid4().hex
+        task_id = str(uuid.uuid4())
+        # streaming 必须是 "duplex"（官方文档原文，三条指令都一样）。
+        # 旧 NLS 协议的 "out"/"in" 在这里会得到一个诡异的 NO_VALID_AUDIO_ERROR：
+        # task-started 照样回，但音频全被当作不存在——错得一点都不响。
         run_task = {
             "header": {"action": "run-task", "task_id": task_id,
-                       "streaming": "out"},
+                       "streaming": "duplex"},
             "payload": {
                 "task_group": "audio", "task": "asr",
                 "function": "recognition", "model": model,
@@ -136,24 +144,24 @@ class RealtimeAsr:
     # ------------------------------------------------------------------
 
     def feed(self, pcm):
-        """攒够 ~100ms 才发一片。识别坏了就丢，不能让识别拖住通话。"""
+        """喂一帧音频：攒够 ~100ms 后作为**二进制 WebSocket 帧**发出。
+
+        协议里只有 run-task 和 finish-task 两个文本事件，音频不是 JSON——
+        官方文档（paraformer-client-events）明确只有两个客户端事件，
+        task-started 之后音频走二进制帧。曾经按旧 NLS 协议发 base64
+        的 continue-task，服务端不报错但把音频全当不存在
+        （NO_VALID_AUDIO_ERROR），错得一点都不响，排查了一整轮。
+        """
         if self.dead:
             return
         with self._lock:
             self._pending.extend(pcm)
-            self._pending_ms += len(pcm) * 1000 // (
-                32000)          # 16kHz × 2 字节 = 每毫秒 32 字节
-            if self._pending_ms < _FEED_CHUNK_MS:
+            if len(self._pending) < _FEED_CHUNK_BYTES:
                 return
             chunk = bytes(self._pending)
             self._pending = bytearray()
-            self._pending_ms = 0
-        msg = {"header": {"action": "continue-task", "task_id": self._task_id,
-                          "streaming": "in"},
-               "payload": {"input": {"speech":
-                                     base64.b64encode(chunk).decode("ascii")}}}
         try:
-            _send_json(self._sock, msg)
+            self._sock.sendall(wsproto.encode_frame(wsproto.OP_BIN, chunk, mask=True))
         except Exception as exc:
             self.dead = True
             self._last_error = str(exc)[:120]
@@ -167,32 +175,48 @@ class RealtimeAsr:
             return text
 
     def finish_and_collect(self, timeout=1.5):
-        """等本段说完的整句。不结束任务（整通一个任务），只等结果落袋。"""
+        """收走本段的话：优先整句，等不到就取当前半句。
+
+        为什么会等不到整句：paraformer 靠 VAD 判静音来闭合句子，用户说完
+        立刻收 turn 时，最后一句往往还开着。此时半句已接近完整，直接采用；
+        空手而归会让这一轮"明明听见了却装没听见"，比识别差一个字更糟。
+        收走后按句子号划界：旧句子的迟到重放（含它们的整句闭合事件）
+        全部忽略，否则残留句会混进下一轮的话里。"""
         deadline = time.time() + timeout
+        boundary = 0
         while time.time() < deadline and not self.dead:
             with self._lock:
                 if self._finals:
                     break
+                boundary = max(boundary, self._max_sid)
             time.sleep(0.03)
         with self._lock:
             text = "".join(self._finals)
             self._finals = []
+            if not text:
+                text = self._partials
+            self._partials = ""
+            # 划界：这里之后，比 boundary 老的句子（含它们的 final 闭合）
+            # 都是本轮已收走内容的过期重放。
+            self._max_sid = max(self._max_sid, boundary)
+            self._min_sid = self._max_sid + 1
             return text
 
     def restart(self):
-        """丢弃已攒未取的结果（打断后调用）。任务连接保持不动。"""
+        """丢弃已攒未取的结果（打断后调用）。任务连接保持不动，
+        但句子号划界前移：被打断那句话的任何后续结果都不再要。"""
         with self._lock:
             self._finals = []
             self._partials = ""
             self._pending = bytearray()
-            self._pending_ms = 0
+            self._min_sid = self._max_sid + 1
 
     def close(self):
         """礼貌收尾：发 finish-task 再关 socket。失败不打扰任何人。"""
         try:
             _send_json(self._sock, {
                 "header": {"action": "finish-task", "task_id": self._task_id,
-                           "streaming": "in"},
+                           "streaming": "duplex"},
                 "payload": {"input": {}}})
         except Exception:
             pass
@@ -208,7 +232,8 @@ class RealtimeAsr:
 
     def _reader_loop(self):
         """死循环收服务端事件。所有异常都以"标记死亡"收场——
-        识别挂了通话还得继续，绝不能让这个线程把进程带崩。"""
+        识别挂了通话还得继续，绝不能让这个线程把进程带崩。
+        但死因必须留在 _last_error 里：静默死亡 = 排查一整晚。"""
         try:
             reader = wsproto.Reader(self._sock, max_payload=4 * 1024 * 1024)
             while True:
@@ -231,28 +256,46 @@ class RealtimeAsr:
                         self._last_error = json.dumps(msg, ensure_ascii=False)[:200]
                 # task-finished：服务端主动收尾，之后不会再有结果
         except Exception:
+            import traceback
             with self._lock:
                 self.dead = True
+                self._last_error = traceback.format_exc(limit=4)[-300:]
 
     def _on_result(self, msg):
         sentence = ((msg.get("payload") or {}).get("output") or {}).get("sentence")
         if not sentence:
             return
+        sid = int(sentence.get("sentence_id") or 0)
         text = (sentence.get("text") or "").strip()
-        if not text:
-            return
-        # end_time 存在 = 这句已经说完（final）；否则是半句（partial）
         with self._lock:
-            if sentence.get("end_time") is not None:
-                self._finals.append(text)
-                self._partials = ""          # 整句落袋，半句自然作废
-            else:
+            if sid < self._min_sid:
+                return                 # 过期重放：内容已在本轮收走
+            if sid > self._max_sid:
+                self._max_sid = sid
+            # 整句的标记是 sentence_end=true，不是 end_time——end_time 在整句时
+            # 也会给值，但那是巧合不是契约；sentence_end 是文档明写的语义。
+            if sentence.get("sentence_end"):
+                if text:
+                    self._finals.append(text)
+                self._partials = ""    # 整句落袋，半句自然作废
+            elif text:
                 self._partials = text
 
 
 # ---------------------------------------------------------------------------
 # 握手辅助
 # ---------------------------------------------------------------------------
+
+def _endpoint_parts(url):
+    """把 wss://host[:port]/path 拆成 (host, path)。不引 urllib.parse 之外
+    的东西；端口只有非 443 才会出现在 Host 头里。"""
+    from urllib.parse import urlparse
+    u = urlparse(url or _DEFAULT_ENDPOINT)
+    host = u.hostname or "dashscope.aliyuncs.com"
+    if u.port and u.port != 443:
+        host = "%s:%d" % (host, u.port)
+    return host, (u.path or "/api-ws/v1/inference")
+
 
 _client_key_sent = "candy-realtime-handshake-key"
 
