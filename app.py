@@ -530,6 +530,9 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
                        {"text": reply_text, "stage": agent_out["stage"],
                         "next_stage": agent_out["next_stage"],
                         "intent": agent_out.get("intent", "unknown"),
+                        # 意图置信度：0~1。默认 0.0 而不是 1.0——老代码路径
+                        # （开场白、空输入）本来就没有置信度，写 1.0 会造出假数据。
+                        "intent_conf": agent_out.get("intent_conf", 0.0),
                         "source": source,
                         "blocked": guard["blocked"], "hits": guard["hits"],
                         "replaced": guard["replaced"]},
@@ -577,6 +580,7 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
         "stage": agent_out["stage"],
         "next_stage": agent_out["next_stage"],
         "intent": agent_out.get("intent", "unknown"),
+        "intent_conf": agent_out.get("intent_conf", 0.0),
         "tool_result": tool_result,
         "closed": sess["closed"],
         "slots": dict(sess["slots"]),
@@ -625,6 +629,9 @@ def start_call():
     events.write_event(session_id, "agent_reply",
                        {"text": opening, "stage": "GREETING", "next_stage": "GREETING",
                         "intent": "opening", "source": "opening",
+                        # 开场白不是对用户输入的识别，置信度记 0。给个占位值而不是
+                        # 留空，是为了让"按 intent_conf 聚合"的代码不用到处判 None。
+                        "intent_conf": 0.0,
                         "blocked": guard["blocked"], "hits": guard["hits"],
                         "replaced": guard["replaced"]},
                        turn_id=0)
