@@ -31,7 +31,12 @@ from modules import kb, nlg, tools
 # ---------------------------------------------------------------------------
 
 # 精确匹配的肯定回答（避免"不好意思"里的"好"被误判成同意）
-YES_EXACT = {"是", "对", "好", "行", "可以", "嗯", "嗯嗯", "是的", "对的",
+#
+# 注意这里**没有"嗯"**。以前"嗯"/"嗯嗯"在表里，CONFIRM 阶段用户"嗯"一声就被判成
+# 明确同意并直接回写——docs/02 写的是"含糊回答不算同意"，这条规则和文档是反的。
+# 单个语气词既可能是同意，也可能只是"我还在听"，证据强度不够，所以挪进 PURE_FILLER，
+# 由置信度分级判为含糊，走二次追问（见下方的 classify）。
+YES_EXACT = {"是", "对", "好", "行", "可以", "是的", "对的",
              "好的", "行吧", "是啊", "同意", "要", "需要", "没问题"}
 # 包含即算肯定（长句里带这些词）
 YES_CONTAINS = ("同意", "没问题", "那就办", "办吧", "可以可以", "就这样", "要了", "需要",
@@ -57,6 +62,58 @@ ASK_MARKS = ("吗", "？", "?", "多少", "多久", "怎么", "什么", "能不�
 # 评测用例 R04 就是"我要投诉你们"之后还要走完五个环节，含投诉会直接判负。
 HANDOFF_WORDS = ("转人工", "找人工", "人工客服", "转客服", "转接人工",
                  "要真人", "真人接", "叫你们领导", "找你们领导")
+
+# 弱肯定：嘴上答应了，但明显没拿定主意。
+# "好吧""应该可以""差不多"这类回答如果直接当同意回写，业务侧会拿着一份
+# 用户并不认账的工单去做后续动作，退订/投诉就从这儿来。所以给它们低于阈值的
+# 置信度，在 CONFIRM 阶段触发一次追问，而不是直接落库。
+WEAK_YES = ("好吧", "应该可以", "应该行", "应该吧", "差不多", "大概", "可能吧", "看看吧")
+
+# ---------------------------------------------------------------------------
+# 含糊输入的词表（T1：意图置信度分级）
+#
+# 为什么需要这一层：关键词规则只有"命中/没命中"两态，而真实通话里大量输入是
+# 半句话——"你说是就是吧""嗯……""随便"。旧规则对这两种输入的处理都是错的，
+# 但错法不同：
+#     命中一个"嗯"  → 被当成同意，回写一个用户从没给过的结论（错在证据太弱）
+#     一条都没命中  → 被当成诉求，直接推方案（错在用户会觉得客服在自说自话）
+# 所以这里把"证据强度"显式化成 0~1 的置信度，再由各阶段决定低分要不要追问。
+# ---------------------------------------------------------------------------
+
+# 纯语气词：整句只有这些的时候，唯一的语义信息是"我还在听"，不是"我同意"。
+PURE_FILLER = {"嗯", "嗯嗯", "啊", "哦", "喔", "呃", "额", "唉", "诶", "嘿", "哈"}
+
+# 敷衍/含糊：说了等于没说。用**包含**匹配而不是整句匹配，
+# 因为真实说法是"我也不太清楚""这个我还真不知道"，整句永远对不上。
+VAGUE_MARKS = ("不太清楚", "不清楚", "不知道", "不晓得", "不记得", "说不好",
+               "说不准", "不确定", "看情况", "考虑一下", "再想想", "让我想想",
+               "你看着办", "你说了算", "你说是就是", "你定吧", "随便",
+               "再说吧", "到时候再说", "无所谓", "都行", "都可以",
+               # 连说两遍的"行吧行吧""行了行了"是不耐烦，不是同意。
+               # 注意不能把单个"行吧"加进来——它在 YES_EXACT 里，是明确同意；
+               # 也不能把"行吧"加进 YES_CONTAINS，否则"不行吧"会被判成同意。
+               "行吧行吧", "行了行了", "知道了", "好知道了")
+
+# 证据强度（0~1）。数字不是拍脑袋来的，是按"这句话能不能单独支撑一次回写"定的：
+#   EXACT     整句就是一个标准答案，"同意"两个字不会再有别的解释
+#   DIGIT     报出 4 位尾号，是强身份证据（但可能是别人的号，所以不给满分）
+#   CONTAINS  长句里顺带带了标准答案，"行吧那你办吧"里"办吧"也可能是抱怨
+#   WEAK      弱肯定，"好吧"经常等于"我不想争了"
+#   VAGUE     命中含糊词表
+#   NONE      一条规则都没命中：可能是自由表达（"我要退款"），也可能是没听清
+CONF_EXACT = 0.95
+CONF_DIGIT = 0.93
+CONF_CONTAINS = 0.75
+CONF_WEAK = 0.50
+CONF_VAGUE = 0.25
+CONF_NONE = 0.45
+
+# 低于这条线的不算"明确同意"。只用在 CONFIRM——别处用它会误伤自由表达：
+# "我要退款"一条规则都不命中（conf 0.45），但它显然该继续推进，不该被追问。
+YES_MIN_CONF = 0.60
+
+# 同一个阶段连续追问几次就换人。对应 T2"同一槽位连续追问 ≤2 次，第 3 次转兜底"。
+CLARIFY_MAX = 2
 
 # ---------------------------------------------------------------------------
 # 兜底话术：按"为什么会兜底"分开
@@ -112,13 +169,18 @@ def new_session(session_id):
         "identity_attempts": 0,
         "confirm_asks": 0,
         "empty_count": 0,
+        # 因为"没听懂"追问了几次。到 CLARIFY_MAX 就转人工，不能让用户
+        # 对着一句听不懂的话被反复问同一句（E04 那条用例骂的就是这个）。
+        "clarify_asks": 0,
+        # 这一轮用户话的识别置信度。由 respond 写入，_reply 读取后落进事件。
+        "last_intent_conf": 0.0,
         # 第几版回写。用户改口时递增，配合幂等键让"同一张工单被更新"而不是新开一张。
         "writeback_version": 0,
     }
 
 
-def _classify(text):
-    """把一句话拆成若干意图标记（规则版）。
+def classify(text):
+    """把一句话拆成若干意图标记 + 一个置信度（规则版）。
 
     返回 dict：
         deny   否认本人 / 打错电话
@@ -129,24 +191,63 @@ def _classify(text):
         ask    在提问
         handoff 要求转人工（不含"投诉"——投诉要承接后继续处理）
         digits 文本里的 4 位数字（手机尾号）
+        vague  这一句是含糊/敷衍（说了等于没说）
+        conf   这次识别的置信度 0~1，写进事件供统计与回归
+        evidence  置信度来自哪条证据（exact/contains/digit/weak/vague/none）
 
-    _todo 角色 2 接入大模型后，这里改成"模型输出的 intent + 置信度"，
-    并保留本函数作为低置信度时的兜底。
+    _todo 角色 2 接入大模型后，模型输出 intent + 置信度，本函数退化为
+    低置信度时的兜底——这也是为什么它先把 conf 这一个数字先说清，
+    接模型时只需要换"从哪来"，不用改"怎么用"。
     """
     t = (text or "").strip()
+    n = _norm(t)
     flags = {"deny": False, "hangup": False, "angry": False,
              "no": False, "yes": False, "ask": False, "handoff": False,
-             "digits": ""}
+             "digits": "", "vague": False, "conf": CONF_NONE, "evidence": "none"}
 
-    flags["deny"] = any(w in t for w in DENY_PERSON)
-    flags["hangup"] = any(w in t for w in HANGUP_WORDS)
-    flags["angry"] = any(w in t for w in ANGRY_WORDS)
-    flags["no"] = t in NO_EXACT or any(w in t for w in NO_CONTAINS)
+    # 命中的强证据先都收起来，最后取最强的那个当置信度。
+    # 为什么不"先命中先返回"：一句话经常同时有多种信号
+    # （"你们天天打电话烦不烦"= 带情绪 + 在质问），
+    # 主意图由 _intent_name 按固定优先级取，置信度取最强证据，
+    # 两件事分开算，统计口径才稳定。
+    strong = []
+
+    if any(w in t for w in DENY_PERSON):
+        flags["deny"] = True
+        strong.append(("deny", CONF_EXACT))
+    if any(w in t for w in HANGUP_WORDS):
+        flags["hangup"] = True
+        strong.append(("hangup", CONF_CONTAINS))
+    if any(w in t for w in ANGRY_WORDS):
+        flags["angry"] = True
+        strong.append(("angry", CONF_CONTAINS))
+
+    if n in NO_EXACT:
+        flags["no"] = True
+        strong.append(("no", CONF_EXACT))
+    elif any(w in t for w in NO_CONTAINS):
+        flags["no"] = True
+        strong.append(("no", CONF_CONTAINS))
+
     # 关键：命中否定词时不再判肯定，"不要"里含"要"就是典型坑
-    flags["yes"] = (not flags["no"]) and (t in YES_EXACT or any(w in t for w in YES_CONTAINS))
-    flags["ask"] = any(m in t for m in ASK_MARKS)
+    if not flags["no"]:
+        if n in YES_EXACT:
+            flags["yes"] = True
+            strong.append(("yes", CONF_EXACT))
+        elif any(w in t for w in WEAK_YES):
+            flags["yes"] = True
+            strong.append(("yes", CONF_WEAK))
+        elif any(w in t for w in YES_CONTAINS):
+            flags["yes"] = True
+            strong.append(("yes", CONF_CONTAINS))
+
+    if any(m in t for m in ASK_MARKS):
+        flags["ask"] = True
+        strong.append(("ask", CONF_CONTAINS))
     # 同理："我不需要转人工"里的"转人工"是拒绝，不是要求
-    flags["handoff"] = (not flags["no"]) and any(w in t for w in HANDOFF_WORDS)
+    if not flags["no"] and any(w in t for w in HANDOFF_WORDS):
+        flags["handoff"] = True
+        strong.append(("handoff", CONF_EXACT))
 
     # 手机尾号：连续 4 位数字
     digits = ""
@@ -156,19 +257,59 @@ def _classify(text):
             digits = seg
             break
     flags["digits"] = digits
+    if digits:
+        strong.append(("info", CONF_DIGIT))
+
+    # 含糊判定：只有在**没有任何强证据**时才算含糊。
+    # 为什么加这个前提——"我不知道这个保修多久"里带"不知道"，但它同时是提问
+    # （"多久"）。按含糊处理会把一个真问题追问掉，用户会以为客服在打太极。
+    # 反过来，"你说是就是吧"一条强规则都不命中，才是真正需要追问的那一类。
+    if n in PURE_FILLER or (not strong and any(w in t for w in VAGUE_MARKS)):
+        flags["vague"] = True
+        flags["conf"] = CONF_VAGUE
+        flags["evidence"] = "filler" if n in PURE_FILLER else "vague"
+    elif strong:
+        flags["conf"] = max(c for _, c in strong)
+        flags["evidence"] = max(strong, key=lambda kv: kv[1])[0]
+    else:
+        flags["conf"] = CONF_NONE
+        flags["evidence"] = "none"
+
     return flags
 
 
+def _norm(text):
+    """去掉首尾空白与标点，只用于"整句是否等于某个标准答案"这类比对。
+
+    "嗯……" 和 "嗯" 必须判成同一件事，否则用户拖个长音就从"含糊"变成"没命中"。
+    """
+    return (text or "").strip().strip(" \t\r\n。，、！？!?,.~～…—-；;：:")
+
+
+def _classify(text):
+    """classify 的旧名字。其余模块与历史测试仍按这个名字调用，保留以免打断它们。"""
+    return classify(text)
+
+
 def _intent_name(flags):
-    """把标记压成一个便于统计的意图名（写进事件的 intent 字段）。"""
-    for k in ("deny", "hangup", "angry", "no", "yes", "ask"):
+    """把标记压成一个便于统计的意图名（写进事件的 intent 字段）。
+
+    优先级顺序是**刻意**的：否认 > 挂断 > 转人工 > 带情绪 > 拒绝 > 肯定 > 提问。
+    越靠前的越"改变流程走向"，一句话同时命中多种时必须听最硬的那个
+    （"不需要，别打了"是拒绝不是挂断，因为拒绝要回写留痕）。
+    新增的 vague 排在最后：它只在没有别的信号时成立，理论上不会和上面冲突，
+    放在这里是防止将来加词表时把含糊误盖掉一个明确意图。
+    """
+    for k in ("deny", "hangup", "handoff", "angry", "no", "yes", "ask"):
         if flags.get(k):
             return k
-    return "info" if flags.get("digits") else "unknown"
+    if flags.get("digits"):
+        return "info"
+    return "unclear" if flags.get("vague") else "unknown"
 
 
 def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
-           end_reason="", stage_label=None, kb_hit=None):
+           end_reason="", stage_label=None, kb_hit=None, intent_conf=None):
     """统一的返回构造：把回复、阶段迁移、事件字段一次组装好。
 
     注意 stage 是"这一轮所处的阶段"（回复归属），next_stage 才是迁移后的阶段。
@@ -195,12 +336,18 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
 
     if next_stage:
         session["stage"] = next_stage
+    # 置信度默认取"这一轮用户话的识别置信度"（respond 里算好放进 session）。
+    # 放在 session 里而不是每个调用点都传参，是因为出口太多（回写、兜底、转人工、
+    # 收尾都要走 _reply），漏传一处就会出现"某些事件的 conf 永远是 0"这种假数据。
+    if intent_conf is None:
+        intent_conf = session.get("last_intent_conf", 0.0)
     out = {
         "reply_text": text,
         "stage": stage_now,
         "next_stage": session["stage"],
         "tool_call": tool_call,
         "intent": intent,
+        "intent_conf": round(float(intent_conf or 0.0), 2),
     }
     if end_reason:
         out["end_reason"] = end_reason
@@ -283,6 +430,52 @@ def _do_writeback(session, consent, changed=False):
     text = cfg.get(key) or cfg.get("reply", "已为您登记。")
     return _reply(session, text, next_stage="DONE", tool_call=tool_call,
                   intent=intent, stage_label="WRITEBACK")
+
+
+# ---------------------------------------------------------------------------
+# 含糊时的澄清追问
+#
+# 触发条件是"这一轮没拿到有效信息"（flags["vague"]），处理方式是**追问一句、
+# 阶段不动**。为什么不能推进：外呼里推进一格等于"这一环过了"，后面所有判断都
+# 建立在它的结论上。用户说"你说是就是吧"，如果直接推到方案沟通，等于替他确认了
+# 一个他从没确认的前提——业务侧最后拿到的那张工单，用户是不认账的。
+#
+# 但追问不能无限次：同一句话问三遍比挂断更伤体验（E04 用例骂的就是这个）。
+# 所以到 CLARIFY_MAX 就转人工，把判断权交回给人。
+#
+# 话术取值顺序：`fallback.<键>` → 内置默认。这样 4 号往配置里补一句就能改口吻，
+# 不用等代码；配置没补时也有话说，不会因为缺一个键就抛 KeyError。
+# ---------------------------------------------------------------------------
+CLARIFY_TEXTS = {
+    "NEED": (
+        ("reply_unclear_need",
+         "不好意思，我这边没太听清。您方便再说一下主要想了解什么吗？"),
+        ("reply_unclear_need_2",
+         "可能信号不太好。您是想了解产品使用，还是售后这方面的问题呢？"),
+    ),
+    "OFFER": (
+        ("reply_unclear_offer",
+         "我这边可能没讲清楚。您是想让我再讲一遍这个方案，还是有别的顾虑？"),
+        ("reply_unclear_offer_2",
+         "那我确认一下您的意思：您现在是同意，还是暂时不需要？简单回我一句就行。"),
+    ),
+}
+
+
+def _clarify(session, stage):
+    """含糊输入的统一出口：第一次换句话问，第二次换更窄的选择题，第三次转人工。
+
+    返回 _reply / _finish 的结果（**不推进阶段**，除了转人工那一支）。
+    """
+    session["clarify_asks"] = int(session.get("clarify_asks", 0)) + 1
+    if session["clarify_asks"] > CLARIFY_MAX:
+        # 问过 CLARIFY_MAX 次还听不懂，就别再问了。注意这里不回写：
+        # 用户从没表达过业务结论，写一张"未同意"的工单是替用户做决定。
+        return _handoff(session, "handoff_unclear")
+
+    pairs = CLARIFY_TEXTS.get(stage) or CLARIFY_TEXTS["NEED"]
+    key, default = pairs[min(session["clarify_asks"], len(pairs)) - 1]
+    return _reply(session, config_loader.fallback_text(key, default), intent="unclear")
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +570,10 @@ def _stage_need(session, text, flags):
         session["slots"]["need"] = "用户表示不需要"
         return _do_writeback(session, False)
 
+    # 含糊/敷衍 → 追问，不把"说了等于没说"记成诉求
+    if flags.get("vague"):
+        return _clarify(session, "NEED")
+
     # 用户在提问 → 用查到的订单信息回答，仍停在本阶段
     if flags["ask"]:
         order = session["slots"].get("order")
@@ -405,6 +602,13 @@ def _stage_offer(session, text, flags):
     替换完把 placeholder 改成 false。内容是否替换过，`scripts/kb_check.py` 会提示。
     """
     cfg = config_loader.stage_config("OFFER")
+
+    # 含糊/敷衍先判。这里尤其危险：用户"嗯……"一声就被推进 CONFIRM，
+    # 下一轮客服问"您同意吗"，用户会觉得刚说过的话没被听见。
+    # 放在提问分支前面，是因为"啊？"这类只有语气词的输入虽然带问号，
+    # 但语义是"我没听清"，不是"我要问一个具体问题"。
+    if flags.get("vague"):
+        return _clarify(session, "OFFER")
 
     # 提问：先查知识库（带出处），查不到再退回配置里的固定话术
     if flags["ask"]:
@@ -440,10 +644,15 @@ def _stage_confirm(session, text, flags):
     直接一句"那就不打扰您了"等于把本来能成的一单关掉，而且业务侧收到的
     是"客户拒绝"这个错误结论。以前这里写成 `confirm_asks >= 1`，
     导致 reply_again 是死代码、第一次含糊就挂断，这是已修的真实缺陷。
+
+    另外这里多了一道置信度闸门：只有 conf ≥ YES_MIN_CONF 的肯定才算同意。
+    "好吧""应该可以""差不多"这类弱肯定一律按含糊处理，追问一次再落库——
+    它们听起来是答应，实质是"我不想跟你争了"，据此回写同意，
+    后面退订和投诉就是从这里来的。
     """
     cfg = config_loader.stage_config("CONFIRM")
 
-    if flags["yes"]:
+    if flags["yes"] and flags.get("conf", 1.0) >= YES_MIN_CONF:
         return _do_writeback(session, True)
 
     if flags["no"]:
@@ -481,7 +690,10 @@ def _stage_done(session, text, flags):
     cfg = config_loader.stage_config("DONE")
     current = session["slots"].get("consent")
 
-    target = True if flags["yes"] else (False if flags["no"] else None)
+    # 改口同样要过置信度闸门：终态里一句"好吧"如果被当成"我要了"，
+    # 就会拿一个弱肯定去覆盖一张已经定稿的工单，比不回写更糟。
+    yes_ok = flags["yes"] and flags.get("conf", 1.0) >= YES_MIN_CONF
+    target = True if yes_ok else (False if flags["no"] else None)
     already_written = int(session.get("writeback_version", 0)) > 0
     # 注意这里不能要求 current 是布尔值：含糊回写记的是 "unknown"，
     # 用户之后说清"那我要"时必须能把它更正过来，否则工单永远停在"不确定"。
@@ -562,7 +774,7 @@ def fallback_key(reason="error"):
     return FALLBACK_SCENES.get(reason, FALLBACK_SCENES["error"])[0]
 
 
-def _handoff(session):
+def _handoff(session, reason="handoff"):
     """转人工：礼貌收尾，并且**不下业务结论**。
 
     为什么不回写：转人工意味着"这通电话没谈完"，业务结论应该由人工给出。
@@ -572,12 +784,15 @@ def _handoff(session):
     为什么走 `_finish` 而不是直接返回：`_finish` 会把阶段推到 DONE 并带上
     end_reason，`_reply` 见到 end_reason 就跳过话术改写——"再见"被模型
     改写成"拜拜下次聊"是外呼里很难解释的事故。
+
+    reason 是给质检归因用的原因码（user_request / handoff_unclear / …）。
+    话术不变，变的是事件里那一个字段——"为什么把这通电话交出去"必须能查。
     """
     cfg = config_loader.stage_config("DONE")
     text = (cfg.get("reply_handoff")
             or config_loader.fallback_text("reply_handoff")
             or "好的，我帮您转接人工同事，稍后会有专人和您联系，感谢您的接听，再见。")
-    return _finish(session, text, "handoff")
+    return _finish(session, text, reason)
 
 
 def safe_fallback(session, reason="error"):
@@ -623,13 +838,22 @@ def respond(session, user_text):
 
     if not text:
         session["empty_count"] += 1
+        # 空输入没有"意图"可言。显式归零，避免上一轮的高置信度被这一轮复用，
+        # 事件里出现"用户没说话但 conf=0.95"这种没法解释的数。
+        session["last_intent_conf"] = 0.0
         return _handle_empty(session)
     session["empty_count"] = 0
 
     flags = _classify(text)
+    # 识别置信度落到 session，_reply 会把它带进每个事件。
+    # 放在这里而不是让每个 handler 传参：出口有十几个，漏一处就是一个假数据点。
+    session["last_intent_conf"] = flags.get("conf", 0.0)
 
     # 全局：要求转人工。放在挂断判断之前——"我要真人"和"别打了"是两种相反的诉求，
     # 前者要承诺有人接手，后者要立刻结束；同时出现时以转人工为准（用户还在听）。
+    # 原因码沿用 W7 定下的 "handoff"（用户主动要求），
+    # 这里不改是因为 3 号的用例与看板已按这个值统计；新增的"听不懂"那条分支
+    # 用 "handoff_unclear" 区分，两者在事件里能分开归因。
     if flags["handoff"] and session["stage"] not in ("WRITEBACK", "DONE"):
         return _handoff(session)
 
