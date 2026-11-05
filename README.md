@@ -14,6 +14,18 @@
 
 > 最新在最上面。每条改动都附当时的回归结果，断言数即验收标准。
 
+**2026-11-05 · 任务2 合入（R1 契约 + 场景包修复 + 2A 七项 + T17）**：三块一起进 main——
+`#3` R1 阶段0（writeback 改结构定义、tools 配置、kb 落位）、`#13` 场景包同步到 v2 契约
+（切场景不再静默退化，新增 `--check-all` 巡检未生效的场景包）、`#12` 2A 七项
+（知识库检索 / 兜底细分 / 置信度分级 / 槽位追问 / 改口 / 记忆 / 指标）与 W1 话术改写。
+合并时修掉 4 个真缺陷：**兜底话术假配置化**（`FALLBACK_SCENES` 键名与配置对不上，
+改配置话术一个字都不变，四类原因全走代码硬编码）、**转人工承诺了不存在的即时转接**
+（"请稍等"改成"记录下来、稍后回电"）、**记忆回溯在混合表述上失效**
+（"包装压坏了，想问怎么处理"被整句当提问，需求不落库，回溯只能念上一句）、
+**21 条知识条目的假溯源编号**（编造的章节号改成"占位:"前缀 + placeholder 标记）。
+另把 7 个自测脚本挂进 `verify` 总闸门（原来 2500 行新代码零覆盖）。
+回归：`verify.py` **86/86**、`run_eval.py` 30/30（闭环 11/30）、`--check-all` 3/3。
+
 **2026-11-05 · S2 WebSocket 双向通道（角色 1：张博涵部分）**：`/ws/call` 落地——
 音频帧从 HTTP 分片改为 WS 直推、TTS 分段"就绪即推"（不再轮询 `/api/tts/rest`）、
 打断变协议事件（`barge_in`/`barge_ack`）、前端自动回落 HTTP（通道坏了不拖累 S1）。
@@ -323,15 +335,19 @@ config/scenes/    可切换的场景包：换一个文件 = 换一套话术与�
 modules/
   voice.py        静音闸门、墙钟闸门、识别、合成（长句切段）、断连重试
   dialogue.py     规则版状态机：意图、槽位、话术、改口；回复统一从 _reply() 出
-  nlg.py          措辞改写接缝：say() 就位，_rewrite() 未实现（默认不改写）
+  nlg.py          措辞改写：say() 收口 + _rewrite() 已实现（默认 provider=template 不改写）
+  kb.py           知识库引擎：结构化条目 + 词长加权检索 + explain/validate/conflicts
   tools.py        工单工具（幂等、改口更新）
   eval.py         五项质检与闭环打分
+  realtime_asr.py 流式识别适配（paraformer-realtime，默认关闭）
+ws_channel.py      通话协议层：/ws/call 的消息分发与 TTS 分段推送（后端可注入测试）
+wsproto.py         RFC 6455 编解码（纯标准库，可离线断言）
 web/index.html      AudioWorklet 采集、五态状态机、能量 VAD、三段式打断、双口径面板
 web/dashboard.html  指标看板：KPI、时延双口径、事件分布、质检汇总、库体检
-dashboard.py        看板聚合（只读）
-cost_guard.py       日成本闸门与速率限制（默认关闭）
 mock_business/      独立 Mock 业务服务：查客户 / 查订单 / 建工单（幂等）
-scripts/            verify（73 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
+scripts/            verify（86 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
+                    task2_metrics（四项指标出数）/ check_realtime_asr（流式识别连通验证）
+                    test_*（七项能力的离线自测，已作为证据 16 挂进 verify）
                     clean_events · archive_events（库体检/归档）/ check_key / 试听 / 录音验识别
 CODEOWNERS          谁的文件谁审（GitHub 账号对照）
 .githooks/          pre-push：禁止直接推 main（要 git config core.hooksPath .githooks）
@@ -345,7 +361,7 @@ reviews/            PR 审核记录
 ## 七、怎么验证我改的东西没坏
 
 ```bash
-python scripts/verify.py       # 73 条行为断言，用临时库，不污染 data/
+python scripts/verify.py       # 86 条行为断言，用临时库，不污染 data/
 python scripts/run_eval.py     # 30 条用例跑批（离线，不调云端）
 python config_loader.py        # 配置结构与占位符校验（一秒出结果）
 python scripts/archive_events.py --stats   # 事件库体检：体积、行数、索引
