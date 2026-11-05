@@ -176,17 +176,18 @@ def stages_config():
     return dict(load().get("stages", {}) or {})
 
 
-def writeback_template():
-    """回写字段的**默认值**（扁平 dict），供 dialogue.py 直接当 content 用。
+def _flatten_writeback(raw):
+    """把 required/optional 结构摊平成 {字段: 默认值}；旧扁平写法原样返回。
 
-    以 "_" 开头的键是给人看的注释（_comment / _todo），不能进业务单据——
-    否则工单里会多出一个叫 "_comment" 的字段，对接真实接口时会被当成脏数据。
+    单独抽出来是为了**可测**：摊平规则（`default` 缺失就整条丢字段）正是这次
+    事故的根因，测试要能直接对比"删掉 default 之后少了哪个字段"，
+    而不是绕着 writeback_template() 间接推断。
 
-    结构定义（哪些必填、类型、枚举合法值）在 writeback_schema()；这里按 required /
-    optional 的 default 摊平成 {字段: 默认值}，保证 `content = writeback_template()`
-    的旧调用点一行都不用改。配置若还是扁平写法（骨架阶段），原样返回，向后兼容。
+    为什么 optional 的 default=null 会被丢掉：null 意味着"这个字段可以没有值"，
+    摊平是给 dialogue.py 当 content 用的，塞一个 None 进去等于把空字段写进单据。
+    required 则相反——required 的字段必须落地，所以 validate() 要求它必须有非 null 的 default。
     """
-    raw = load().get("writeback_template", {}) or {}
+    raw = raw or {}
     if "required" not in raw and "optional" not in raw:
         return {k: v for k, v in raw.items() if not k.startswith("_")}
     out = {}
@@ -198,6 +199,19 @@ def writeback_template():
             if default is not None:
                 out[k] = default
     return out
+
+
+def writeback_template():
+    """回写字段的**默认值**（扁平 dict），供 dialogue.py 直接当 content 用。
+
+    以 "_" 开头的键是给人看的注释（_comment / _todo），不能进业务单据——
+    否则工单里会多出一个叫 "_comment" 的字段，对接真实接口时会被当成脏数据。
+
+    结构定义（哪些必填、类型、枚举合法值）在 writeback_schema()；这里按 required /
+    optional 的 default 摊平成 {字段: 默认值}，保证 `content = writeback_template()`
+    的旧调用点一行都不用改。配置若还是扁平写法（骨架阶段），原样返回，向后兼容。
+    """
+    return _flatten_writeback(load().get("writeback_template", {}) or {})
 
 
 def writeback_schema():
@@ -391,6 +405,9 @@ _ALLOWED_PLACEHOLDERS = {"amount", "status"}
 
 _REQUIRED_TOP = ("scene_name", "stages", "slots", "answers", "compliance", "budget")
 
+# 回写字段允许的类型。枚举（enum）必须额外交 values。
+_WRITEBACK_TYPES = ("str", "int", "bool", "float", "enum")
+
 
 def _is_text(v):
     return isinstance(v, str) and v.strip() != ""
@@ -464,11 +481,58 @@ def validate(cfg=None):
             if not _is_text(s.get("type")):
                 p.append("slots.%s.type 缺失（bool/str/object 之一）" % name)
 
+    # ---- 回写模板：v2 结构（required / optional）----
     wb = cfg.get("writeback_template") or {}
     if not isinstance(wb, dict):
         p.append("writeback_template 必须是对象")
-    elif not [k for k in wb if not k.startswith("_")]:
-        p.append("writeback_template 里没有任何业务字段（全是 _ 开头的注释）")
+    elif "required" not in wb and "optional" not in wb:
+        # 旧扁平写法（{字段: 示例值}）能跑，但 writeback_schema() 会退化成"值表"，
+        # 回写校验器拿不到 type/values，等于静默失效。切场景时最难发现，所以吼出来。
+        p.append("writeback_template 仍是旧扁平写法（缺 required/optional）："
+                 "writeback_schema() 会退化成值表，回写校验拿不到类型与枚举；"
+                 "按 config/scene.json 的结构同步")
+    else:
+        for group in ("required", "optional"):
+            if group not in wb:
+                p.append("writeback_template 缺少 %s 段" % group)
+                continue
+            sec = wb.get(group)
+            if not isinstance(sec, dict):
+                p.append("writeback_template.%s 必须是对象" % group)
+                continue
+            if group == "required" and not sec:
+                p.append("writeback_template.required 不能为空（回写至少要有 1 个必填字段）")
+            for name, spec in sec.items():
+                if name.startswith("_"):
+                    continue
+                where = "writeback_template.%s.%s" % (group, name)
+                if not isinstance(spec, dict):
+                    p.append("%s 必须是对象（type/default/desc），现在是 %s"
+                             % (where, type(spec).__name__))
+                    continue
+                t = spec.get("type")
+                if t not in _WRITEBACK_TYPES:
+                    p.append("%s.type 必须是 %s 之一，现在是 %r"
+                             % (where, "/".join(_WRITEBACK_TYPES), t))
+                # 摊平用的是 spec["default"]：没有这个键，字段会静默消失；
+                # 旧校验只看"有没有非 _ 开头的顶层键"，嵌套结构下必过——这就是静默丢字段的根因。
+                if "default" not in spec:
+                    if group == "required":
+                        p.append("%s 缺 default：writeback_template() 摊平会静默丢掉这个必填字段"
+                                 % where)
+                elif group == "required" and spec.get("default") is None:
+                    p.append("%s.default 是 null：摊平会静默丢掉这个必填字段" % where)
+                if t == "enum":
+                    vals = spec.get("values")
+                    if not isinstance(vals, list) or not vals:
+                        p.append("%s.values 必须是非空列表" % where)
+                    elif spec.get("default") is not None and spec.get("default") not in vals:
+                        p.append("%s.default=%r 不在 values %r 里"
+                                 % (where, spec.get("default"), vals))
+                if t == "str" and "max_chars" in spec:
+                    mc = spec.get("max_chars")
+                    if not isinstance(mc, int) or mc <= 0:
+                        p.append("%s.max_chars 必须是正整数" % where)
 
     comp = cfg.get("compliance") or {}
     if not isinstance(comp.get("forbidden_words"), list):
@@ -494,14 +558,43 @@ def validate(cfg=None):
     if not _is_text(cfg.get("apology_prefix", "")):
         p.append("apology_prefix 建议给一句安抚话术（用户带情绪时会拼在回复前）")
 
-    tl = cfg.get("tools") or {}
-    if tl.get("provider") not in (None, "mock", "real"):
-        p.append("tools.provider 只能是 mock 或 real")
-    to = tl.get("timeout_ms", 300)
-    if not isinstance(to, int) or to <= 0:
-        p.append("tools.timeout_ms 必须是正整数（毫秒）")
-    if tl.get("provider") == "real" and not _is_text(tl.get("base_url", "")):
-        p.append("tools.provider=real 时必须给 base_url")
+    # ---- 工具适配层 ----
+    tl = cfg.get("tools", None)
+    if tl is None:
+        p.append("缺少 tools 段（provider / timeout_ms / base_url）："
+                 "场景包必须与 config/scene.json 对齐，否则 tools_config() 返回 {}")
+    elif not isinstance(tl, dict):
+        p.append("tools 必须是对象")
+    else:
+        if tl.get("provider") not in (None, "mock", "real"):
+            p.append("tools.provider 只能是 mock 或 real")
+        to = tl.get("timeout_ms", 300)
+        if not isinstance(to, int) or to <= 0:
+            p.append("tools.timeout_ms 必须是正整数（毫秒）")
+        if tl.get("provider") == "real" and not _is_text(tl.get("base_url", "")):
+            p.append("tools.provider=real 时必须给 base_url")
+
+    # ---- 知识库 ----
+    kb = cfg.get("knowledge", None)
+    if kb is None:
+        p.append("缺少 knowledge 段（enabled / path）："
+                 "场景包必须与 config/scene.json 对齐，否则检索退化成写死话术且无人知晓")
+    elif not isinstance(kb, dict):
+        p.append("knowledge 必须是对象")
+    elif kb.get("enabled"):
+        path = kb.get("path")
+        if not _is_text(path):
+            p.append("knowledge.enabled=true 时必须给 path")
+        else:
+            full = path if os.path.isabs(path) else os.path.normpath(os.path.join(_ROOT, path))
+            if not os.path.exists(full):
+                p.append("knowledge.path 指向的文件不存在：%s" % full)
+        ms = kb.get("min_score", 1)
+        if not isinstance(ms, int) or ms < 0:
+            p.append("knowledge.min_score 必须是非负整数")
+        mc = kb.get("max_answer_chars", 60)
+        if not isinstance(mc, int) or mc <= 0:
+            p.append("knowledge.max_answer_chars 必须是正整数")
     return p
 
 
@@ -521,6 +614,32 @@ def _placeholders(text):
         elif depth:
             buf.append(ch)
     return out
+
+
+def validate_all():
+    """把主场景与 config/scenes/ 下每个场景包都校验一遍。
+
+    为什么必须有这个：validate() 只看当前生效的那一份。**没生效的场景包会静默腐烂**——
+    契约从扁平 writeback_template 改成 required/optional 时，没人切过去跑，
+    就没人发现它已经失效；等到演示现场切场景，回写校验才拿到一张"值表"。
+    这个函数把 drift 变成可测的东西：一条命令全查，CI 里也能跑。
+    """
+    targets = []
+    if os.path.exists(CONFIG_PATH):
+        targets.append(("main", CONFIG_PATH))
+    for item in available_scenes():
+        targets.append((item["id"], item["path"]))
+
+    rows = []
+    for label, path in targets:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception as e:
+            rows.append((label, path, ["JSON 解析失败：%s" % e]))
+            continue
+        rows.append((label, path, validate(cfg)))
+    return rows
 
 
 def describe():
@@ -546,6 +665,23 @@ def describe():
 # ---------------------------------------------------------------------------
 
 def _main(argv):
+    if "--check-all" in argv:
+        rows = validate_all()
+        bad = 0
+        print("全场景校验（%d 份）：" % len(rows))
+        for label, path, problems in rows:
+            if problems:
+                bad += 1
+                print("  [X] %-20s %s —— %d 处问题" % (label, os.path.basename(path), len(problems)))
+                for msg in problems[:6]:
+                    print("        - %s" % msg)
+                if len(problems) > 6:
+                    print("        ... 其余 %d 条" % (len(problems) - 6))
+            else:
+                print("  [OK] %-19s %s" % (label, os.path.basename(path)))
+        print("\n结果：%d/%d 通过" % (len(rows) - bad, len(rows)))
+        return 1 if bad else 0
+
     if "--list" in argv:
         rows = available_scenes()
         print("可用场景（%d 个）：" % len(rows))
