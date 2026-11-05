@@ -59,13 +59,19 @@
   "tools": {
     "provider": "mock",
     "timeout_ms": 300,
+    "base_url": "http://127.0.0.1:8100",
     "_why": "mock = modules/tools.py 里写死的假数据；real = 走 modules/adapters/ 下的真实适配器。默认 mock，理由同上：clone 下来就能跑。",
     "_doc": "见 docs/17 第 4 节"
   },
   "fallback": {
     "reply": "抱歉，我这边刚才没处理好，麻烦您再说一遍好吗？",
+    "reply_asr_fail": "不好意思，我这边没听清，您能再说一遍吗？",
+    "reply_orchestrator_error": "抱歉，系统刚刚卡了一下，我们再试一次好吗？",
+    "reply_tool_timeout": "我这边查得有点慢，稍后让专员给您回电说明，可以吗？",
+    "reply_business_reject": "这个情况我这边处理不了，我帮您转给专员跟进，可以吗？",
+    "reply_handoff": "好的，我帮您转接人工坐席，请稍等。",
     "reply_tool": "我这边查得有点慢，稍后让专员给您回电说明，可以吗？",
-    "_todo": "兜底话术要再细分：识别失败 / 编排异常 / 接口超时 / 业务拒绝，各自不同"
+    "_comment": "四类兜底 + 转人工各一句，互不相同；reply_tool 与 reply_tool_timeout 文案相同，是刻意保留的向后兼容（documents 与旧代码可能引用，删了会 KeyError）。"
   },
   "budget": {
     "max_turns": 40,
@@ -192,6 +198,13 @@
       "type": "str"
     }
   ],
+  "knowledge": {
+    "enabled": true,
+    "path": "config/kb.json",
+    "min_score": 1,
+    "max_answer_chars": 60,
+    "_why": "enabled=true 时优先走 kb.json 检索；false 时退回旧的 answers 关键词 + stages 里的写死话术"
+  },
   "answers": {
     "_comment": "常见问题标准答法：OFFER/CONFIRM 阶段命中关键词时优先用这里，避免自由发挥编造",
     "fee": [
@@ -210,13 +223,53 @@
     "unknown": "unknown"
   },
   "writeback_template": {
-    "_comment": "回写字段形状，真实实现要按 Mock 接口文档校准字段名与类型",
-    "call_result": "connected",
-    "identity_confirmed": true,
-    "need": "待填写",
-    "consent": true,
-    "agent_version": "v1",
-    "note": "骨架阶段为占位内容"
+    "_comment": "回写字段形状。字段名待企业资料包公布后校准，但类型/必填性现在定死，校验器按这个写。default 是骨架阶段的合法缺省值，供 config_loader.writeback_template() 摊平成扁平 dict，保证 dialogue.py 的旧调用点不用改。",
+    "required": {
+      "call_result": {
+        "type": "enum",
+        "values": [
+          "connected",
+          "no_answer",
+          "refused",
+          "invalid"
+        ],
+        "default": "connected",
+        "desc": "通话结果"
+      },
+      "identity_confirmed": {
+        "type": "bool",
+        "default": false,
+        "desc": "身份是否核验通过"
+      },
+      "need": {
+        "type": "str",
+        "max_chars": 100,
+        "default": "未获取",
+        "desc": "用户诉求"
+      },
+      "consent": {
+        "type": "enum",
+        "values": [
+          true,
+          false,
+          "unknown"
+        ],
+        "default": "unknown",
+        "desc": "是否同意领取权益"
+      },
+      "agent_version": {
+        "type": "str",
+        "default": "v1",
+        "desc": "话术版本，进化学要溯源"
+      }
+    },
+    "optional": {
+      "ticket_ref": {
+        "type": "str",
+        "default": null,
+        "desc": "工单号"
+      }
+    }
   },
   "compliance": {
     "forbidden_words": [

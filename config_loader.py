@@ -177,10 +177,34 @@ def stages_config():
 
 
 def writeback_template():
-    """回写字段模板。真实实现要按 Mock 接口文档校准字段名。
+    """回写字段的**默认值**（扁平 dict），供 dialogue.py 直接当 content 用。
 
     以 "_" 开头的键是给人看的注释（_comment / _todo），不能进业务单据——
     否则工单里会多出一个叫 "_comment" 的字段，对接真实接口时会被当成脏数据。
+
+    结构定义（哪些必填、类型、枚举合法值）在 writeback_schema()；这里按 required /
+    optional 的 default 摊平成 {字段: 默认值}，保证 `content = writeback_template()`
+    的旧调用点一行都不用改。配置若还是扁平写法（骨架阶段），原样返回，向后兼容。
+    """
+    raw = load().get("writeback_template", {}) or {}
+    if "required" not in raw and "optional" not in raw:
+        return {k: v for k, v in raw.items() if not k.startswith("_")}
+    out = {}
+    for group in ("required", "optional"):
+        for k, spec in (raw.get(group) or {}).items():
+            if k.startswith("_"):
+                continue
+            default = spec.get("default") if isinstance(spec, dict) else None
+            if default is not None:
+                out[k] = default
+    return out
+
+
+def writeback_schema():
+    """回写字段的**结构定义**（required / optional + type / values / desc）。
+
+    给回写校验器（modules/tools.validate_writeback）用：它需要知道「哪些字段必填、
+    类型是什么、枚举合法值有哪些」。以 "_" 开头的键是给人看的注释，不进业务单据。
     """
     raw = load().get("writeback_template", {}) or {}
     return {k: v for k, v in raw.items() if not k.startswith("_")}
@@ -238,6 +262,15 @@ def nlg_config():
     自检和跑批也不能每跑一次就调 30 次模型。
     """
     return dict(load().get("nlg", {}) or {})
+
+
+def tools_config():
+    """工具适配层参数。字段含义见 config/scene.json 的 tools 段与 docs/17 第 4 节。
+
+    provider=mock 时 modules/tools.py 走内置假数据；real 时走 modules/adapters/。
+    **默认必须是 mock**，理由同 nlg_config：队友 clone 下来没有 Mock 服务也要能跑。
+    """
+    return dict(load().get("tools", {}) or {})
 
 
 def budget_config():
@@ -461,6 +494,14 @@ def validate(cfg=None):
     if not _is_text(cfg.get("apology_prefix", "")):
         p.append("apology_prefix 建议给一句安抚话术（用户带情绪时会拼在回复前）")
 
+    tl = cfg.get("tools") or {}
+    if tl.get("provider") not in (None, "mock", "real"):
+        p.append("tools.provider 只能是 mock 或 real")
+    to = tl.get("timeout_ms", 300)
+    if not isinstance(to, int) or to <= 0:
+        p.append("tools.timeout_ms 必须是正整数（毫秒）")
+    if tl.get("provider") == "real" and not _is_text(tl.get("base_url", "")):
+        p.append("tools.provider=real 时必须给 base_url")
     return p
 
 
