@@ -1,35 +1,398 @@
 {
   "_comment": "知识条目库：一条一个问题。answer 是标准答法，source_id 必须能追到业务资料包的具体章节。",
-  "_schema": "id / patterns / answer / source_id / valid_from / valid_to / forbidden 全部必填，valid_* 可为 null",
+  "_schema": "id / patterns / answer / source_id / valid_from / valid_to / forbidden 全部必填，valid_* 可为 null。另可写 category（类别，用于统计）与 priority（同分优先级，越大越优先）。",
+  "_meta": {
+    "version": "1.0.0",
+    "placeholder": true,
+    "scene": "服务类外呼（占位场景）",
+    "updated_at": "2026-11-05",
+    "note": "本文件的答案正文对应 config/scene.json 的占位场景（延保权益）。官方赛题资料包公布后，必须逐条替换 answer 与 source_id，并把 placeholder 改成 false——scripts/kb_check.py 会在占位状态下打印警告。"
+  },
   "items": [
     {
       "id": "KB-FEE-001",
+      "category": "fee",
       "patterns": [
         "收费",
         "花钱",
         "要钱",
         "付费",
-        "免费"
+        "免费",
+        "多少钱",
+        "费用",
+        "价钱",
+        "贵不贵"
       ],
       "answer": "这份权益是免费的，不需要您额外付费。",
-      "source_id": "业务资料包/权益说明/第2节",
+      "source_id": "业务资料包/权益说明/第2节-费用",
       "valid_from": null,
       "valid_to": null,
-      "forbidden": []
+      "forbidden": [],
+      "priority": 10
     },
     {
       "id": "KB-VALIDITY-001",
+      "category": "validity",
       "patterns": [
         "多久",
         "有效期",
         "多长时间",
-        "期限"
+        "期限",
+        "几个月",
+        "几年",
+        "用到什么时候"
       ],
       "answer": "权益有效期是十二个月，从登记当天开始算。",
-      "source_id": "业务资料包/权益说明/第3节",
+      "source_id": "业务资料包/权益说明/第3节-有效期限",
       "valid_from": null,
       "valid_to": null,
-      "forbidden": []
+      "forbidden": [],
+      "priority": 10
+    },
+    {
+      "id": "KB-TRIGGER-001",
+      "category": "trigger",
+      "patterns": [
+        "什么时候生效",
+        "什么时候开始",
+        "什么时候能用",
+        "立刻生效",
+        "生效时间",
+        "马上生效"
+      ],
+      "answer": "登记完成当天就生效，不需要您再单独操作。",
+      "source_id": "业务资料包/权益说明/第4节-生效规则",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 0
+    },
+    {
+      "id": "KB-COVERAGE-001",
+      "category": "coverage",
+      "patterns": [
+        "保什么",
+        "保障范围",
+        "覆盖哪些",
+        "包括什么",
+        "管哪些",
+        "都管什么",
+        "保哪些"
+      ],
+      "answer": "这份权益覆盖延保期内的人工检修和上门服务，具体项目以权益说明为准。",
+      "source_id": "业务资料包/权益说明/第5节-保障范围",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 0
+    },
+    {
+      "id": "KB-REPAIR-001",
+      "category": "process",
+      "patterns": [
+        "怎么报修",
+        "怎么申请",
+        "怎么使用",
+        "怎么用",
+        "报修流程",
+        "怎么找你们",
+        "怎么联系"
+      ],
+      "answer": "需要报修时打我们的客服热线，报一下手机号后四位就能查到您的权益。",
+      "source_id": "业务资料包/服务流程/第1节-报修入口",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 0
+    },
+    {
+      "id": "KB-CANCEL-001",
+      "category": "cancel",
+      "patterns": [
+        "取消",
+        "退订",
+        "不想要了",
+        "怎么退",
+        "能退吗",
+        "退掉",
+        "别给我办"
+      ],
+      "answer": "这份权益不收费，也不需要取消，您不激活就不会产生任何费用。",
+      "source_id": "业务资料包/权益说明/第6节-取消与退出",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 0
+    },
+    {
+      "id": "KB-REFUND-001",
+      "category": "refund",
+      "patterns": [
+        "退费",
+        "退款",
+        "退钱",
+        "扣我钱"
+      ],
+      "answer": "这份权益没有收取任何费用，所以不存在退费；如果您发现账户有扣款，请告诉我扣款时间，我帮您核实。",
+      "source_id": "业务资料包/权益说明/第6节-取消与退出",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 5
+    },
+    {
+      "id": "KB-PRIVACY-001",
+      "category": "privacy",
+      "patterns": [
+        "我的信息",
+        "隐私",
+        "泄露",
+        "怎么知道",
+        "怎么知道我号码",
+        "知道我号码",
+        "谁给你号码",
+        "哪里来的号码",
+        "号码哪来",
+        "信息安不安全"
+      ],
+      "answer": "您的信息只用于这次权益登记，不会对外提供；您也可以要求我们删除。",
+      "source_id": "业务资料包/合规说明/第2节-个人信息使用",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 0
+    },
+    {
+      "id": "KB-IDENTITY-001",
+      "category": "identity",
+      "patterns": [
+        "为什么问",
+        "核实什么",
+        "查户口",
+        "问这么多",
+        "凭什么问",
+        "要这些干嘛"
+      ],
+      "answer": "核对手机号后四位是为了确认是您本人在接听，避免把您的权益登记到别人名下。",
+      "source_id": "业务资料包/合规说明/第3节-身份核验必要性",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 0
+    },
+    {
+      "id": "KB-SALES-001",
+      "category": "objection",
+      "patterns": [
+        "推销",
+        "骚扰",
+        "骗子",
+        "诈骗",
+        "套路",
+        "不信",
+        "忽悠",
+        "广告"
+      ],
+      "answer": "理解您的顾虑，这次只是告知您已有的权益，不收费也不用您转账，您可以先了解一下。",
+      "source_id": "业务资料包/异议处理/第1节-身份质疑",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 5
+    },
+    {
+      "id": "KB-INVOICE-001",
+      "category": "invoice",
+      "patterns": [
+        "发票",
+        "开票",
+        "报销凭证",
+        "开发票"
+      ],
+      "answer": "这份权益不收费，所以不开具发票；如果后续有收费项目，我们会提供正规凭证。",
+      "source_id": "业务资料包/权益说明/第7节-票据",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 0
+    },
+    {
+      "id": "KB-DUPLICATE-001",
+      "category": "duplicate",
+      "patterns": [
+        "已经买过",
+        "买过了",
+        "重复",
+        "已经有了",
+        "重复登记",
+        "办了两次"
+      ],
+      "answer": "系统按手机号识别，同一个号码不会重复登记，您不用担心重复计费。",
+      "source_id": "业务资料包/权益说明/第8节-重复登记处理",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 0
+    },
+    {
+      "id": "KB-TRANSFER-001",
+      "category": "handoff",
+      "patterns": [
+        "转人工",
+        "找人工",
+        "真人",
+        "人工客服",
+        "转客服",
+        "叫你们领导"
+      ],
+      "answer": "可以的，我这边帮您转接人工客服，请稍等一下。",
+      "source_id": "业务资料包/服务流程/第3节-转人工规则",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 8
+    },
+    {
+      "id": "KB-COMPLAINT-001",
+      "category": "complaint",
+      "patterns": [
+        "投诉",
+        "举报",
+        "曝光",
+        "告你们",
+        "找媒体"
+      ],
+      "answer": "非常抱歉给您带来困扰，我先记录您的意见并转交专人处理，会在二十四小时内回复您。",
+      "source_id": "业务资料包/服务流程/第4节-投诉处理",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 8
+    },
+    {
+      "id": "KB-RENEW-001",
+      "category": "renew",
+      "patterns": [
+        "到期",
+        "续费",
+        "续期",
+        "过期",
+        "到期以后",
+        "到期后"
+      ],
+      "answer": "到期前我们会提前告知，不会自动扣费，到时候您再决定要不要继续。",
+      "source_id": "业务资料包/权益说明/第9节-到期与续期",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 0
+    },
+    {
+      "id": "KB-OWNER-001",
+      "category": "identity",
+      "patterns": [
+        "谁提供的",
+        "哪个公司",
+        "你们是谁",
+        "什么单位",
+        "哪家公司"
+      ],
+      "answer": "我们是受服务方委托做权益告知的客服团队，我的工号可以告诉您。",
+      "source_id": "业务资料包/合规说明/第1节-外呼主体",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 0
+    },
+    {
+      "id": "KB-HOURS-001",
+      "category": "hours",
+      "patterns": [
+        "几点",
+        "上班时间",
+        "服务时间",
+        "营业时间",
+        "几点下班",
+        "周末上班"
+      ],
+      "answer": "人工服务时间是每天上午九点到晚上九点，其余时间可以留言，我们会回电。",
+      "source_id": "业务资料包/服务流程/第2节-服务时间",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 0
+    },
+    {
+      "id": "KB-ONSITE-001",
+      "category": "onsite",
+      "patterns": [
+        "上门",
+        "师傅",
+        "多久能到",
+        "多久能上门",
+        "多久上门",
+        "多长时间上门",
+        "派人",
+        "谁来修",
+        "上门费"
+      ],
+      "answer": "报修后一般一个工作日内联系您约上门时间，具体以师傅排期为准。",
+      "source_id": "业务资料包/服务流程/第5节-上门服务",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 5
+    },
+    {
+      "id": "KB-URGENT-001",
+      "category": "trigger",
+      "patterns": [
+        "现在能用吗",
+        "马上用",
+        "今天就想要",
+        "急用",
+        "急着用"
+      ],
+      "answer": "登记后即时生效，您现在就可以使用。",
+      "source_id": "业务资料包/权益说明/第4节-生效规则",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 5
+    },
+    {
+      "id": "KB-PARTIAL-001",
+      "category": "coverage",
+      "patterns": [
+        "只要一项",
+        "能不能只",
+        "只想要",
+        "拆分",
+        "分开办"
+      ],
+      "answer": "这份权益是整体提供的，暂时不支持拆分，您可以先用着看看是否合适。",
+      "source_id": "业务资料包/权益说明/第5节-保障范围",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": [],
+      "priority": 0
+    },
+    {
+      "id": "KB-PROMO-001",
+      "category": "promo",
+      "patterns": [
+        "有活动",
+        "优惠",
+        "打折",
+        "促销",
+        "便宜点"
+      ],
+      "answer": "目前这份权益本身就是免费提供的，没有额外的收费项目。",
+      "source_id": "业务资料包/活动说明/第1节-当期活动",
+      "valid_from": "2026-01-01",
+      "valid_to": "2026-12-31",
+      "forbidden": [],
+      "priority": 0
     }
   ]
 }
