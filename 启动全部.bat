@@ -33,7 +33,9 @@ rem Run mock in a separate window so its log does not mix with the main service.
 start "super_candy mock :8100" cmd /k ""%PYEXE%" mock_business\service.py"
 
 rem Give mock a moment, otherwise the call service may report "business API down".
-timeout /t 2 >nul
+rem Use ping as sleep. cmd's timeout.exe gets shadowed by coreutils timeout in
+rem Git Bash / restricted shells ("invalid time interval /t"). ping exists in both.
+ping -n 3 127.0.0.1 >nul
 
 %PYEXE% app.py
 
