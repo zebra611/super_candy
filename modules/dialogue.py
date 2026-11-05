@@ -21,6 +21,8 @@
     - 含糊回答不算同意，二次追问仍含糊则记 unknown 并回写。
 """
 
+import re
+
 import config_loader
 from modules import kb, nlg, tools
 
@@ -172,6 +174,13 @@ def new_session(session_id):
         # 因为"没听懂"追问了几次。到 CLARIFY_MAX 就转人工，不能让用户
         # 对着一句听不懂的话被反复问同一句（E04 那条用例骂的就是这个）。
         "clarify_asks": 0,
+        # 身份核验拆成两个槽位分别追：尾号（唯一性高）和姓名。
+        # 为什么要拆开：以前只记"问了几次"，问的是什么都丢了，
+        # 于是永远是同一句"方便说一下您手机号后四位吗"——用户说了姓名
+        # 也当没听见，只能靠再来一次。
+        "identity_slots": {"tail": "", "name": ""},
+        "slot_asks": {"tail": 0, "name": 0},
+        "last_asked_slot": "",
         # 这一轮用户话的识别置信度。由 respond 写入，_reply 读取后落进事件。
         "last_intent_conf": 0.0,
         # 第几版回写。用户改口时递增，配合幂等键让"同一张工单被更新"而不是新开一张。
@@ -479,6 +488,122 @@ def _clarify(session, stage):
 
 
 # ---------------------------------------------------------------------------
+# 身份核验的槽位驱动追问（T2）
+#
+# 旧实现只有一个计数器：问满两次就放弃。问句是配置里那一句固定的
+# "方便说一下您手机号后四位吗"——用户说"我忘了尾号了"，下一句问的
+# 还是同一件事，只是措辞换成问姓名（因为 reply_retry 恰好是问姓名，
+# 属于"碰巧对了"，不是逻辑上知道该问什么）。
+#
+# 这里把身份拆成两个槽位，各自记"问过几次、拿到什么值"：
+#     tail  手机尾号（唯一性高，优先问）
+#     name  姓名（尾号的替代证据）
+# 每轮先看用户给了什么，给了就查、查不到就清掉这个值（避免拿同一个错值
+# 反复打接口），然后问**当前最缺、且还没问满**的那个槽位。
+#
+# 同一槽位最多问 SLOT_ASK_MAX 次，两遍都说不上来就收尾转专员——
+# 追着问第三遍"您手机号后四位是多少"是外呼里最招投诉的动作。
+# ---------------------------------------------------------------------------
+SLOT_ASK_MAX = 2
+
+IDENTITY_ASKS = {
+    "tail": (
+        ("reply_ask_tail",
+         "好的，为了核对身份，方便说一下您手机号的尾号吗？就是后四位。"),
+        ("reply_ask_tail_2",
+         "那我换个方式核对：您手机号的最后四位是多少？说数字就行。"),
+    ),
+    "name": (
+        ("reply_ask_name",
+         "没关系，那方便说一下您的姓名吗？我核对一下。"),
+        ("reply_ask_name_2",
+         "您怎么称呼？说个姓也可以，我这边核对一下。"),
+    ),
+}
+
+# 从一句话里抽姓名时，这些字出现就说明它不是名字。
+# 不这么滤，"真不记得"这种四个汉字会被当成一个姓名去查库。
+_NAME_BLOCK = "不没忘知道是我你他她您们吗呢吧啊的对先那这"
+
+_NAME_PATTERNS = (
+    re.compile(r"我姓([\u4e00-\u9fa5])"),
+    re.compile(r"我叫([\u4e00-\u9fa5]{2,4})"),
+    re.compile(r"我是([\u4e00-\u9fa5]{2,3})"),
+    re.compile(r"([\u4e00-\u9fa5]{1,3})(?:先生|女士)"),
+)
+
+
+def _identity_text(key, default):
+    """身份环节的话术取值：阶段配置 → 兜底配置 → 内置默认。
+
+    三级回落是为了"4 号补配置不用改代码"：现在内置默认就能跑，
+    配置一补上就自动以配置为准。
+    """
+    return (config_loader.stage_config("IDENTITY").get(key)
+            or config_loader.fallback_text(key)
+            or default)
+
+
+def _extract_name(text):
+    """从一句话里抽一个可信的姓名候选，抽不到就返回空串。
+
+    只认明确的表达方式（我姓X / 我叫XX / 我是XX / X先生），以及
+    "整句就是一个 2~4 字中文词"这一种弱形式——后者是为了接住
+    "对，张伟"这种补充回答。宁可抽不到，也不能把"真不记得"当名字。
+    """
+    t = (text or "").strip()
+    if not t:
+        return ""
+    for pat in _NAME_PATTERNS:
+        m = pat.search(t)
+        if not m:
+            continue
+        cand = m.group(1)
+        if any(ch in _NAME_BLOCK for ch in cand):
+            continue
+        return cand
+    for seg in re.split(r"[，,。、！？!?\s]+", t):
+        seg = seg.strip()
+        if 2 <= len(seg) <= 4 and all("\u4e00" <= ch <= "\u9fa5" for ch in seg):
+            if not any(ch in _NAME_BLOCK for ch in seg):
+                return seg
+    return ""
+
+
+def _next_identity_slot(session):
+    """下一句该问哪个槽位。两个都问满了返回 None（该收尾了）。
+
+    排序键是"问得少的优先，其次优先问和上一轮不同的那个"——
+    连问两遍同一件事（"您尾号多少" → "您尾号到底多少"）是明确该避免的。
+    """
+    asks = session.get("slot_asks") or {}
+    last = session.get("last_asked_slot") or ""
+    want_other = "name" if last == "tail" else "tail"
+    order = sorted(("tail", "name"),
+                   key=lambda s: (asks.get(s, 0), 0 if s == want_other else 1))
+    for slot in order:
+        if asks.get(slot, 0) < SLOT_ASK_MAX:
+            return slot
+    return None
+
+
+def _ask_identity(session, slot, next_stage=None):
+    """按槽位取话术追问，并记账（问了几次、上次问的是哪个）。
+
+    next_stage 只在"从 GREETING 首次进入核验"时传 IDENTITY：
+    那一句在事件里仍归属 GREETING（它是对开场白的回应），
+    后续追问则不推进（next_stage=None，阶段本来就在 IDENTITY）。
+    """
+    pairs = IDENTITY_ASKS[slot]
+    idx = min(session["slot_asks"].get(slot, 0), len(pairs) - 1)
+    session["slot_asks"][slot] = session["slot_asks"].get(slot, 0) + 1
+    session["last_asked_slot"] = slot
+    key, default = pairs[idx]
+    return _reply(session, _identity_text(key, default), next_stage=next_stage,
+                  intent="identity_retry")
+
+
+# ---------------------------------------------------------------------------
 # 各阶段的处理器
 # 约定：每个处理器拿 (session, text, flags)，返回 _reply(...) 的结果
 # ---------------------------------------------------------------------------
@@ -503,14 +628,35 @@ def _stage_greeting(session, text, flags):
         if hit.get("found"):
             session["slots"]["identity_confirmed"] = True
             session["slots"]["customer"] = hit.get("customer")
+            session["slots"]["identity_via"] = "tail"
             identity_cfg = config_loader.stage_config("IDENTITY")
             return _reply(session, _soothe(identity_cfg.get("reply_ok", ""), flags),
                           next_stage="NEED", intent="identity_ok")
+        # 报了但核不上：直接改问姓名——刚报过的尾号再问一遍
+        # 是最没信息量的一句（用户会以为你没听见他说话）。
+        # 不把这个无效值存进槽位，是为了避免下一轮拿它再查一次。
+        return _ask_identity(session, "name", next_stage="IDENTITY")
 
-    # 其它任何应答都往下走：核对身份
-    identity_cfg = config_loader.stage_config("IDENTITY")
-    return _reply(session, _soothe(identity_cfg.get("reply", ""), flags),
-                  next_stage="IDENTITY", intent=_intent_name(flags))
+    # 主动报了姓名，同样当场核验。理由和报尾号一样：说了不能等于白说。
+    name = _extract_name(text)
+    if name:
+        hit = tools.query_customer(name)
+        if hit.get("found"):
+            session["slots"]["identity_confirmed"] = True
+            session["slots"]["customer"] = hit.get("customer")
+            session["slots"]["identity_via"] = "name"
+            session["identity_slots"]["name"] = name
+            identity_cfg = config_loader.stage_config("IDENTITY")
+            return _reply(session, _soothe(identity_cfg.get("reply_ok", ""), flags),
+                          next_stage="NEED", intent="identity_ok")
+        # 报了名字但库里没有：记下来，改问尾号（尾号唯一性更高）
+        session["identity_slots"]["name"] = name
+
+    # 其它任何应答都往下走：核对身份。这里就用"问尾号"那一句——
+    # 它是这一环的第一个问题，走同一套话术与记账，别让第一问和后续追问
+    # 变成两套逻辑（以前就是这样：第一问读 stages.IDENTITY.reply，
+    # 追问读 reply_retry，两边措辞对不上，也没有"问过几次"的记录）。
+    return _ask_identity(session, "tail", next_stage="IDENTITY")
 
 
 def _stage_identity(session, text, flags):
@@ -519,7 +665,14 @@ def _stage_identity(session, text, flags):
     规则：拿到 4 位尾号或一个能查到的姓名 → 通过；否则允许重试一次，
     两次都不行就结束（真实实现应转人工，当前用 DONE + end_reason 标记）。
 
-    _todo 槽位驱动：缺尾号问尾号，缺姓名问姓名，而不是固定问法。
+    规则：
+        1. 从这一句里尽量收槽位（尾号、姓名），收到就先拿去查；
+        2. 查不到就把这个值清掉，绝不拿同一个错值反复打接口；
+        3. 然后问**当前最缺、且还没问满**的那个槽位；
+        4. 两个槽位都问满 SLOT_ASK_MAX 次还没核上，收尾转专员。
+
+    _todo 真实实现要判"接电话的是不是本人"（声纹 / 关系人），
+    现在只做到"信息对得上"。
     """
     cfg = config_loader.stage_config("IDENTITY")
 
@@ -531,21 +684,41 @@ def _stage_identity(session, text, flags):
     if flags["no"] or flags["hangup"]:
         return _finish(session, config_loader.stage_config("GREETING").get("reply_hangup", ""), "refused_identity")
 
-    # 用尾号或姓名去查客户档案
-    keyword = flags["digits"] or text
-    hit = tools.query_customer(keyword)
-    if hit.get("found"):
-        session["slots"]["identity_confirmed"] = True
-        session["slots"]["customer"] = hit.get("customer")
-        return _reply(session, _soothe(cfg.get("reply_ok", ""), flags),
-                      next_stage="NEED", intent="identity_ok")
+    slots = session["identity_slots"]
 
-    # 没查到：允许重试一次
+    # ① 先收槽位。用户这一轮说了什么就记什么，后说的覆盖先说的
+    #    （"不对，我姓张"要能盖掉前面的"我姓李"——写进一个值就不可能叠加）。
+    if flags["digits"]:
+        slots["tail"] = flags["digits"]
+    name = _extract_name(text)
+    if name:
+        slots["name"] = name
+
+    # ② 拿收到的值去查。尾号优先：它唯一性比姓名高（同名太常见）。
+    for slot in ("tail", "name"):
+        val = slots.get(slot)
+        if not val:
+            continue
+        hit = tools.query_customer(val)
+        if hit.get("found"):
+            session["slots"]["identity_confirmed"] = True
+            session["slots"]["customer"] = hit.get("customer")
+            # 留痕：这一通是靠什么核上的，事后能查（也方便看槽位完整率）
+            session["slots"]["identity_via"] = slot
+            return _reply(session, _soothe(cfg.get("reply_ok", ""), flags),
+                          next_stage="NEED", intent="identity_ok")
+        # 查不到：把这个值清掉。不清的话下一轮会拿同一个错值再查一遍，
+        # 表现为"用户明明改口了，系统还按旧号核验"。
+        session["identity_slots"][slot] = ""
+
     session["identity_attempts"] += 1
-    if session["identity_attempts"] >= 2:
-        return _finish(session, cfg.get("reply_fail", "这边核对不上，稍后让专员联系您。"), "identity_failed")
-    return _reply(session, cfg.get("reply_retry", cfg.get("reply", "")),
-                  intent="identity_retry")
+
+    # ③ 问最缺的那一个；两个都问满了就收尾
+    slot = _next_identity_slot(session)
+    if slot is None:
+        return _finish(session, cfg.get("reply_fail", "这边核对不上，稍后让专员联系您。"),
+                       "identity_failed")
+    return _ask_identity(session, slot)
 
 
 def _stage_need(session, text, flags):
