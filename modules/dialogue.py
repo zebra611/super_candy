@@ -21,8 +21,10 @@
     - 含糊回答不算同意，二次追问仍含糊则记 unknown 并回写。
 """
 
+import re
+
 import config_loader
-from modules import nlg, tools
+from modules import kb, nlg, tools
 
 # ---------------------------------------------------------------------------
 # 意图关键词表
@@ -31,7 +33,12 @@ from modules import nlg, tools
 # ---------------------------------------------------------------------------
 
 # 精确匹配的肯定回答（避免"不好意思"里的"好"被误判成同意）
-YES_EXACT = {"是", "对", "好", "行", "可以", "嗯", "嗯嗯", "是的", "对的",
+#
+# 注意这里**没有"嗯"**。以前"嗯"/"嗯嗯"在表里，CONFIRM 阶段用户"嗯"一声就被判成
+# 明确同意并直接回写——docs/02 写的是"含糊回答不算同意"，这条规则和文档是反的。
+# 单个语气词既可能是同意，也可能只是"我还在听"，证据强度不够，所以挪进 PURE_FILLER，
+# 由置信度分级判为含糊，走二次追问（见下方的 classify）。
+YES_EXACT = {"是", "对", "好", "行", "可以", "是的", "对的",
              "好的", "行吧", "是啊", "同意", "要", "需要", "没问题"}
 # 包含即算肯定（长句里带这些词）
 YES_CONTAINS = ("同意", "没问题", "那就办", "办吧", "可以可以", "就这样", "要了", "需要",
@@ -50,7 +57,98 @@ HANGUP_WORDS = ("挂了", "先挂", "忙着", "没空", "不聊了", "别打了"
 ANGRY_WORDS = ("投诉", "骗子", "烦", "垃圾", "滚", "气死", "恶心", "骚扰")
 
 # 提问信号
-ASK_MARKS = ("吗", "？", "?", "多少", "多久", "怎么", "什么", "能不能", "是不是", "可以吗")
+# "到哪 / 哪了"是物流查询的高频问法（"这单到哪了"），不含它们就会被当成
+# 一条诉求记下来并推进到方案沟通——用户明明在问，客服却在推销。
+ASK_MARKS = ("吗", "？", "?", "多少", "多久", "怎么", "什么", "能不能", "是不是", "可以吗",
+             "到哪", "哪了")
+
+# 要求转人工。**故意不含"投诉"**：投诉是情绪信号（见 ANGRY_WORDS），
+# 要致歉承接后继续解决问题，不能一句"帮您转人工"就把电话挂掉。
+# 评测用例 R04 就是"我要投诉你们"之后还要走完五个环节，含投诉会直接判负。
+HANDOFF_WORDS = ("转人工", "找人工", "人工客服", "转客服", "转接人工",
+                 "要真人", "真人接", "叫你们领导", "找你们领导")
+
+# 弱肯定：嘴上答应了，但明显没拿定主意。
+# "好吧""应该可以""差不多"这类回答如果直接当同意回写，业务侧会拿着一份
+# 用户并不认账的工单去做后续动作，退订/投诉就从这儿来。所以给它们低于阈值的
+# 置信度，在 CONFIRM 阶段触发一次追问，而不是直接落库。
+WEAK_YES = ("好吧", "应该可以", "应该行", "应该吧", "差不多", "大概", "可能吧", "看看吧")
+
+# ---------------------------------------------------------------------------
+# 含糊输入的词表（T1：意图置信度分级）
+#
+# 为什么需要这一层：关键词规则只有"命中/没命中"两态，而真实通话里大量输入是
+# 半句话——"你说是就是吧""嗯……""随便"。旧规则对这两种输入的处理都是错的，
+# 但错法不同：
+#     命中一个"嗯"  → 被当成同意，回写一个用户从没给过的结论（错在证据太弱）
+#     一条都没命中  → 被当成诉求，直接推方案（错在用户会觉得客服在自说自话）
+# 所以这里把"证据强度"显式化成 0~1 的置信度，再由各阶段决定低分要不要追问。
+# ---------------------------------------------------------------------------
+
+# 纯语气词：整句只有这些的时候，唯一的语义信息是"我还在听"，不是"我同意"。
+PURE_FILLER = {"嗯", "嗯嗯", "啊", "哦", "喔", "呃", "额", "唉", "诶", "嘿", "哈"}
+
+# 敷衍/含糊：说了等于没说。用**包含**匹配而不是整句匹配，
+# 因为真实说法是"我也不太清楚""这个我还真不知道"，整句永远对不上。
+VAGUE_MARKS = ("不太清楚", "不清楚", "不知道", "不晓得", "不记得", "说不好",
+               "说不准", "不确定", "看情况", "考虑一下", "再想想", "让我想想",
+               "你看着办", "你说了算", "你说是就是", "你定吧", "随便",
+               "再说吧", "到时候再说", "无所谓", "都行", "都可以",
+               # 连说两遍的"行吧行吧""行了行了"是不耐烦，不是同意。
+               # 注意不能把单个"行吧"加进来——它在 YES_EXACT 里，是明确同意；
+               # 也不能把"行吧"加进 YES_CONTAINS，否则"不行吧"会被判成同意。
+               "行吧行吧", "行了行了", "知道了", "好知道了")
+
+# 证据强度（0~1）。数字不是拍脑袋来的，是按"这句话能不能单独支撑一次回写"定的：
+#   EXACT     整句就是一个标准答案，"同意"两个字不会再有别的解释
+#   DIGIT     报出 4 位尾号，是强身份证据（但可能是别人的号，所以不给满分）
+#   CONTAINS  长句里顺带带了标准答案，"行吧那你办吧"里"办吧"也可能是抱怨
+#   WEAK      弱肯定，"好吧"经常等于"我不想争了"
+#   VAGUE     命中含糊词表
+#   NONE      一条规则都没命中：可能是自由表达（"我要退款"），也可能是没听清
+CONF_EXACT = 0.95
+CONF_DIGIT = 0.93
+CONF_CONTAINS = 0.75
+CONF_WEAK = 0.50
+CONF_VAGUE = 0.25
+CONF_NONE = 0.45
+
+# 低于这条线的不算"明确同意"。只用在 CONFIRM——别处用它会误伤自由表达：
+# "我要退款"一条规则都不命中（conf 0.45），但它显然该继续推进，不该被追问。
+YES_MIN_CONF = 0.60
+
+# 同一个阶段连续追问几次就换人。对应 T2"同一槽位连续追问 ≤2 次，第 3 次转兜底"。
+CLARIFY_MAX = 2
+
+# ---------------------------------------------------------------------------
+# 兜底话术：按"为什么会兜底"分开
+#
+# 原来只有一句"抱歉，我这边刚才没处理好，麻烦您再说一遍好吗？"糊住所有情况，
+# 结果是三种完全不同的失败对用户说同一句话：
+#     识别没听清   —— 该请对方再说一遍
+#     接口超时     —— 再说一遍也没用，该承诺回电
+#     业务拒绝     —— 更不能让他重复，该换人处理
+# 用户重复三遍仍听到"麻烦您再说一遍"，体验比直接挂断还差。
+#
+# 结构：reason -> (配置键, 内置默认话术)
+#     配置键先查 `fallback` 段；`writeback` 额外兼容旧的 `stages.WRITEBACK` 段。
+#     内置默认是为了配置没补齐时也能跑（4 号补配置不用改代码）。
+# ---------------------------------------------------------------------------
+FALLBACK_SCENES = {
+    "asr": ("reply_asr",
+            "不好意思，这边没听清，您再说一遍好吗？"),
+    "error": ("reply",
+              "抱歉，我这边刚才没处理好，麻烦您再说一遍好吗？"),
+    "timeout": ("reply_timeout",
+                "我这边查询有点慢，稍后让专员给您回电说明，可以吗？"),
+    "business": ("reply_business",
+                 "这个情况我这边处理不了，稍后让专员跟您说明，可以吗？"),
+    "tool": ("reply_tool",
+             "我这边查得有点慢，稍后让专员给您回电说明，可以吗？"),
+    "writeback": ("reply_fail",
+                  "我这边登记时出了点问题，稍后会有专员联系您确认。感谢您的接听，再见。"),
+}
+_KEY_TO_REASON = dict((v[0], k) for k, v in FALLBACK_SCENES.items())
 
 
 def new_session(session_id):
@@ -76,13 +174,32 @@ def new_session(session_id):
         "identity_attempts": 0,
         "confirm_asks": 0,
         "empty_count": 0,
+        # 因为"没听懂"追问了几次。到 CLARIFY_MAX 就转人工，不能让用户
+        # 对着一句听不懂的话被反复问同一句（E04 那条用例骂的就是这个）。
+        "clarify_asks": 0,
+        # 身份核验拆成两个槽位分别追：尾号（唯一性高）和姓名。
+        # 为什么要拆开：以前只记"问了几次"，问的是什么都丢了，
+        # 于是永远是同一句"方便说一下您手机号后四位吗"——用户说了姓名
+        # 也当没听见，只能靠再来一次。
+        "identity_slots": {"tail": "", "name": ""},
+        "slot_asks": {"tail": 0, "name": 0},
+        "last_asked_slot": "",
+        # 每个槽位被提交过的值（按顺序）。用来判"这是不是改口"——
+        # 当前值查不到就会被清空，拿清空后的值比较会把中间那次改口弄丢。
+        "slot_history": {"tail": [], "name": []},
+        # 改口轨迹：[{slot, from, to, turn}]，同时会进 slots 与回写 payload
+        "corrections": [],
+        # 长会话记忆：跨环节事实 + 最近几轮原文（见 _remember / memory_brief）
+        "memory": {"recent": [], "facts": {}},
+        # 这一轮用户话的识别置信度。由 respond 写入，_reply 读取后落进事件。
+        "last_intent_conf": 0.0,
         # 第几版回写。用户改口时递增，配合幂等键让"同一张工单被更新"而不是新开一张。
         "writeback_version": 0,
     }
 
 
-def _classify(text):
-    """把一句话拆成若干意图标记（规则版）。
+def classify(text):
+    """把一句话拆成若干意图标记 + 一个置信度（规则版）。
 
     返回 dict：
         deny   否认本人 / 打错电话
@@ -91,50 +208,147 @@ def _classify(text):
         no     明确拒绝
         yes    明确肯定
         ask    在提问
+        handoff 要求转人工（不含"投诉"——投诉要承接后继续处理）
         digits 文本里的 4 位数字（手机尾号）
+        vague  这一句是含糊/敷衍（说了等于没说）
+        conf   这次识别的置信度 0~1，写进事件供统计与回归
+        evidence  置信度来自哪条证据（exact/contains/digit/weak/vague/none）
 
-    _todo 角色 2 接入大模型后，这里改成"模型输出的 intent + 置信度"，
-    并保留本函数作为低置信度时的兜底。
+    _todo 角色 2 接入大模型后，模型输出 intent + 置信度，本函数退化为
+    低置信度时的兜底——这也是为什么它先把 conf 这一个数字先说清，
+    接模型时只需要换"从哪来"，不用改"怎么用"。
     """
     t = (text or "").strip()
+    n = _norm(t)
     flags = {"deny": False, "hangup": False, "angry": False,
-             "no": False, "yes": False, "ask": False, "digits": ""}
+             "no": False, "yes": False, "ask": False, "handoff": False,
+             "digits": "", "vague": False, "conf": CONF_NONE, "evidence": "none"}
 
-    flags["deny"] = any(w in t for w in DENY_PERSON)
-    flags["hangup"] = any(w in t for w in HANGUP_WORDS)
-    flags["angry"] = any(w in t for w in ANGRY_WORDS)
-    flags["no"] = t in NO_EXACT or any(w in t for w in NO_CONTAINS)
+    # 命中的强证据先都收起来，最后取最强的那个当置信度。
+    # 为什么不"先命中先返回"：一句话经常同时有多种信号
+    # （"你们天天打电话烦不烦"= 带情绪 + 在质问），
+    # 主意图由 _intent_name 按固定优先级取，置信度取最强证据，
+    # 两件事分开算，统计口径才稳定。
+    strong = []
+
+    if any(w in t for w in DENY_PERSON):
+        flags["deny"] = True
+        strong.append(("deny", CONF_EXACT))
+    if any(w in t for w in HANGUP_WORDS):
+        flags["hangup"] = True
+        strong.append(("hangup", CONF_CONTAINS))
+    if any(w in t for w in ANGRY_WORDS):
+        flags["angry"] = True
+        strong.append(("angry", CONF_CONTAINS))
+
+    if n in NO_EXACT:
+        flags["no"] = True
+        strong.append(("no", CONF_EXACT))
+    elif any(w in t for w in NO_CONTAINS):
+        flags["no"] = True
+        strong.append(("no", CONF_CONTAINS))
+
     # 关键：命中否定词时不再判肯定，"不要"里含"要"就是典型坑
-    flags["yes"] = (not flags["no"]) and (t in YES_EXACT or any(w in t for w in YES_CONTAINS))
-    flags["ask"] = any(m in t for m in ASK_MARKS)
+    if not flags["no"]:
+        if n in YES_EXACT:
+            flags["yes"] = True
+            strong.append(("yes", CONF_EXACT))
+        elif any(w in t for w in WEAK_YES):
+            flags["yes"] = True
+            strong.append(("yes", CONF_WEAK))
+        elif any(w in t for w in YES_CONTAINS):
+            flags["yes"] = True
+            strong.append(("yes", CONF_CONTAINS))
 
-    # 手机尾号：连续 4 位数字
+    if any(m in t for m in ASK_MARKS):
+        flags["ask"] = True
+        strong.append(("ask", CONF_CONTAINS))
+    # 同理："我不需要转人工"里的"转人工"是拒绝，不是要求
+    if not flags["no"] and any(w in t for w in HANDOFF_WORDS):
+        flags["handoff"] = True
+        strong.append(("handoff", CONF_EXACT))
+
+    # 手机尾号：取**最后一个**孤立的 4 位数字段。
+    #
+    # 为什么是最后一个：改口几乎总是"不对，是XXXX"这个语序，先说的那个是错的。
+    # 旧代码取第一个，于是"尾号1234，不对是4321"会把错的 1234 记下来，
+    # C04 那条用例骂的就是这个。
+    #
+    # 为什么要"孤立"（前后不是数字）：8 位手机号 "12345678" 里也含 4 位数字段，
+    # 不判边界的话会截出 "5678" 当成尾号去核验，属于凭空造数据。
     digits = ""
     for i in range(len(t) - 3):
         seg = t[i:i + 4]
-        if seg.isdigit():
+        if not seg.isdigit():
+            continue
+        prev_ok = (i == 0) or not t[i - 1].isdigit()
+        next_ok = (i + 4 >= len(t)) or not t[i + 4].isdigit()
+        if prev_ok and next_ok:
             digits = seg
-            break
     flags["digits"] = digits
+    if digits:
+        strong.append(("info", CONF_DIGIT))
+
+    # 含糊判定：只有在**没有任何强证据**时才算含糊。
+    # 为什么加这个前提——"我不知道这个保修多久"里带"不知道"，但它同时是提问
+    # （"多久"）。按含糊处理会把一个真问题追问掉，用户会以为客服在打太极。
+    # 反过来，"你说是就是吧"一条强规则都不命中，才是真正需要追问的那一类。
+    if n in PURE_FILLER or (not strong and any(w in t for w in VAGUE_MARKS)):
+        flags["vague"] = True
+        flags["conf"] = CONF_VAGUE
+        flags["evidence"] = "filler" if n in PURE_FILLER else "vague"
+    elif strong:
+        flags["conf"] = max(c for _, c in strong)
+        flags["evidence"] = max(strong, key=lambda kv: kv[1])[0]
+    else:
+        flags["conf"] = CONF_NONE
+        flags["evidence"] = "none"
+
     return flags
 
 
+def _norm(text):
+    """去掉首尾空白与标点，只用于"整句是否等于某个标准答案"这类比对。
+
+    "嗯……" 和 "嗯" 必须判成同一件事，否则用户拖个长音就从"含糊"变成"没命中"。
+    """
+    return (text or "").strip().strip(" \t\r\n。，、！？!?,.~～…—-；;：:")
+
+
+def _classify(text):
+    """classify 的旧名字。其余模块与历史测试仍按这个名字调用，保留以免打断它们。"""
+    return classify(text)
+
+
 def _intent_name(flags):
-    """把标记压成一个便于统计的意图名（写进事件的 intent 字段）。"""
-    for k in ("deny", "hangup", "angry", "no", "yes", "ask"):
+    """把标记压成一个便于统计的意图名（写进事件的 intent 字段）。
+
+    优先级顺序是**刻意**的：否认 > 挂断 > 转人工 > 带情绪 > 拒绝 > 肯定 > 提问。
+    越靠前的越"改变流程走向"，一句话同时命中多种时必须听最硬的那个
+    （"不需要，别打了"是拒绝不是挂断，因为拒绝要回写留痕）。
+    新增的 vague 排在最后：它只在没有别的信号时成立，理论上不会和上面冲突，
+    放在这里是防止将来加词表时把含糊误盖掉一个明确意图。
+    """
+    for k in ("deny", "hangup", "handoff", "angry", "no", "yes", "ask"):
         if flags.get(k):
             return k
-    return "info" if flags.get("digits") else "unknown"
+    if flags.get("digits"):
+        return "info"
+    return "unclear" if flags.get("vague") else "unknown"
 
 
 def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
-           end_reason="", stage_label=None):
+           end_reason="", stage_label=None, kb_hit=None, intent_conf=None):
     """统一的返回构造：把回复、阶段迁移、事件字段一次组装好。
 
     注意 stage 是"这一轮所处的阶段"（回复归属），next_stage 才是迁移后的阶段。
     stage_label 用于覆盖回复归属：回写那句话属于 WRITEBACK 环节，但这一轮
     是从 CONFIRM 直接跳过去的，不覆盖的话事件的 stage 会记成 CONFIRM，
     质检统计"回写环节说没说要说的那句话"时就查不到。
+
+    kb_hit 只在命中知识条目时传入（含 id / source_id / score / matched）。
+    这里的意义是**溯源**：赛后如果有人问"这句'有效期十二个月'依据是什么"，
+    事件里能直接翻到条目编号和资料小节，而不是只有一串回复文本。
     """
     stage_now = stage_label or session["stage"]
 
@@ -151,15 +365,29 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
 
     if next_stage:
         session["stage"] = next_stage
+    # 置信度默认取"这一轮用户话的识别置信度"（respond 里算好放进 session）。
+    # 放在 session 里而不是每个调用点都传参，是因为出口太多（回写、兜底、转人工、
+    # 收尾都要走 _reply），漏传一处就会出现"某些事件的 conf 永远是 0"这种假数据。
+    if intent_conf is None:
+        intent_conf = session.get("last_intent_conf", 0.0)
     out = {
         "reply_text": text,
         "stage": stage_now,
         "next_stage": session["stage"],
         "tool_call": tool_call,
         "intent": intent,
+        "intent_conf": round(float(intent_conf or 0.0), 2),
     }
     if end_reason:
         out["end_reason"] = end_reason
+    if kb_hit:
+        out["kb"] = {
+            "id": kb_hit.get("id", ""),
+            "category": kb_hit.get("category", ""),
+            "source_id": kb_hit.get("source_id", ""),
+            "score": kb_hit.get("score", 0),
+            "matched": list(kb_hit.get("matched") or []),
+        }
     return out
 
 
@@ -192,6 +420,12 @@ def _do_writeback(session, consent, changed=False):
         changed  是否是改口后的更正（决定用哪句播报话术）
     """
     cfg = config_loader.stage_config("WRITEBACK")
+
+    # 改口轨迹要在覆盖 consent **之前**取：覆盖完就比不出"从什么改成什么"了
+    old_consent = session["slots"].get("consent")
+    if changed and old_consent not in ("", None) and old_consent != consent:
+        _record_correction(session, "consent", old_consent, consent)
+
     session["slots"]["consent"] = consent
 
     version = int(session.get("writeback_version", 0)) + 1
@@ -204,6 +438,11 @@ def _do_writeback(session, consent, changed=False):
     content["writeback_version"] = version
     if session["slots"].get("order"):
         content["order_id"] = session["slots"]["order"].get("order_id")
+    # 改口轨迹跟着工单走：一个工单号从 v1 到 vN，改动过程留在同一个对象里。
+    # 只在真改过口时才加这个字段——没改过的工单，payload 与以前逐字节一致，
+    # 不给（将来的）回写校验器和下游系统添麻烦。
+    if session.get("corrections"):
+        content["corrections"] = list(session["corrections"])
 
     tool_call = {
         "name": "create_ticket",
@@ -234,6 +473,380 @@ def _do_writeback(session, consent, changed=False):
 
 
 # ---------------------------------------------------------------------------
+# 含糊时的澄清追问
+#
+# 触发条件是"这一轮没拿到有效信息"（flags["vague"]），处理方式是**追问一句、
+# 阶段不动**。为什么不能推进：外呼里推进一格等于"这一环过了"，后面所有判断都
+# 建立在它的结论上。用户说"你说是就是吧"，如果直接推到方案沟通，等于替他确认了
+# 一个他从没确认的前提——业务侧最后拿到的那张工单，用户是不认账的。
+#
+# 但追问不能无限次：同一句话问三遍比挂断更伤体验（E04 用例骂的就是这个）。
+# 所以到 CLARIFY_MAX 就转人工，把判断权交回给人。
+#
+# 话术取值顺序：`fallback.<键>` → 内置默认。这样 4 号往配置里补一句就能改口吻，
+# 不用等代码；配置没补时也有话说，不会因为缺一个键就抛 KeyError。
+# ---------------------------------------------------------------------------
+CLARIFY_TEXTS = {
+    "NEED": (
+        ("reply_unclear_need",
+         "不好意思，我这边没太听清。您方便再说一下主要想了解什么吗？"),
+        ("reply_unclear_need_2",
+         "可能信号不太好。您是想了解产品使用，还是售后这方面的问题呢？"),
+    ),
+    "OFFER": (
+        ("reply_unclear_offer",
+         "我这边可能没讲清楚。您是想让我再讲一遍这个方案，还是有别的顾虑？"),
+        ("reply_unclear_offer_2",
+         "那我确认一下您的意思：您现在是同意，还是暂时不需要？简单回我一句就行。"),
+    ),
+}
+
+
+def _clarify(session, stage):
+    """含糊输入的统一出口：第一次换句话问，第二次换更窄的选择题，第三次转人工。
+
+    返回 _reply / _finish 的结果（**不推进阶段**，除了转人工那一支）。
+    """
+    session["clarify_asks"] = int(session.get("clarify_asks", 0)) + 1
+    if session["clarify_asks"] > CLARIFY_MAX:
+        # 问过 CLARIFY_MAX 次还听不懂，就别再问了。注意这里不回写：
+        # 用户从没表达过业务结论，写一张"未同意"的工单是替用户做决定。
+        return _handoff(session, "handoff_unclear")
+
+    pairs = CLARIFY_TEXTS.get(stage) or CLARIFY_TEXTS["NEED"]
+    key, default = pairs[min(session["clarify_asks"], len(pairs)) - 1]
+    return _reply(session, config_loader.fallback_text(key, default), intent="unclear")
+
+
+# ---------------------------------------------------------------------------
+# 身份核验的槽位驱动追问（T2）
+#
+# 旧实现只有一个计数器：问满两次就放弃。问句是配置里那一句固定的
+# "方便说一下您手机号后四位吗"——用户说"我忘了尾号了"，下一句问的
+# 还是同一件事，只是措辞换成问姓名（因为 reply_retry 恰好是问姓名，
+# 属于"碰巧对了"，不是逻辑上知道该问什么）。
+#
+# 这里把身份拆成两个槽位，各自记"问过几次、拿到什么值"：
+#     tail  手机尾号（唯一性高，优先问）
+#     name  姓名（尾号的替代证据）
+# 每轮先看用户给了什么，给了就查、查不到就清掉这个值（避免拿同一个错值
+# 反复打接口），然后问**当前最缺、且还没问满**的那个槽位。
+#
+# 同一槽位最多问 SLOT_ASK_MAX 次，两遍都说不上来就收尾转专员——
+# 追着问第三遍"您手机号后四位是多少"是外呼里最招投诉的动作。
+# ---------------------------------------------------------------------------
+SLOT_ASK_MAX = 2
+
+IDENTITY_ASKS = {
+    "tail": (
+        ("reply_ask_tail",
+         "好的，为了核对身份，方便说一下您手机号的尾号吗？就是后四位。"),
+        ("reply_ask_tail_2",
+         "那我换个方式核对：您手机号的最后四位是多少？说数字就行。"),
+    ),
+    "name": (
+        ("reply_ask_name",
+         "没关系，那方便说一下您的姓名吗？我核对一下。"),
+        ("reply_ask_name_2",
+         "您怎么称呼？说个姓也可以，我这边核对一下。"),
+    ),
+}
+
+# 从一句话里抽姓名时，这些字出现就说明它不是名字。
+# 不这么滤，"真不记得"这种四个汉字会被当成一个姓名去查库。
+_NAME_BLOCK = "不没忘知道是我你他她您们吗呢吧啊的对先那这"
+
+_NAME_PATTERNS = (
+    re.compile(r"我姓([\u4e00-\u9fa5])"),
+    re.compile(r"我叫([\u4e00-\u9fa5]{2,4})"),
+    re.compile(r"我是([\u4e00-\u9fa5]{2,3})"),
+    re.compile(r"([\u4e00-\u9fa5]{1,3})(?:先生|女士)"),
+)
+
+
+def _identity_text(key, default):
+    """身份环节的话术取值：阶段配置 → 兜底配置 → 内置默认。
+
+    三级回落是为了"4 号补配置不用改代码"：现在内置默认就能跑，
+    配置一补上就自动以配置为准。
+    """
+    return (config_loader.stage_config("IDENTITY").get(key)
+            or config_loader.fallback_text(key)
+            or default)
+
+
+def _extract_name(text):
+    """从一句话里抽一个可信的姓名候选，抽不到就返回空串。
+
+    只认明确的表达方式（我姓X / 我叫XX / 我是XX / X先生），以及
+    "整句就是一个 2~4 字中文词"这一种弱形式——后者是为了接住
+    "对，张伟"这种补充回答。宁可抽不到，也不能把"真不记得"当名字。
+    """
+    t = (text or "").strip()
+    if not t:
+        return ""
+    for pat in _NAME_PATTERNS:
+        m = pat.search(t)
+        if not m:
+            continue
+        cand = m.group(1)
+        if any(ch in _NAME_BLOCK for ch in cand):
+            continue
+        return cand
+    for seg in re.split(r"[，,。、！？!?\s]+", t):
+        seg = seg.strip()
+        if 2 <= len(seg) <= 4 and all("\u4e00" <= ch <= "\u9fa5" for ch in seg):
+            if not any(ch in _NAME_BLOCK for ch in seg):
+                return seg
+    return ""
+
+
+def _record_correction(session, slot, old, new):
+    """记一次改口：哪个槽位、从什么改成什么、第几轮改的。
+
+    为什么要有这条轨迹：赛后如果有人问"用户说改口了，你们真的改了吗"，
+    光看最终 slots 只能看到结果，看不到过程——而"多轮纠错"考的就是过程。
+    轨迹同时进两个地方：
+        ① session["slots"]["corrections"] —— /api/turn 与上报快照里能直接看到
+        ② 回写 payload 的 corrections 字段 —— 工单自己带着改动过程
+
+    不新造事件类型，是因为事件类型被 contracts.EVENT_TYPES 白名单管着
+    （契约是禁改区）。真要做成独立事件，需要队长改契约，已在 PR 里提。
+    """
+    old = "" if old is None else old
+    # 三个跳过条件，每个都对应一类假轨迹：
+    #   old 为空   —— 第一次提交不是"改口"，记了会让每张工单都带一条空记录
+    #   new 为空   —— 清空不是用户的表态
+    #   old == new —— 重复说同一个值不是改口
+    # 另外不能写 `if not new`：consent 的改口值就是 False，
+    # 布尔 False 会被 `not` 判成"没值"，于是"同意→不要"这次改口就丢了。
+    if old in ("", None) or new in ("", None) or old == new:
+        return
+    item = {"slot": slot, "from": old, "to": new, "turn": int(session.get("turn", 0))}
+    session.setdefault("corrections", []).append(item)
+    # 同步进 slots，让"只看最后一轮 slots"的调用方也能看到（/api/turn 就只看这个）
+    session["slots"]["corrections"] = session["corrections"]
+
+
+def _submit_identity_slot(session, slot, value):
+    """提交一个槽位值：记历史、判是否改口、更新当前值。
+
+    判改口用的是"上一个提交过的值"，不是"当前值"——因为查不到就会被清空，
+    拿清空后的值比较，C03（李 → 张 → 张伟）的中间那次改口就丢了。
+    """
+    hist = session.setdefault("slot_history", {}).setdefault(slot, [])
+    old = hist[-1] if hist else ""
+    hist.append(value)
+    _record_correction(session, slot, old, value)
+    session["identity_slots"][slot] = value
+
+
+def _take_identity_slots(session, text, flags):
+    """从这一句里收身份槽位，返回这一轮提交了哪些槽位（列表）。
+
+    返回"提交了哪些"是给调用方决定下一句问什么的：刚报了尾号又核不上，
+    下一句该问姓名；再问尾号等于没听见用户说话。
+    """
+    took = []
+    if flags.get("digits"):
+        _submit_identity_slot(session, "tail", flags["digits"])
+        took.append("tail")
+    name = _extract_name(text)
+    if name:
+        _submit_identity_slot(session, "name", name)
+        took.append("name")
+    return took
+
+
+def _verify_identity(session):
+    """用当前槽位值查客户档案。核上返回 customer，核不上返回 None。
+
+    查不到就**清掉这个值**：不清的话下一轮会拿同一个错值再查一遍，
+    表现就是"用户明明改口了，系统还按旧号核验"。
+    """
+    for slot in ("tail", "name"):
+        val = session["identity_slots"].get(slot)
+        if not val:
+            continue
+        hit = tools.query_customer(val)
+        if hit.get("found"):
+            session["slots"]["identity_confirmed"] = True
+            session["slots"]["customer"] = hit.get("customer")
+            session["slots"]["identity_via"] = slot
+            return hit.get("customer")
+        session["identity_slots"][slot] = ""
+    return None
+
+
+def _next_identity_slot(session, prefer=None):
+    """下一句该问哪个槽位。两个都问满了返回 None（该收尾了）。
+
+    排序键是"问得少的优先，其次优先问 prefer（没给就取和上一轮不同的那个）"——
+    连问两遍同一件事（"您尾号多少" → "您尾号到底多少"）是明确该避免的。
+    """
+    asks = session.get("slot_asks") or {}
+    last = session.get("last_asked_slot") or ""
+    if not prefer:
+        prefer = "name" if last == "tail" else "tail"
+    order = sorted(("tail", "name"),
+                   key=lambda s: (asks.get(s, 0), 0 if s == prefer else 1))
+    for slot in order:
+        if asks.get(slot, 0) < SLOT_ASK_MAX:
+            return slot
+    return None
+
+
+def _ask_identity(session, slot, next_stage=None):
+    """按槽位取话术追问，并记账（问了几次、上次问的是哪个）。
+
+    next_stage 只在"从 GREETING 首次进入核验"时传 IDENTITY：
+    那一句在事件里仍归属 GREETING（它是对开场白的回应），
+    后续追问则不推进（next_stage=None，阶段本来就在 IDENTITY）。
+    """
+    pairs = IDENTITY_ASKS[slot]
+    idx = min(session["slot_asks"].get(slot, 0), len(pairs) - 1)
+    session["slot_asks"][slot] = session["slot_asks"].get(slot, 0) + 1
+    session["last_asked_slot"] = slot
+    key, default = pairs[idx]
+    return _reply(session, _identity_text(key, default), next_stage=next_stage,
+                  intent="identity_retry")
+
+
+# 指代词与"具体名词"两张小表（T3 的指代消解）。
+#
+# 只做一件事：判断"这句话除了指代，有没有实际信息"。
+# "就是那个" 只有指代，没有名词 → 不能记成诉求，要追问到底指什么；
+# "你刚说的那个权益" 有名词（权益）→ 是有效诉求，照常处理。
+# 不追求理解"那个"具体指什么——那需要上下文推理，规则层做不准，
+# 做不准的结果就是把一个含糊输入强行解释成一个具体诉求，比不解释更糟。
+REFER_WORDS = ("这个", "那个", "它", "刚才", "刚说", "上面说", "你说的", "之前说")
+CONCRETE_WORDS = ("订单", "保修", "快递", "包装", "物流", "发货", "退款", "售后",
+                  "质量", "权益", "费用", "收费", "钱", "有效期", "多久", "怎么用")
+
+
+def _is_reference_only(text):
+    """这句是不是"只有指代、没有内容"。"""
+    n = _norm(text)
+    if not n or len(n) > 8:
+        return False
+    if any(w in n for w in CONCRETE_WORDS):
+        return False
+    return any(w in n for w in REFER_WORDS)
+
+
+# ---------------------------------------------------------------------------
+# 长会话记忆（T4）
+#
+# 外呼一通电话可以聊到二三十轮。旧实现只保留 slots，而且 slots 会被后续轮次
+# 覆盖（"need" 每轮都可能被改写），于是出现两类问题：
+#     1. 用户第 2 轮说的诉求，到第 18 轮已经查不到了——问"我刚才说的什么"答不上；
+#     2. 措辞层没有上下文可注入，prompt 里那句"最近两轮对话"一直是占位符。
+#
+# 这里做的是**最小可用的长期记忆**，不是"让模型记住一切"：
+#     facts  跨环节不变的事实（首次诉求、客户称呼、订单号），只写一次不覆盖
+#     recent 最近 MEMORY_RECENT 轮的原文，供措辞层注入
+#
+# 两个刻意的限制：
+#     - 只留最近 6 轮原文：再多对 prompt 是噪声，对时延是负担；
+#     - 存之前先过禁语过滤：记忆会进 prompt、也可能被复述出来，
+#       一条带违规词的记忆等于把合规风险存进了上下文。
+# ---------------------------------------------------------------------------
+MEMORY_RECENT = 6
+MEMORY_TEXT_MAX = 60
+
+# "我刚才说的什么"这类问法的信号词。识别它不是为了炫技，
+# 是因为长会话里用户真的会问——答不上来，"记得住"这个考察点就是零。
+RECALL_MARKS = ("我刚才说", "我刚说", "我之前说", "我说过", "你还记得",
+                "还记得我", "前面说", "刚才提", "我说的是")
+
+
+def _safe_text(text, limit=MEMORY_TEXT_MAX):
+    """记忆里存的文本：先删禁语，再截断。
+
+    注意是**删词**不是整句丢弃：删掉违规词，剩下的仍然是有用的上下文；
+    整句丢弃会让记忆出现空洞，反而更容易让模型瞎补。
+    """
+    t = (text or "").strip()
+    for w in config_loader.forbidden_words():
+        if w and w in t:
+            t = t.replace(w, "")
+    return t[:limit]
+
+
+def _remember(session, user_text, out):
+    """记一轮：最近原文 + 从 slots 里抽出来的长期事实。
+
+    只在 respond 里调一次（所有出口都经过它）。挂在 _reply 上是不行的：
+    _reply 一次调用可能被同一轮里多次触发，会把一轮记成好几轮。
+    """
+    mem = session.setdefault("memory", {})
+    recent = mem.setdefault("recent", [])
+    recent.append({
+        "turn": int(session.get("turn", 0)),
+        "user": _safe_text(user_text),
+        "stage": (out or {}).get("stage", ""),
+        "intent": (out or {}).get("intent", ""),
+    })
+    if len(recent) > MEMORY_RECENT:
+        del recent[:-MEMORY_RECENT]          # 只留最近 N 轮
+
+    facts = mem.setdefault("facts", {})
+    slots = session.get("slots") or {}
+    # 诉求只记**第一次**。后面的 need 可能是改口，也可能是"用户表示不需要"，
+    # 那是结论不是诉求，覆盖掉就再也答不出"您最初说的是什么"。
+    if slots.get("need") and not facts.get("need"):
+        facts["need"] = _safe_text(slots["need"])
+    customer = slots.get("customer") or {}
+    if customer.get("name") and not facts.get("customer_name"):
+        facts["customer_name"] = customer["name"]
+    order = slots.get("order") or {}
+    if order.get("order_id") and not facts.get("order_id"):
+        facts["order_id"] = order["order_id"]
+
+
+def memory_brief(session):
+    """给措辞层（nlg）用的记忆摘要，没有可注入内容时返回空串。
+
+    格式是"客户 / 订单 / 诉求 / 最近三句"的短句拼接，不写 JSON——
+    prompt 里塞 JSON 会让模型开始照着格式输出结构化内容。
+    """
+    mem = session.get("memory") or {}
+    facts = mem.get("facts") or {}
+    parts = []
+    if facts.get("customer_name"):
+        parts.append("客户：%s" % facts["customer_name"])
+    if facts.get("order_id"):
+        parts.append("订单：%s" % facts["order_id"])
+    if facts.get("need"):
+        parts.append("诉求：%s" % facts["need"])
+    recent = [r.get("user") for r in (mem.get("recent") or []) if r.get("user")]
+    if recent:
+        parts.append("最近用户说：%s" % "；".join(recent[-3:]))
+    return " | ".join(parts)
+
+
+def _is_recall_question(text):
+    """这句是不是在问"我刚才说了什么"。"""
+    t = text or ""
+    return any(w in t for w in RECALL_MARKS)
+
+
+def _recall(session, text):
+    """从记忆里回溯用户说过的诉求。返回 None 表示答不了，交回正常流程。
+
+    身份没核验**绝对不复述**：记忆里可能有姓名、订单号，
+    在"还没确认对面是谁"的时候念出来，就是泄漏个人信息。
+    """
+    if not (session.get("slots") or {}).get("identity_confirmed"):
+        return None
+    facts = (session.get("memory") or {}).get("facts") or {}
+    need = facts.get("need")
+    if not need:
+        return None
+    return _reply(session, "您刚才提到的是：%s。这个我记着呢。" % need, intent="recall")
+
+
+# ---------------------------------------------------------------------------
 # 各阶段的处理器
 # 约定：每个处理器拿 (session, text, flags)，返回 _reply(...) 的结果
 # ---------------------------------------------------------------------------
@@ -252,29 +865,40 @@ def _stage_greeting(session, text, flags):
     if flags["hangup"]:
         return _finish(session, cfg.get("reply_hangup", "抱歉打扰您了，再见。"), "hangup")
 
-    # 用户主动报了尾号：当场核验，核上就直接跳到需求确认
-    if flags["digits"]:
-        hit = tools.query_customer(flags["digits"])
-        if hit.get("found"):
-            session["slots"]["identity_confirmed"] = True
-            session["slots"]["customer"] = hit.get("customer")
-            identity_cfg = config_loader.stage_config("IDENTITY")
-            return _reply(session, _soothe(identity_cfg.get("reply_ok", ""), flags),
-                          next_stage="NEED", intent="identity_ok")
+    # 用户这一句里报了尾号或姓名：当场核验，核上就直接跳到需求确认。
+    # 为什么要收下再查而不是各写一段：两条路径的"报了但核不上"处理是反的
+    # （报尾号要改问姓名、报姓名要改问尾号），写成两段必然有一边记不住。
+    took = _take_identity_slots(session, text, flags)
+    if _verify_identity(session):
+        identity_cfg = config_loader.stage_config("IDENTITY")
+        return _reply(session, _soothe(identity_cfg.get("reply_ok", ""), flags),
+                      next_stage="NEED", intent="identity_ok")
+    if took:
+        # 报了但对不上：问另一个槽位。刚报过的那个再问一遍是最没信息量的一句
+        # （用户会以为你没听见他说话）。
+        other = "name" if "tail" in took else "tail"
+        slot = _next_identity_slot(session, prefer=other) or _next_identity_slot(session)
+        if slot:
+            return _ask_identity(session, slot, next_stage="IDENTITY")
 
-    # 其它任何应答都往下走：核对身份
-    identity_cfg = config_loader.stage_config("IDENTITY")
-    return _reply(session, _soothe(identity_cfg.get("reply", ""), flags),
-                  next_stage="IDENTITY", intent=_intent_name(flags))
+    # 其它任何应答都往下走：核对身份。这里就用"问尾号"那一句——
+    # 它是这一环的第一个问题，走同一套话术与记账，别让第一问和后续追问
+    # 变成两套逻辑（以前就是这样：第一问读 stages.IDENTITY.reply，
+    # 追问读 reply_retry，两边措辞对不上，也没有"问过几次"的记录）。
+    return _ask_identity(session, "tail", next_stage="IDENTITY")
 
 
 def _stage_identity(session, text, flags):
     """IDENTITY：核对身份。这是全流程的安全关口。
 
-    规则：拿到 4 位尾号或一个能查到的姓名 → 通过；否则允许重试一次，
-    两次都不行就结束（真实实现应转人工，当前用 DONE + end_reason 标记）。
+    规则：
+        1. 从这一句里尽量收槽位（尾号、姓名），收到就先拿去查；
+        2. 查不到就把这个值清掉，绝不拿同一个错值反复打接口；
+        3. 然后问**当前最缺、且还没问满**的那个槽位；
+        4. 两个槽位都问满 SLOT_ASK_MAX 次还没核上，收尾转专员。
 
-    _todo 槽位驱动：缺尾号问尾号，缺姓名问姓名，而不是固定问法。
+    _todo 真实实现要判"接电话的是不是本人"（声纹 / 关系人），
+    现在只做到"信息对得上"。
     """
     cfg = config_loader.stage_config("IDENTITY")
 
@@ -286,21 +910,22 @@ def _stage_identity(session, text, flags):
     if flags["no"] or flags["hangup"]:
         return _finish(session, config_loader.stage_config("GREETING").get("reply_hangup", ""), "refused_identity")
 
-    # 用尾号或姓名去查客户档案
-    keyword = flags["digits"] or text
-    hit = tools.query_customer(keyword)
-    if hit.get("found"):
-        session["slots"]["identity_confirmed"] = True
-        session["slots"]["customer"] = hit.get("customer")
+    # ① 收槽位（后说的覆盖先说的，并记一条改口轨迹）
+    _take_identity_slots(session, text, flags)
+
+    # ② 查。尾号优先：它唯一性比姓名高（同名太常见）
+    if _verify_identity(session):
         return _reply(session, _soothe(cfg.get("reply_ok", ""), flags),
                       next_stage="NEED", intent="identity_ok")
 
-    # 没查到：允许重试一次
     session["identity_attempts"] += 1
-    if session["identity_attempts"] >= 2:
-        return _finish(session, cfg.get("reply_fail", "这边核对不上，稍后让专员联系您。"), "identity_failed")
-    return _reply(session, cfg.get("reply_retry", cfg.get("reply", "")),
-                  intent="identity_retry")
+
+    # ③ 问最缺的那一个；两个都问满了就收尾
+    slot = _next_identity_slot(session)
+    if slot is None:
+        return _finish(session, cfg.get("reply_fail", "这边核对不上，稍后让专员联系您。"),
+                       "identity_failed")
+    return _ask_identity(session, slot)
 
 
 def _stage_need(session, text, flags):
@@ -325,6 +950,15 @@ def _stage_need(session, text, flags):
         session["slots"]["need"] = "用户表示不需要"
         return _do_writeback(session, False)
 
+    # 含糊/敷衍 → 追问，不把"说了等于没说"记成诉求
+    if flags.get("vague"):
+        return _clarify(session, "NEED")
+
+    # 只有指代没有内容（"就是那个""你刚说的那个"）→ 同样不能记成诉求。
+    # 记下去的结果是工单的 need 字段写着一个"那个"，回写出去等于没写。
+    if _is_reference_only(text):
+        return _clarify(session, "NEED")
+
     # 用户在提问 → 用查到的订单信息回答，仍停在本阶段
     if flags["ask"]:
         order = session["slots"].get("order")
@@ -344,13 +978,31 @@ def _stage_need(session, text, flags):
 def _stage_offer(session, text, flags):
     """OFFER：讲清方案与权益。
 
-    _todo 权益内容必须来自企业资料包；现在是配置里的固定话术，
-    接真实资料包后要做检索 + 引用，不能自由生成。
+    用户提问时走两段式：先查 `modules/kb.py`（命中就带出处播报），
+    查不到才用配置里的固定话术 / `reply_unknown`。这样"答得上来"的范围
+    由知识条目决定，而不是由代码里的 if 分支决定——加一类问题只改 json，不改代码。
+
+    _todo 权益内容必须来自企业资料包。现在 `config/kb.json` 里是**占位内容**
+    （`_meta.placeholder = true`），官方资料包公布后要逐条替换 answer 与 source_id，
+    替换完把 placeholder 改成 false。内容是否替换过，`scripts/kb_check.py` 会提示。
     """
     cfg = config_loader.stage_config("OFFER")
 
-    # 提问：用标准答法，不要临场编
+    # 含糊/敷衍先判。这里尤其危险：用户"嗯……"一声就被推进 CONFIRM，
+    # 下一轮客服问"您同意吗"，用户会觉得刚说过的话没被听见。
+    # 放在提问分支前面，是因为"啊？"这类只有语气词的输入虽然带问号，
+    # 但语义是"我没听清"，不是"我要问一个具体问题"。
+    if flags.get("vague"):
+        return _clarify(session, "OFFER")
+
+    # 提问：先查知识库（带出处），查不到再退回配置里的固定话术
     if flags["ask"]:
+        hit = kb.match(text)
+        if hit:
+            return _reply(session, hit["answer"], intent="ask", kb_hit=hit)
+        # 老路径：knowledge 文件还没落位（或问题确实不在库里）时行为完全不变。
+        # 保留它不是为了兼容，是因为「答不上来的问题」和「库里没写的问题」
+        # 必须落到同一句 reply_unknown，不能让两种原因产生两种说法。
         if any(w in text for w in config_loader.answer_keywords("fee")):
             return _reply(session, cfg.get("reply_ask_fee", ""), intent="ask")
         if any(w in text for w in config_loader.answer_keywords("validity")):
@@ -377,10 +1029,15 @@ def _stage_confirm(session, text, flags):
     直接一句"那就不打扰您了"等于把本来能成的一单关掉，而且业务侧收到的
     是"客户拒绝"这个错误结论。以前这里写成 `confirm_asks >= 1`，
     导致 reply_again 是死代码、第一次含糊就挂断，这是已修的真实缺陷。
+
+    另外这里多了一道置信度闸门：只有 conf ≥ YES_MIN_CONF 的肯定才算同意。
+    "好吧""应该可以""差不多"这类弱肯定一律按含糊处理，追问一次再落库——
+    它们听起来是答应，实质是"我不想跟你争了"，据此回写同意，
+    后面退订和投诉就是从这里来的。
     """
     cfg = config_loader.stage_config("CONFIRM")
 
-    if flags["yes"]:
+    if flags["yes"] and flags.get("conf", 1.0) >= YES_MIN_CONF:
         return _do_writeback(session, True)
 
     if flags["no"]:
@@ -418,7 +1075,10 @@ def _stage_done(session, text, flags):
     cfg = config_loader.stage_config("DONE")
     current = session["slots"].get("consent")
 
-    target = True if flags["yes"] else (False if flags["no"] else None)
+    # 改口同样要过置信度闸门：终态里一句"好吧"如果被当成"我要了"，
+    # 就会拿一个弱肯定去覆盖一张已经定稿的工单，比不回写更糟。
+    yes_ok = flags["yes"] and flags.get("conf", 1.0) >= YES_MIN_CONF
+    target = True if yes_ok else (False if flags["no"] else None)
     already_written = int(session.get("writeback_version", 0)) > 0
     # 注意这里不能要求 current 是布尔值：含糊回写记的是 "unknown"，
     # 用户之后说清"那我要"时必须能把它更正过来，否则工单永远停在"不确定"。
@@ -472,14 +1132,63 @@ def forced_end(session, reason):
     return _finish(session, text, reason)
 
 
-def safe_fallback(session):
-    """编排环节自己出错时的兜底回复：认错 + 请对方再说一遍，阶段不推进。
+def fallback_for(reason="error"):
+    """按失败原因取兜底话术。reason 取 FALLBACK_SCENES 的键。
+
+    取值顺序：`fallback.<键>` → （仅 writeback）`stages.WRITEBACK.<键>` → 内置默认。
+    为什么 writeback 要单独多查一层：那批话术早就写在 `stages.WRITEBACK` 里了，
+    直接搬到 `fallback` 段等于让 4 号改配置、让 3 号的用例重新对齐，收益为零。
+
+    为什么别的 reason 不去查 stages：`WRITEBACK.reply` 是**回写成功**的话术，
+    兜底时误拿到它就会对着用户说"已经为您登记完成"——这是最严重的一类事故。
+    所以只对白名单里的键开放第二次查找。
+    """
+    key, default = FALLBACK_SCENES.get(reason, FALLBACK_SCENES["error"])
+    text = config_loader.fallback_text(key)
+    if text:
+        return text
+    if reason == "writeback":
+        text = config_loader.stage_config("WRITEBACK").get(key)
+        if text:
+            return text
+    return default
+
+
+def fallback_key(reason="error"):
+    """某个 reason 对应的配置键，供写需求和查配置时对照。"""
+    return FALLBACK_SCENES.get(reason, FALLBACK_SCENES["error"])[0]
+
+
+def _handoff(session, reason="handoff"):
+    """转人工：礼貌收尾，并且**不下业务结论**。
+
+    为什么不回写：转人工意味着"这通电话没谈完"，业务结论应该由人工给出。
+    这时候写一张"未同意"的工单，等于替用户做了决定，人工接手时还会看到
+    一条自相矛盾的记录。
+
+    为什么走 `_finish` 而不是直接返回：`_finish` 会把阶段推到 DONE 并带上
+    end_reason，`_reply` 见到 end_reason 就跳过话术改写——"再见"被模型
+    改写成"拜拜下次聊"是外呼里很难解释的事故。
+
+    reason 是给质检归因用的原因码（user_request / handoff_unclear / …）。
+    话术不变，变的是事件里那一个字段——"为什么把这通电话交出去"必须能查。
+    """
+    cfg = config_loader.stage_config("DONE")
+    text = (cfg.get("reply_handoff")
+            or config_loader.fallback_text("reply_handoff")
+            or "好的，我帮您转接人工同事，稍后会有专人和您联系，感谢您的接听，再见。")
+    return _finish(session, text, reason)
+
+
+def safe_fallback(session, reason="error"):
+    """编排环节自己出错时的兜底回复：认错 + 按原因给不同处理，阶段不推进。
 
     不推进阶段是刻意的：这一轮没听懂，下一轮应该从同一个环节重来，
     而不是假装已经过了这一关（否则会漏掉必说话术与确认）。
+
+    reason 只影响"说哪句"，不影响状态机——兜底永远不该改变业务进度。
     """
-    text = config_loader.fallback_text("reply", "抱歉，我这边刚才没处理好，麻烦您再说一遍好吗？")
-    return _reply(session, text, intent="error")
+    return _reply(session, fallback_for(reason), intent="error")
 
 
 def opening_line():
@@ -500,13 +1209,14 @@ def respond(session, user_text):
 
     全局规则（先于任何阶段判断）：
         - 空输入 → _handle_empty
-        - 要求挂断 → 直接结束，不回写（与"明确拒绝"区分）
+        - 要求转人工 / 挂断 → 直接收尾，不回写
+        - 问"我刚才说的什么" → 从记忆里回溯（身份已核验才允许，见 _recall）
     其余交给当前阶段的处理器。
 
     参数：
         session    new_session() 返回的 dict，会被就地修改
         user_text  用户这一轮说的话
-    返回：dict(reply_text, stage, next_stage, tool_call, intent)
+    返回：dict(reply_text, stage, next_stage, tool_call, intent, intent_conf)
     """
     text = (user_text or "").strip()
     session["turn"] += 1
@@ -514,18 +1224,40 @@ def respond(session, user_text):
 
     if not text:
         session["empty_count"] += 1
-        return _handle_empty(session)
+        # 空输入没有"意图"可言。显式归零，避免上一轮的高置信度被这一轮复用，
+        # 事件里出现"用户没说话但 conf=0.95"这种没法解释的数。
+        session["last_intent_conf"] = 0.0
+        out = _handle_empty(session)
+        _remember(session, "", out)
+        return out
     session["empty_count"] = 0
 
     flags = _classify(text)
+    # 识别置信度落到 session，_reply 会把它带进每个事件。
+    # 放在这里而不是让每个 handler 传参：出口有十几个，漏一处就是一个假数据点。
+    session["last_intent_conf"] = flags.get("conf", 0.0)
 
+    # 全局：要求转人工。放在挂断判断之前——"我要真人"和"别打了"是两种相反的诉求，
+    # 前者要承诺有人接手，后者要立刻结束；同时出现时以转人工为准（用户还在听）。
+    # 原因码沿用 W7 定下的 "handoff"（用户主动要求），
+    # 这里不改是因为 3 号的用例与看板已按这个值统计；新增的"听不懂"那条分支
+    # 用 "handoff_unclear" 区分，两者在事件里能分开归因。
+    if flags["handoff"] and session["stage"] not in ("WRITEBACK", "DONE"):
+        out = _handoff(session)
     # 全局：要求挂断。注意与"明确拒绝"区分——两者同时出现时按拒绝处理，
     # 因为拒绝是业务结果，必须回写留痕（"不需要，别打了"属于这一类）。
-    if flags["hangup"] and not flags["no"] and session["stage"] not in ("WRITEBACK", "DONE"):
-        return _finish(session, config_loader.stage_config("GREETING").get("reply_hangup", ""), "hangup")
+    elif flags["hangup"] and not flags["no"] and session["stage"] not in ("WRITEBACK", "DONE"):
+        out = _finish(session, config_loader.stage_config("GREETING").get("reply_hangup", ""), "hangup")
+    else:
+        # 记忆回溯放在挂断之后、阶段处理之前：它是"回答问题"，
+        # 不该改变流程；也不该被某个阶段的处理器截走当成新诉求。
+        out = _recall(session, text) if _is_recall_question(text) else None
+        if out is None:
+            handler = _HANDLERS.get(session["stage"], _stage_done)
+            out = handler(session, text, flags)
 
-    handler = _HANDLERS.get(session["stage"], _stage_done)
-    return handler(session, text, flags)
+    _remember(session, text, out)
+    return out
 
 
 def compliance_guard(text):
@@ -554,8 +1286,13 @@ def compliance_guard(text):
 
 
 def fallback_text(key="reply_fail"):
-    """取兜底话术。目前用于回写失败时替换掉"已登记"那句。
+    """按**配置键**取兜底话术（老接口，`app.py:525` 在用）。
 
-    _todo 兜底话术应再细分：接口超时 / 业务拒绝 / 系统异常，各自不同。
+    注意它吃的是"键"不是"原因"——`reply_fail` 是配置里已有的键名。
+    新代码请用 `fallback_for(reason)`，按"为什么会兜底"来取，
+    可读性更好，也不会把键名和原因混成一个概念。
     """
-    return config_loader.stage_config("WRITEBACK").get(key, "稍后会有专员联系您。")
+    reason = _KEY_TO_REASON.get(key)
+    if reason:
+        return fallback_for(reason)
+    return config_loader.fallback_text(key) or ""
