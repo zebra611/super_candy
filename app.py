@@ -11,12 +11,12 @@
     4. 管住会话的边界：token、并发、TTL、容量与成本闸门。
 
 刻意不做的事（骨架阶段）：
-    - 不做 WebSocket / WebRTC（S1 先用 HTTP 分片承载音频流，S2 再换长连接）；
+    - 不做 WebRTC（S1 用 HTTP 分片、S2 用 /ws/call WebSocket，纯标准库实现）；
     - 不引入任何第三方库（FastAPI/uvicorn 等都先不上），保证 clone 下来就能跑。
 
 后续待补充：
-    - TODO S2：把 /api/audio/chunk 换成 /ws/call 的二进制帧，接收与 seq 校验逻辑复用；
-    - TODO S2 之后才有"服务端主动下发"，打断（cancel 播报）要等它；
+    - S2 已落地：/ws/call 双向通道（音频帧上行 + TTS 分段主动下发 + barge_in
+      协议事件 + 可选流式识别字幕），见 ws_channel.py 与 modules/realtime_asr.py；
     - TODO 加简单的访问日志与错误日志文件（当前只打到控制台）。
 """
 
@@ -25,6 +25,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import sys
 import threading
 import time
@@ -38,7 +39,9 @@ import contracts
 import cost_guard
 import dashboard as dashboard_mod
 import events
+import ws_channel
 from modules import dialogue, eval as eval_mod, tools, voice
+from modules import wsproto
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(_ROOT, "web")
@@ -346,7 +349,7 @@ def reset_audio_buffer(sess):
 # ---------------------------------------------------------------------------
 
 def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=False,
-                audio_dropped=0):
+                audio_dropped=0, asr_override=None):
     """执行一轮对话：这是整个哑链路的核心，也是五个人将来各自替换的接缝。
 
     链路（每一步都写一条事件，方便事后归因）：
@@ -370,6 +373,10 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
         audio_streamed  为 True 表示音频已按帧上传过，本轮从会话缓冲取，
                         此时 audio_bytes 参数被忽略（前端不再整段上传）
         audio_dropped   前端因背压主动丢弃的帧数，仅用于记账
+        asr_override    S2 流式识别的现成结果（{"text","provider"[,"latency_ms"]}）。
+                        用户说话期间音频已经实时识别过了，落 turn 时直接采用，
+                        不再整段重识别。它来自真识别，所以 fake 恒为 False、
+                        source 仍是 "asr"——事件的语义不因通道不同而改变。
     返回：dict，前端需要的全部内容
     """
     t_start = time.time()
@@ -421,7 +428,19 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
         silence_reason = "empty_input"
         typed = (user_text or "").strip()
         if audio_bytes:
-            asr_out = voice.asr(audio_bytes, hints=config_loader.asr_hints())
+            if asr_override is not None:
+                # S2 流式识别的整句结果。latency 记的是"落 turn 时等 final
+                # 花了多久"，与批式的"整段上传→出文本"不是同一口径，
+                # 不能放进同一个 P50 里比——所以 provider 里带 realtime 字样。
+                asr_out = {
+                    "text": (asr_override.get("text") or ""),
+                    "confidence": None,
+                    "latency_ms": round(float(asr_override.get("latency_ms", 0.0)), 1),
+                    "fake": False,
+                    "provider": asr_override.get("provider", "paraformer-realtime"),
+                }
+            else:
+                asr_out = voice.asr(audio_bytes, hints=config_loader.asr_hints())
             heard = asr_out["text"]
             asr_ms = asr_out["latency_ms"]
             is_fake = bool(asr_out.get("fake", False))
@@ -655,8 +674,15 @@ def record_barge_in(session_id, turn_id=0, reason="user_speech", text="",
     payload = {"reason": reason, "turn_id": tid}
     if text:
         payload["heard"] = text
+    # latency_ms 为 None = 调用方（WS 路线）没带这个字段。事件的 latency 列
+    # 不允许空，落 0 并显式标记"未知"——写 0 而不标记，统计里会出现假样本。
+    if latency_ms is None:
+        latency_used = 0.0
+        payload["latency_unknown"] = True
+    else:
+        latency_used = latency_ms
     events.write_event(session_id, "barge_in", payload, turn_id=tid,
-                       latency_ms=latency_ms)
+                       latency_ms=latency_used)
     sess = _SESSIONS.get(session_id)
     dropped = 0
     if sess:
@@ -785,6 +811,65 @@ def report_client_metric(session_id, turn_id, first_audio_ms, estimate=False):
 # HTTP 层：路由与序列化（写得笨一点，方便看不懂框架的人直接读）
 # ---------------------------------------------------------------------------
 
+class _WsBackend:
+    """ws_channel 的业务后端：把协议层需要的动作接到 app 自己的函数上。
+
+    为什么包一层而不是让 ws_channel 直接 import app：
+        ws_channel 的协议逻辑要在 verify.py 里用假后端离线测试，
+        一旦它 import app 就绕不开真会话库，测试就只能起真服务了。
+    """
+
+    @staticmethod
+    def auth(session_id, token):
+        sess, err, _code = _auth(session_id, token)
+        return sess    # 失败时返回 None，协议层负责把原因告诉前端
+
+    @staticmethod
+    def attach(sess, ws):
+        with _STORE_LOCK:
+            sess["ws"] = ws
+
+    @staticmethod
+    def detach(sess):
+        with _STORE_LOCK:
+            sess.pop("ws", None)
+
+    @staticmethod
+    def ingest(sess, pcm):
+        # WS 帧不带 seq：单条 TCP 有序，不存在乱序与缺口。
+        # 直接用"服务端期望的下一帧序号"落账，gaps/duplicates 恒为 0——
+        # 这是真实的（TCP 保证的），不是掩盖。
+        st = _audio_state(sess)
+        ingest_audio_chunk(sess, st["expect_seq"], pcm)
+
+    @staticmethod
+    def handle_turn(session_id, audio_streamed=True, asr_override=None):
+        return handle_turn(session_id, audio_streamed=audio_streamed,
+                           asr_override=asr_override)
+
+    @staticmethod
+    def take_rest(sess, turn_id):
+        # 拿走之后 /api/tts/rest 就取不到了——同一份剩余段不能两条路各发一次
+        return (sess.get("tts_rest") or {}).pop(turn_id, None)
+
+    @staticmethod
+    def barge(session_id, heard, latency_ms=None):
+        sess = _SESSIONS.get(session_id)
+        turn_id = (sess or {}).get("turn", 0)
+        record_barge_in(session_id, turn_id=turn_id,
+                        reason="user_speech", text=heard,
+                        latency_ms=latency_ms)
+        return turn_id
+
+    @staticmethod
+    def realtime_enabled():
+        return voice.realtime_enabled()
+
+
+_WS_BACKEND = _WsBackend()
+
+
+
 class Handler(BaseHTTPRequestHandler):
     """所有请求的入口。路由用 if/elif 硬写，不引入路由器。"""
 
@@ -879,6 +964,54 @@ class Handler(BaseHTTPRequestHandler):
         """压掉默认的逐请求日志，只保留我们自己关心的输出。"""
         pass
 
+    # ---- S2：WebSocket 升级与下行 ----
+
+    def _handle_ws(self):
+        """把这条 HTTP 连接升级成 WebSocket（/ws/call），然后常驻服务它。
+
+        为什么不校验 Origin：页面与会话的绑定靠 token（start 消息里验），
+        WS 层不重复造一道门；真正的边界是"没有 token 拿不到任何会话数据"。
+        """
+        key = self.headers.get("Sec-WebSocket-Key")
+        if (self.headers.get("Upgrade") or "").lower() != "websocket" or not key:
+            self._send_json({"error": "BAD_REQUEST",
+                             "detail": "/ws/call 只接受 WebSocket 升级请求"}, 400)
+            return
+        self.send_response_only(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", wsproto.accept_key(key))
+        self.end_headers()
+        self.close_connection = True     # 连接归 WS 管，别让基类再碰它
+        self._ws_lock = threading.Lock()
+        self._ws_alive = True
+        ws_channel.serve_loop(self, _WS_BACKEND)
+
+    def send_ws_text(self, text):
+        """下发一帧 JSON 文本。ws_channel 的会话锁保证不并发写。"""
+        self.send_ws_frame(wsproto.OP_TEXT, text.encode("utf-8"))
+
+    def send_ws_frame(self, opcode, payload):
+        """下发一帧。两个线程（读循环 + TTS 推送线程）都可能写同一个 socket，
+        没有这把锁就会出现两帧交错的字节流——对端解析直接报废。"""
+        with self._ws_lock:
+            if not self._ws_alive:
+                raise ConnectionError("WS 连接已关闭")
+            self.wfile.write(wsproto.encode_frame(opcode, payload))
+            self.wfile.flush()
+
+    def close_ws(self):
+        """读循环退出时收尾。幂等：正常关、异常关、对端先关都会走到。"""
+        self._ws_alive = False
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            self.connection.close()
+        except OSError:
+            pass
+
     # ---- 路由 ----
 
     def do_GET(self):
@@ -886,6 +1019,10 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         qs = parse_qs(parsed.query)
 
+        if path == "/ws/call":
+            # S2 双向通道。必须在普通路由之前：升级请求不走 _send_json 的响应语义。
+            self._handle_ws()
+            return
         if path in ("/", "/index.html"):
             self._send_file(os.path.join(WEB_DIR, "index.html"), "text/html; charset=utf-8")
             return

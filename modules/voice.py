@@ -15,15 +15,19 @@
 
 负责人：角色 1（实时语音与终端）
 
+S2 已落地（2026-11-05，本文件保留批式链路作为兜底）：
+    - WS 双向通道见 ws_channel.py 与 /ws/call；音频帧不再走 HTTP 分片；
+    - TTS 分段"就绪即推"替代前端轮询 /api/tts/rest（见 ws_channel._push_rest）；
+    - 流式识别适配层 modules/realtime_asr.py（paraformer-realtime-v2），
+      realtime_enabled() 默认 False，批式兜底仍是 asr() 本身——
+      没验证过密钥与网络前不动默认值。
+
 后续待补充（按优先级）：
-    1. 流式 ASR：现在一轮说完整段上传，请求耗时会随音频增长且长尾不可控
-       （实测一轮 1.9 秒的音频耗过 15.5 秒）；
-    2. 流式 TTS：现在整句合成完才返回，首字要多等约 1.1 秒，逼近 2 秒门槛；
-    3. VAD 换成 Silero 逐帧判定，替代现在的"有字节就算说完"；
-    4. 打断：半双工下前端"松手才上传音频"，播报期间服务器收不到任何上行声音，
-       既没有信号可检测、也没有通道可中断。要做得先把 S2 的 WebSocket
-       双向通道建起来。contracts.EVENT_TYPES 里的 barge_in 是为此预留的事件位。
-    （分帧与传输已完成，见 S1；S2 会把 HTTP 分片换成 WebSocket。）
+    1. 流式识别真密钥连通验证（开 asr.realtime 前必做）；
+    2. VAD 换成 Silero 逐帧判定，替代现在的"有字节就算说完"；
+    3. 说话人分离（环境里别人说话会被当成用户）。
+    （打断的协议事件已就位：barge_in 由前端确认后经 WS 上行，
+    服务端记账并清缓冲，见 ws_channel._on_barge_in。）
 """
 
 import base64
@@ -128,6 +132,32 @@ def vad_detect(audio_bytes, sample_rate=contracts.PCM_SAMPLE_RATE):
         "samples": samples,
         "sample_rate": sample_rate,
     }
+
+
+def realtime_enabled():
+    """是否启用流式识别（S2 的 partial 字幕来源）。
+
+    默认关，配置 config/scene.json 的 asr.realtime=true 才开。为什么这么保守：
+        流式链路用 paraformer-realtime-v2，计费与调用方式都和现在的
+        qwen3-asr-flash 不同；没验证过密钥与网络的环境里贸然开启，
+        风险不是"慢一点"而是"整通识别没了"。关着时 WS 通话自动走
+        批式兜底（行为与 S1 完全一致），开了才有半句字幕与流式 final。
+    """
+    return bool(config_loader.asr_config().get("realtime", False))
+
+
+def open_realtime_asr():
+    """建一条实时识别连接。失败返回 None（回落批式），不抛——
+    调用方在 WS 建连路径上，抛异常会把整条通话通道带崩。"""
+    from modules import realtime_asr
+    try:
+        inst = realtime_asr.RealtimeAsr.connect()
+        return inst
+    except Exception as exc:
+        # 失败原因要能被看到：塞进事件流做不到（这里没有 session_id），
+        # 至少打到控制台，别让人以为"开了 realtime 没效果"是代码没生效。
+        print("  [realtime-asr] 流式识别建连失败，回落批式：%s" % str(exc)[:160])
+        return None
 
 
 def asr(audio_bytes, hints=None):

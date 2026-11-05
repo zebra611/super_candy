@@ -67,6 +67,7 @@
       <button id="btnSend" disabled>发送</button>
     </div>
     <div class="hint" id="audioLine" style="margin-top:8px">麦克风未启用。点「开始通话」后麦克风会自动打开，直接说话即可，客服说话时可以插话打断。</div>
+    <div class="hint" id="liveSubtitle" style="margin-top:4px;min-height:16px;color:#0c447c"></div>
   </div>
 
   <div class="card">
@@ -153,6 +154,7 @@ async function startCall() {
   const d = await r.json();
   S.sessionId = d.session_id;
   S.token = d.read_token;
+  wsConnect();                     // S2：实时通道与通话同生共死，先建起来
   $("sessionLine").textContent = "会话 " + d.session_id;
   $("btnStart").disabled = true;
   $("btnRec").disabled = false;
@@ -360,7 +362,12 @@ function vadTick(rms) {
       S.phase = "thinking";
       setPhaseLine();
       // T0 = 说完了的那一刻，必须在等上传落地之前取
-      sendTurn({ audio_streamed: true, audio_dropped: A.dropped }, performance.now());
+      const t0 = performance.now();
+      // S2：通道在线走协议推送（服务端主动回结果与语音）；
+      // 不在线回落 HTTP 轮。两条路的差别只在运输，业务事件完全一样。
+      if (!wsSendTurn(t0)) {
+        sendTurn({ audio_streamed: true, audio_dropped: A.dropped }, t0);
+      }
     }
   }
 }
@@ -478,15 +485,21 @@ function doBargeIn(heardText, preBuf) {
   S.phase = "user";              // 用户已经在说话了，直接进 user 继续收
   log("系统", "打断：听到「" + (heardText || "") + "」，客服已停止播报");
   setPhaseLine();
-  // 通知服务端记 barge_in、丢掉这一轮没播完的音频
-  const sid = S.sessionId, tok = S.token, tid = S.turnId;
-  fetch("/api/call/barge_in", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sid, token: tok, turn_id: tid,
-                           reason: "user_speech", text: heardText || "",
-                           latency_ms: stopMs })
-  }).catch(() => {});
+  // 通知服务端记 barge_in、丢掉这一轮没播完的音频。
+  // S2：通道在线走协议事件（服务端同时清缓冲），否则走原来的 HTTP。
+  if (WS.sock && WS.started && WS.sock.readyState === 1) {
+    WS.sock.send(JSON.stringify({ type: "barge_in", heard: heardText || "",
+                                  latency_ms: stopMs }));
+  } else {
+    const sid = S.sessionId, tok = S.token, tid = S.turnId;
+    fetch("/api/call/barge_in", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sid, token: tok, turn_id: tid,
+                             reason: "user_speech", text: heardText || "",
+                             latency_ms: stopMs })
+    }).catch(() => {});
+  }
 }
 
 // 压低/恢复播报音量。分段播放时每段是新的 Audio 对象，
@@ -561,6 +574,16 @@ function flushBatch() {
   A.seq += frames.length;
 
   if (!S.sessionId) return;          // 还没开始通话，直接把音频丢掉
+  // S2：通道开着就直接推二进制帧——单条 TCP 有序到达，不需要 seq，
+  // 也不需要并发窗口。通道没起来（老服务端/握手失败）走原来的 HTTP 分片，
+  // 两种路线喂的是同一个服务端缓冲，随时切换不打架。
+  if (WS.sock && WS.started && WS.sock.readyState === 1) {
+    WS.sock.send(merged.buffer);
+    A.srvFrames += frames.length;
+    A.srvSamples += merged.length;
+    updateAudioLine();
+    return;
+  }
   if (A.inflight >= MAX_INFLIGHT) {
     // 背压：宁可丢片并记账，也不要把内存堆爆。
     // 丢片会让服务端看到 seq 缺口——这是故意的，掩盖丢片才是错的。
@@ -840,6 +863,8 @@ async function endCall() {
   S.autoMode = false;
   S.phase = "idle";
   stopPlayback();
+  if (WS.sock) { try { WS.sock.close(); } catch (e) { /* 已断 */ } WS.sock = null; WS.started = false; }
+  $("liveSubtitle").textContent = "";
   if (A.node) {
     await stopCapture();
     $("audioLine").textContent = "麦克风已关闭。";
@@ -894,6 +919,162 @@ async function refreshEvents() {
       "\n     " + JSON.stringify(e.payload)
     ).join("\n") || "还没有事件。";
   } catch (e) { /* 忽略 */ }
+}
+
+// ===== S2：WebSocket 双向通道（角色 1）=====
+// 三件事：音频帧直推（不再 HTTP 分片）、结果与语音"就绪即推"（不再轮询
+// /api/tts/rest）、打断变协议事件。通道任何一步失败都整体回落 HTTP 路线，
+// S1 的行为不受影响——S2 坏了不能把 S1 也带坏。
+const WS = { sock: null, started: false, rtReady: false };
+
+function wsConnect() {
+  if (WS.sock) { try { WS.sock.close(); } catch (e) { /* 已经断了 */ } }
+  WS.started = false;
+  try {
+    const proto = location.protocol === "https:" ? "wss://" : "ws://";
+    const s = new WebSocket(proto + location.host + "/ws/call");
+    s.binaryType = "arraybuffer";
+    WS.sock = s;
+    s.onopen = () => {
+      // start 必须在音频之前：服务端要先验 token 才肯收帧
+      s.send(JSON.stringify({ type: "start", session_id: S.sessionId, token: S.token }));
+    };
+    s.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      wsOnMessage(m);
+    };
+    s.onclose = () => { WS.started = false; };
+    s.onerror = () => { /* 回落由 readyState 判断；这里不打扰用户 */ };
+  } catch (e) {
+    log("系统", "实时通道建不起来，继续用 HTTP 分片：" + e.message);
+  }
+}
+
+function wsOnMessage(m) {
+  switch (m.type) {
+    case "ready":
+      WS.started = true;
+      WS.rtReady = !!m.realtime;
+      log("系统", "实时通道已建立（S2）" + (WS.rtReady ? "，流式字幕开启" : "") + "。");
+      return;
+    case "turn_result":
+      handleWsTurnResult(m);
+      return;
+    case "tts":
+      wsOnTts(m);
+      return;
+    case "tts_done":
+      WSP.done = true;
+      wsPlayNext();
+      return;
+    case "turn_end":
+      if (m.latency) $("mTotal").textContent = Math.round(m.latency.total_ms) + " ms";
+      refreshMetrics(); refreshEvents();
+      return;
+    case "barge_ack":
+      return;                       // 服务端已记账；停播在前端早已完成
+    case "partial":
+      // 流式识别的半句字幕：只给演示者看，不进对话日志——
+      // 半句随时会被整句取代，进了日志反而像"客服听错了"。
+      $("liveSubtitle").textContent = m.text || "";
+      return;
+    case "pong":
+      return;
+    case "error":
+      // 一轮在服务端失败：必须把状态放回去，否则前端永远卡在"思考中"
+      if (m.code === "TURN_FAILED" || m.code === "TURN_BUSY") {
+        S.busy = false;
+        if (S.phase === "thinking") { S.phase = "listening"; setPhaseLine(); }
+      }
+      log("系统", "通道消息被拒：" + m.code + "（" + (m.detail || "") + "）");
+      return;
+  }
+}
+
+// 服务端推回的一轮文字结果。展示逻辑与 sendTurn 相同，只是运输路线不同。
+function handleWsTurnResult(m) {
+  S.turnId = m.turn_id;
+  S.busy = false;
+  $("btnSend").disabled = false;
+  log("用户", m.user_text || "（无应答）");
+  log("客服", m.reply_text, m.next_stage);
+  if (m.tool_result) {
+    log("系统", "工具调用：" + JSON.stringify(m.tool_result) +
+        (m.closed ? "（已闭环并回写）" : ""));
+  }
+  refreshEvents();
+}
+
+// WS 语音轮提交。返回 true 表示已走通道；false 表示通道不可用，调用方回落 HTTP。
+function wsSendTurn(t0) {
+  if (!WS.started || !WS.sock || WS.sock.readyState !== 1) return false;
+  S.busy = true;
+  S.t0 = t0;
+  WSP.queue = []; WSP.done = false; WSP.reported = false; WSP.playing = false; WSP.text = "";
+  WS.sock.send(JSON.stringify({ type: "turn" }));
+  return true;
+}
+
+// ===== WS 语音播放队列：段就绪即播，与 HTTP 版 playSegments 平行 =====
+// 为什么要平行实现：HTTP 版的队列是"一次拿一包"，WS 版的段是分批到达的，
+// 硬塞进同一个函数会让两条路线互相耦合，坏一处坏一双。
+const WSP = { queue: [], done: false, playing: false, reported: false, text: "" };
+
+function wsOnTts(m) {
+  if (m.mode === "browser") {
+    // 服务端合成失败回落：用浏览器念。与 HTTP 版的 browserSpeak 同源。
+    const myToken = S.playToken;
+    log("客服", m.text, "（浏览器播报）");
+    if (S.phase !== "agent") { S.phase = "agent"; setPhaseLine(); }
+    browserSpeak(m.text, (est) => {
+      if (myToken !== S.playToken) return;
+      reportMetric(m.turn_id, performance.now() - S.t0, est);
+    });
+    return;
+  }
+  WSP.text = m.text || WSP.text;
+  if (S.phase !== "agent") { S.phase = "agent"; S.bargeHits = 0; setPhaseLine(); }
+  if (m.audio_url) WSP.queue.push(m);
+  wsPlayNext();
+}
+
+function wsPlayNext() {
+  if (WSP.playing) return;
+  const seg = WSP.queue.shift();
+  if (seg) {
+    WSP.playing = true;
+    const myToken = S.playToken;
+    const barged = () => myToken !== S.playToken;   // 被打断的队列整体作废
+    const fallback = (why) => {
+      WSP.playing = false;
+      if (barged()) return;
+      log("系统", why + "，改用浏览器播报");
+      browserSpeak(WSP.text, (est) => reportMetric(seg.turn_id, performance.now() - S.t0, est));
+    };
+    const a = new Audio(seg.audio_url);
+    S.currentAudio = a;
+    if (S.ducked) a.volume = VAD.duckVolume;        // 插话疑似期新起段也保持压低
+    a.onplaying = () => {
+      if (!WSP.reported) {
+        WSP.reported = true;
+        reportMetric(seg.turn_id, performance.now() - S.t0, false);
+      }
+    };
+    a.onended = () => {
+      S.currentAudio = null;
+      WSP.playing = false;
+      if (barged()) return;
+      wsPlayNext();
+    };
+    a.onerror = () => fallback("分段音频播放失败");
+    a.play().catch(() => fallback("自动播放被拦截"));
+    return;
+  }
+  if (WSP.done) {
+    WSP.done = false; WSP.reported = false; WSP.text = "";
+    $("liveSubtitle").textContent = "";
+    afterPlayback();
+  }
 }
 
 $("btnStart").onclick = startCall;

@@ -974,6 +974,164 @@ def main():
            "再跑一次：moved=%s dry_run=%s（没有可搬的就该什么都不做）"
            % (again.get("moved"), again.get("dry_run"))])
 
+    # ---- 证据 14：S2 WebSocket 双向通道（协议可离线验证的部分）----
+    print()
+    print("=" * 74)
+    print("证据 14：S2 WebSocket——握手锚点、帧编解码、通话协议、流式识别接管")
+    print("=" * 74)
+
+    import io
+    import modules.wsproto as wsproto            # noqa: E402
+    import ws_channel                            # noqa: E402
+
+    # 1) 握手应答键用 RFC 6455 官方示例做锚点：算法抄错的话浏览器直接拒连，
+    #    但"拒连"会发生在别人的浏览器里，离线锚点让它在自检里就暴露。
+    _k = wsproto.accept_key("dGhlIHNhbXBsZSBub25jZQ==")
+    check("WS 握手应答键与 RFC 6455 官方示例一致",
+          _k == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+          ["accept_key('dGhlIHNhbXBsZSBub25jZQ==') = %s" % _k,
+           "RFC 6455 §1.3 期望值：s3pPLMBiTxaQ9kYGzzhZRbK+xOo="])
+
+    # 2) 帧编解码：服务端下发（无掩码）、客户端上行（必须带掩码去掩码）、
+    #    分片拼装。这三个是 WebSocket 全部"惊险动作"。
+    fin, op, payload = wsproto.Reader(io.BytesIO(
+        wsproto.encode_frame(wsproto.OP_TEXT, "你好".encode("utf-8")))).read_frame()
+    check("服务端下发帧可被解码（文本、无掩码）",
+          fin and op == wsproto.OP_TEXT and payload == "你好".encode("utf-8"),
+          ["opcode=%d payload=%r" % (op, payload.decode("utf-8"))])
+    fin, op, payload = wsproto.Reader(io.BytesIO(
+        wsproto.encode_frame(wsproto.OP_BIN, b"\x01\x02\x03", mask=True))).read_frame()
+    check("客户端上行帧去掩码后逐字节还原（二进制、带掩码）",
+          fin and op == wsproto.OP_BIN and payload == b"\x01\x02\x03",
+          ["opcode=%d payload=%r" % (op, payload)])
+    op, payload = wsproto.Reader(io.BytesIO(
+        wsproto.encode_frame(wsproto.OP_TEXT, b"he", fin=False)
+        + wsproto.encode_frame(wsproto.OP_CONT, b"llo", fin=True))).read_message()
+    check("分片帧自动拼回完整消息",
+          op == wsproto.OP_TEXT and payload == b"hello",
+          ["拼回后 = %r" % payload])
+
+    # 3) 通话协议：假后端 + 假发送器走完整一轮。真起服务器再真连 WS 的测法
+    #    会在"没装浏览器"的环境里跑不动，协议层测试必须不依赖任何 socket。
+    class _FakeBackend:
+        def __init__(self):
+            self.ingested, self.turns, self.barges = [], [], []
+            self.rest_map = {}
+            self.turn_no = 0
+
+        def auth(self, sid, token):
+            return {"sid": sid} if token == "good" else None
+
+        def attach(self, sess, ws):
+            self.attached = (sess, ws)
+
+        def detach(self, sess):
+            self.detached = True
+
+        def ingest(self, sess, pcm):
+            self.ingested.append(pcm)
+
+        def handle_turn(self, sid, audio_streamed=True, asr_override=None):
+            self.turn_no += 1
+            self.turns.append({"sid": sid, "override": asr_override})
+            return {"turn_id": self.turn_no, "user_text": "喂",
+                    "reply_text": "您好", "stage": "GREETING",
+                    "next_stage": "VERIFY", "intent": "x", "tool_result": None,
+                    "closed": False, "latency": {"total_ms": 1.0},
+                    "tts": {"mode": "segments", "text": "您好",
+                            "segments": [{"text": "您好",
+                                          "audio_url": "https://x/0.mp3"}]}}
+
+        def take_rest(self, sess, turn_id):
+            return self.rest_map.pop(turn_id, None)
+
+        def barge(self, sid, heard, latency_ms=None):
+            self.barges.append((sid, heard, latency_ms))
+            return 7
+
+        def realtime_enabled(self):
+            return False
+
+    sent = []
+    fake = _FakeBackend()
+    wsess = ws_channel.WsCallSession(fake, send_text=sent.append)
+
+    def _sent_types():
+        out = []
+        for s in sent:
+            try:
+                out.append(json.loads(s).get("type"))
+            except ValueError:
+                out.append("<坏 JSON>")
+        return out
+
+    wsess.on_text(json.dumps({"type": "turn"}))
+    check("未绑定会话就发 turn 被拒绝（NOT_STARTED）",
+          _sent_types() == ["error"],
+          ["下行消息：%s" % _sent_types()])
+    wsess.on_text(json.dumps({"type": "start", "session_id": "s1", "token": "bad"}))
+    check("token 不对不绑定会话（AUTH_FAILED）",
+          wsess.sess is None and _sent_types()[-1] == "error",
+          ["下行消息：%s" % _sent_types()])
+    sent.clear()
+    wsess.on_text(json.dumps({"type": "start", "session_id": "s1", "token": "good"}))
+    wsess.on_text(json.dumps({"type": "nonsense"}))
+    wsess.on_binary(b"\x00\x01")
+    wsess.on_text(json.dumps({"type": "turn"}))
+    # nonsense 那条 error 是故意的：未知类型必须被点名拒绝，而不是被静默吞掉
+    check("正常一轮的推送顺序：ready → error(未知类型) → turn_result → turn_end → tts(首段) → tts_done",
+          _sent_types() == ["ready", "error", "turn_result", "turn_end", "tts", "tts_done"],
+          ["下行顺序：%s" % _sent_types(),
+           "首段地址 = %s" % next((json.loads(s).get("audio_url")
+                                   for s in sent
+                                   if json.loads(s).get("type") == "tts"), None)])
+    check("音频帧进了会话缓冲通道（binary → backend.ingest）",
+          fake.ingested == [b"\x00\x01"],
+          ["收到 %d 帧" % len(fake.ingested)])
+
+    # 剩余段：句柄就位后，推送线程应把 seq=1 推下来并以 tts_done 收尾——
+    # 这就是"服务端主动下发"替代前端轮询 /api/tts/rest 的证据。
+    sent.clear()
+    urls = [None, "https://x/1.mp3"]           # 预填，模拟后台已合成完
+    fake.rest_map[fake.turn_no + 1] = ([threading.Thread(target=lambda: None)],
+                                       urls, ["您好", "请问"])
+    wsess.on_text(json.dumps({"type": "turn"}))
+    _deadline = time.time() + 2.0
+    while "tts_done" not in _sent_types() and time.time() < _deadline:
+        time.sleep(0.02)
+    seqs = [json.loads(s).get("seq") for s in sent
+            if json.loads(s).get("type") == "tts"]
+    check("剩余段由服务端主动推送（不再让前端轮询）",
+          seqs == [0, 1] and _sent_types()[-1] == "tts_done",
+          ["tts 段序号：%s" % seqs, "下行顺序：%s" % _sent_types()])
+
+    sent.clear()
+    wsess.on_text(json.dumps({"type": "barge_in", "heard": "等一下",
+                              "latency_ms": 210}))
+    check("打断走协议事件并回执（后端收到 heard 与打断耗时，回 barge_ack）",
+          fake.barges == [("s1", "等一下", 210)] and _sent_types() == ["barge_ack"],
+          ["后端收到：%s" % fake.barges, "下行：%s" % _sent_types()])
+
+    # 4) 流式识别接管：asr_override 必须以真识别的语义落事件（fake=False、
+    #    source=asr、provider 带 realtime 字样），并且真的推进了状态机。
+    _st2 = start_call()
+    sid_w = _st2["session_id"]
+    _sess2, _err2, _ = _auth(sid_w, _st2["read_token"])
+    ingest_audio_chunk(_sess2, 0, b"\x00\x00" * 160)      # 10ms 静音占位
+    _out2 = handle_turn(sid_w, audio_streamed=True, asr_override={
+        "text": "是我，尾号8866", "provider": "paraformer-realtime",
+        "latency_ms": 12.0})
+    _asr2 = payload_of(sid_w, "asr_result")
+    check("流式识别结果被接管：不再整段重识别，事件语义不变",
+          bool(_asr2) and _asr2.get("provider") == "paraformer-realtime"
+          and _asr2.get("source") == "asr" and _asr2.get("fake") is False,
+          ["asr_result.payload = %s" % json.dumps(_asr2, ensure_ascii=False)])
+    check("接管结果真的推进了对话（身份核验通过 → NEED）",
+          _out2["next_stage"] == "NEED",
+          ["next_stage = %s" % _out2["next_stage"],
+           "入库文本 = %r（尾号应被打码）" % (_asr2 or {}).get("text")])
+    end_call(sid_w)
+
     print()
     print("=" * 74)
     total = len(results)
@@ -986,10 +1144,11 @@ def main():
     print("  已经是真的：云端识别（qwen3-asr-flash）、云端合成（qwen3-tts-flash）、")
     print("            采集分帧上传、静音闸门、墙钟闸门、断连/429 重试、合成失败回落、")
     print("            长句切段只等首段、前端能量 VAD 自动提交、")
-    print("            三段式打断（疑似压低音量→探针识别→认出文字才停）、LLM 改写接缝。")
+    print("            三段式打断（疑似压低音量→探针识别→认出文字才停）、LLM 改写接缝、")
+    print("            S2 WebSocket 双向通道（音频帧上行 + TTS 分段主动下发 + barge_in 协议事件）。")
     print("  仍然是占位的：语义级合规、模拟用户跑批、说话人分离（环境人声会被当用户）、")
     print("            LLM 措辞（nlg._rewrite 还没实现）、")
-    print("            真流式（识别与合成仍是整段 HTTP，没有 WebSocket 双向通道）。")
+    print("            流式识别默认关闭（asr.realtime=true 才启用，需真密钥验证连通）。")
     return 0
 
 

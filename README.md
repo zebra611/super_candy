@@ -14,6 +14,14 @@
 
 > 最新在最上面。每条改动都附当时的回归结果，断言数即验收标准。
 
+**2026-11-05 · S2 WebSocket 双向通道（角色 1：张博涵部分）**：`/ws/call` 落地——
+音频帧从 HTTP 分片改为 WS 直推、TTS 分段"就绪即推"（不再轮询 `/api/tts/rest`）、
+打断变协议事件（`barge_in`/`barge_ack`）、前端自动回落 HTTP（通道坏了不拖累 S1）。
+流式识别适配层（paraformer-realtime-v2，半句字幕）已实现、默认关闭（需真密钥验证）。
+新增 `modules/wsproto.py` / `ws_channel.py` / `modules/realtime_asr.py`，
+冒烟实测：101 握手 → 帧 → turn → 双段 TTS 推送 → barge_ack 全通。
+回归：`verify.py` **73/73**（证据 14 新增 12 条），`run_eval.py` 30/30。
+
 **2026-11-04 · 深夜（贡献归属修复）**：改写 11 个提交的作者邮箱（占位符
 `huangzhe@example.com` → `3217218883@qq.com`），Contributors 现在正确显示
 zebra611 43 + yingbaoyue 11。历史哈希已变，clone 过的队友需重新 clone。
@@ -323,7 +331,7 @@ web/dashboard.html  指标看板：KPI、时延双口径、事件分布、质检
 dashboard.py        看板聚合（只读）
 cost_guard.py       日成本闸门与速率限制（默认关闭）
 mock_business/      独立 Mock 业务服务：查客户 / 查订单 / 建工单（幂等）
-scripts/            verify（61 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
+scripts/            verify（73 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
                     clean_events · archive_events（库体检/归档）/ check_key / 试听 / 录音验识别
 CODEOWNERS          谁的文件谁审（GitHub 账号对照）
 .githooks/          pre-push：禁止直接推 main（要 git config core.hooksPath .githooks）
@@ -337,7 +345,7 @@ reviews/            PR 审核记录
 ## 七、怎么验证我改的东西没坏
 
 ```bash
-python scripts/verify.py       # 61 条行为断言，用临时库，不污染 data/
+python scripts/verify.py       # 73 条行为断言，用临时库，不污染 data/
 python scripts/run_eval.py     # 30 条用例跑批（离线，不调云端）
 python config_loader.py        # 配置结构与占位符校验（一秒出结果）
 python scripts/archive_events.py --stats   # 事件库体检：体积、行数、索引
