@@ -40,6 +40,25 @@ events.DB_PATH = os.path.join(_tmp, "eval.db")
 events.init_db()
 _atexit(lambda: shutil.rmtree(_tmp, ignore_errors=True))
 
+
+def _assert_isolated():
+    """启动自检：跑批的事件库必须在临时目录，绝不能落在仓库 data/ 下。
+
+    为什么把它做成"启动就崩"而不是写进注释：历史上真出过事——
+    data/events.db 里 305 个会话有 300 个是跑批产物，真人通话只剩 5 通，
+    测试用例的 asr_result 耗时是 0.0ms，混进分位数把首字 P50 拉到几十毫秒。
+    那次是靠人发现"数字太漂亮"才查出来的。这种坑不能靠自觉，得靠断言。
+    """
+    prod = os.path.abspath(os.path.join(_ROOT, "data"))
+    db = os.path.abspath(events.DB_PATH)
+    if db == prod or db.startswith(prod + os.sep):
+        raise SystemExit("拒绝启动：跑批事件库指向生产目录 %s" % db)
+    if not db.startswith(os.path.abspath(tempfile.gettempdir()) + os.sep):
+        raise SystemExit("拒绝启动：跑批事件库不在临时目录 %s" % db)
+
+
+_assert_isolated()
+
 import config_loader              # noqa: E402
 
 # 跑批只验"业务流程对不对"，不真的合成音频。
@@ -118,6 +137,42 @@ def judge(case, last, evs):
     return (len(problems) == 0), problems, closed, consent
 
 
+def closure_stats(cases, rows):
+    """闭环双指标：应闭环（该闭的闭没闭上）与误闭环（不该闭的闭上了）。
+
+    为什么不能用"闭环数 / 全部用例数"：30 条用例里有 14 条**按设计就不该闭环**
+    （用户拒绝、要求挂断、身份核验失败、沉默挂机），把它们算进分母，
+    得到的是"37%"，看起来像系统有一半业务没做完——评委一问就穿帮。
+    真正该回答的是两个问题：
+        该闭环的有没有闭环   → should_ok / should
+        不该闭环的有没有乱闭  → wrongly / should_not（这个数应为 0）
+    没在 expect 里声明 closed 的用例不参与统计，单列条数，避免被悄悄算成 0。
+    """
+    by_id = {r["id"]: r for r in rows}
+    should = should_ok = should_not = wrongly = undeclared = 0
+    for case in cases:
+        expect = case.get("expect") or {}
+        if "closed" not in expect:
+            undeclared += 1
+            continue
+        row = by_id.get(case["id"])
+        if row is None:            # 只跑了一部分用例时，没跑的按"未声明"处理
+            undeclared += 1
+            continue
+        if expect["closed"]:
+            should += 1
+            should_ok += 1 if row["closed"] else 0
+        else:
+            should_not += 1
+            wrongly += 1 if row["closed"] else 0
+    return {
+        "should": should, "should_ok": should_ok,
+        "should_not": should_not, "wrongly": wrongly,
+        "undeclared": undeclared,
+        "rate": (should_ok / float(should)) if should else 0.0,
+    }
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     fresh = "--fresh" in sys.argv
@@ -157,7 +212,11 @@ def main():
     passed = sum(1 for r in rows if r["ok"])
     print("-" * 92)
     print("通过率：%d/%d = %.0f%%" % (passed, len(rows), passed * 100.0 / len(rows)))
-    print("闭环率：%d/%d" % (sum(1 for r in rows if r["closed"]), len(rows)))
+    cs = closure_stats(cases, rows)
+    print("闭环率：应闭环 %d/%d = %.0f%%｜误闭环 %d/%d｜未声明 %d 条不计入"
+          % (cs["should_ok"], cs["should"], cs["rate"] * 100,
+             cs["wrongly"], cs["should_not"], cs["undeclared"]))
+    print("事件库：%s（临时库，生产库 data/events.db 未被写入）" % events.DB_PATH)
 
     by_cat = {}
     for r in rows:
