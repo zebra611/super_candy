@@ -22,7 +22,7 @@
 """
 
 import config_loader
-from modules import nlg, tools
+from modules import kb, nlg, tools
 
 # ---------------------------------------------------------------------------
 # 意图关键词表
@@ -128,13 +128,17 @@ def _intent_name(flags):
 
 
 def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
-           end_reason="", stage_label=None):
+           end_reason="", stage_label=None, kb_hit=None):
     """统一的返回构造：把回复、阶段迁移、事件字段一次组装好。
 
     注意 stage 是"这一轮所处的阶段"（回复归属），next_stage 才是迁移后的阶段。
     stage_label 用于覆盖回复归属：回写那句话属于 WRITEBACK 环节，但这一轮
     是从 CONFIRM 直接跳过去的，不覆盖的话事件的 stage 会记成 CONFIRM，
     质检统计"回写环节说没说要说的那句话"时就查不到。
+
+    kb_hit 只在命中知识条目时传入（含 id / source_id / score / matched）。
+    这里的意义是**溯源**：赛后如果有人问"这句'有效期十二个月'依据是什么"，
+    事件里能直接翻到条目编号和资料小节，而不是只有一串回复文本。
     """
     stage_now = stage_label or session["stage"]
 
@@ -160,6 +164,14 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     }
     if end_reason:
         out["end_reason"] = end_reason
+    if kb_hit:
+        out["kb"] = {
+            "id": kb_hit.get("id", ""),
+            "category": kb_hit.get("category", ""),
+            "source_id": kb_hit.get("source_id", ""),
+            "score": kb_hit.get("score", 0),
+            "matched": list(kb_hit.get("matched") or []),
+        }
     return out
 
 
@@ -344,13 +356,24 @@ def _stage_need(session, text, flags):
 def _stage_offer(session, text, flags):
     """OFFER：讲清方案与权益。
 
-    _todo 权益内容必须来自企业资料包；现在是配置里的固定话术，
-    接真实资料包后要做检索 + 引用，不能自由生成。
+    用户提问时走两段式：先查 `modules/kb.py`（命中就带出处播报），
+    查不到才用配置里的固定话术 / `reply_unknown`。这样"答得上来"的范围
+    由知识条目决定，而不是由代码里的 if 分支决定——加一类问题只改 json，不改代码。
+
+    _todo 权益内容必须来自企业资料包。现在 `config/kb.json` 里是**占位内容**
+    （`_meta.placeholder = true`），官方资料包公布后要逐条替换 answer 与 source_id，
+    替换完把 placeholder 改成 false。内容是否替换过，`scripts/kb_check.py` 会提示。
     """
     cfg = config_loader.stage_config("OFFER")
 
-    # 提问：用标准答法，不要临场编
+    # 提问：先查知识库（带出处），查不到再退回配置里的固定话术
     if flags["ask"]:
+        hit = kb.match(text)
+        if hit:
+            return _reply(session, hit["answer"], intent="ask", kb_hit=hit)
+        # 老路径：knowledge 文件还没落位（或问题确实不在库里）时行为完全不变。
+        # 保留它不是为了兼容，是因为「答不上来的问题」和「库里没写的问题」
+        # 必须落到同一句 reply_unknown，不能让两种原因产生两种说法。
         if any(w in text for w in config_loader.answer_keywords("fee")):
             return _reply(session, cfg.get("reply_ask_fee", ""), intent="ask")
         if any(w in text for w in config_loader.answer_keywords("validity")):

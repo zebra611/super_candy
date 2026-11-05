@@ -23,6 +23,9 @@
 # ===== 对话大脑与工具（2A 佟欣 / 2B 潘柏亦）=====
 /modules/dialogue.py   @tongxin-txtxtx @zebra611
 /modules/nlg.py        @tongxin-txtxtx @zebra611
+# 知识库引擎归 2A；条目内容 config/kb.json 落在 /config/ 下，由那条规则兜（4 号 + 队长）。
+# 这里不单独写 /config/kb.json：CODEOWNERS 是"最后匹配生效"，写在 /config/ 之前会被它覆盖，写了等于没写。
+/modules/kb.py         @tongxin-txtxtx @zebra611
 /modules/tools.py      @Peter13856981023 @zebra611
 /modules/adapters/     @Peter13856981023 @zebra611
 
