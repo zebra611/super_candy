@@ -1132,13 +1132,13 @@ def main():
            "入库文本 = %r（尾号应被打码）" % (_asr2 or {}).get("text")])
     end_call(sid_w)
 
-    # ---- 证据 14：场景包与主场景的契约不许漂（P1/P2 回归）----
+    # ---- 证据 15：场景包与主场景的契约不许漂（P1/P2 回归）----
     # 起因：writeback_template 从扁平改成 required/optional、并新增 tools/knowledge 段时，
     # config/scenes/ 下两个包没人切过去跑，validate() 一声不吭；等演示现场切场景，
     # writeback_schema() 退化成"值表"，回写校验拿不到类型与枚举。
     print()
     print("=" * 74)
-    print("证据 14：全场景契约一致；旧扁平写回、required 缺 default 都会被拦下")
+    print("证据 15：全场景契约一致；旧扁平写回、required 缺 default 都会被拦下")
     print("=" * 74)
 
     _rows = config_loader.validate_all()

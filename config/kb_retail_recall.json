@@ -1,6 +1,13 @@
 {
   "_comment": "会员复购召回场景的知识条目库。与服务类外呼的 kb.json 分开：两边答的是不同业务问题，混在一份里必然有一边答错。",
   "_schema": "id / patterns / answer / source_id / valid_from / valid_to / forbidden 全部必填，valid_* 可为 null",
+  "_meta": {
+    "version": "1.0.0",
+    "placeholder": true,
+    "scene": "会员复购召回（占位场景）",
+    "updated_at": "2026-11-05",
+    "note": "answer 与 source_id 都是占位内容。官方资料包公布后必须逐条替换，并把 placeholder 改成 false。source_id 一律以“占位:”开头——不带这个前缀的章节号会被当成真实出处写进自测报告。scripts/kb_check.py 会在占位状态下打印警告。"
+  },
   "items": [
     {
       "id": "KB-RR-FEE-001",
@@ -13,7 +20,7 @@
         "多少钱"
       ],
       "answer": "这份到店礼包是免费的，不需要您额外付费。",
-      "source_id": "业务资料包/会员礼包说明/第1节",
+      "source_id": "占位:会员礼包说明/费用（官方资料包公布后校准）",
       "valid_from": null,
       "valid_to": null,
       "forbidden": []
@@ -28,7 +35,7 @@
         "什么时候到期"
       ],
       "answer": "礼包有效期是七天，从登记当天开始算。",
-      "source_id": "业务资料包/会员礼包说明/第2节",
+      "source_id": "占位:会员礼包说明/有效期（官方资料包公布后校准）",
       "valid_from": null,
       "valid_to": null,
       "forbidden": []
@@ -42,7 +49,7 @@
         "在哪看"
       ],
       "answer": "券会在登记后十分钟内到账，在我的卡券里能查到。",
-      "source_id": "业务资料包/会员礼包说明/第3节",
+      "source_id": "占位:会员礼包说明/到账（官方资料包公布后校准）",
       "valid_from": null,
       "valid_to": null,
       "forbidden": []
