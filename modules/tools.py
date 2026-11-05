@@ -1,146 +1,203 @@
-"""M4 工具与业务适配 —— 哑链路里的"假业务系统"。
+"""M4 工具与工具适配 —— 契约入口、回写校验、幂等。
 
-职责（真实形态）：
-    把大模型的工具调用请求，翻译成对名单/订单/工单系统的真实请求，
-    并把结果结构化回写。要求：参数校验、错误码、幂等。
+分层（这一版才真正落地，之前全挤在一个文件里）：
+    modules/tools.py          契约入口：dispatch() / validate_writeback()
+    modules/adapters/base.py  超时、错误码、耗时打点
+    modules/adapters/mock.py  内置假数据（**默认**，clone 下来就能跑）
+    modules/adapters/real.py  真实接口（现阶段对端是 mock_business/）
 
-当前状态：三个工具全部返回写死的假数据。
-    但**幂等逻辑是真的**——同一幂等键重复调用只产生一条工单，这条不需要等真接口。
+为什么这么切：
+    "数据从哪来"是会变的东西（现在假数据、之后沙箱、最后真接口），
+    而"工具叫什么、参数是什么、返回什么形状"是契约，不能跟着变。
+    所以契约留在 tools.py，实现退到 adapters/，切换只改 config/scene.json 的
+    `tools.provider`——`app.py` 那一行 `tools.dispatch(tc)` 一个字都不用动。
 
-负责人：角色 2（定义工具契约） + 角色 4（实现适配层）
+边界（docs/17 §1）：这一层只管事实从哪来，不决定该不该问、怎么措辞。
 
 后续待补充：
-    1. 换成真实 Mock 接口（企业报名后提供的沙箱地址与账号）；
-    2. 用适配器模式隔离：MockAdapter / RealAdapter 两套实现，配置切换，
-       这样"外呼通道怎么实现"这个未知项不会阻塞现在的开发；
-    3. 加超时与重试（现在的假实现不会超时，所以没写）；
-    4. 错误码统一（业务不存在 / 参数非法 / 系统繁忙 要能区分）。
+    1. 接企业真实沙箱时，只改 RealAdapter 的路径与鉴权；
+    2. 幂等存储换数据库唯一索引（现在是内存 dict，进程重启会失效，见 docs/14 待改进第 5 条）；
+    3. validate_writeback 的字段白名单，等 writeback_schema 定稿后再收紧。
 """
 
-import hashlib
+from __future__ import annotations
+
 import time
 
-# 幂等存储：真实实现应换成数据库唯一索引，骨架阶段用内存 dict。
-# _TICKETS          键 = 幂等键，值 = 已生成的工单（同一键重复调用不再写）
-# _TICKET_BY_SESSION 键 = 会话 ID，值 = 这通电话的工单号（改口时更新同一张，不新开）
-_TICKETS = {}
-_TICKET_BY_SESSION = {}
+from . import adapters
+from .adapters.base import ERROR_INVALID_ARG, ERROR_UNKNOWN_TOOL
 
-# 假客户库：模拟企业提供的脱敏名单。
-_FAKE_CUSTOMERS = [
-    {"customer_id": "C1001", "name": "张伟", "phone_tail": "8866", "level": "金卡"},
-    {"customer_id": "C1002", "name": "李娜", "phone_tail": "2143", "level": "普通"},
-]
+#: 回写校验失败的错误码（赛题"格式合规性"这一项的扣分点）
+ERROR_WRITEBACK_INVALID = "WRITEBACK_INVALID"
 
-# 假订单库：模拟订单系统。
-_FAKE_ORDERS = {
-    "C1001": {"order_id": "O20261101001", "amount": 2680.0, "status": "已签收"},
-    "C1002": {"order_id": "O20261101002", "amount": 399.0, "status": "运输中"},
+# writeback_schema 的 type -> Python 类型断言
+_TYPE_CHECKS = {
+    "str": lambda v: isinstance(v, str),
+    "bool": lambda v: isinstance(v, bool),
+    "int": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "dict": lambda v: isinstance(v, dict),
+    "list": lambda v: isinstance(v, list),
 }
 
 
-def query_customer(keyword):
-    """按姓名或手机尾号查客户。返回 dict(found, customer)。
-
-    TODO 真实接口要处理：同名多结果、号码脱敏、无权限字段裁剪。
-    """
-    t0 = time.time()
-    kw = (keyword or "").strip()
-    for c in _FAKE_CUSTOMERS:
-        if kw and (kw == c["name"] or kw == c["phone_tail"]):
-            return {"found": True, "customer": c, "_ms": _ms(t0)}
-    return {"found": False, "customer": None, "_ms": _ms(t0)}
+# ---------------------------------------------------------------------------
+# 适配器出口
+# ---------------------------------------------------------------------------
+def _adapter():
+    """当前 provider 对应的适配器（默认 mock）。改配置即切，不用改代码。"""
+    return adapters.get_adapter()
 
 
-def query_order(customer_id):
-    """查客户最近一笔订单。返回 dict(found, order)。"""
-    t0 = time.time()
-    order = _FAKE_ORDERS.get(customer_id)
-    return {"found": bool(order), "order": order, "_ms": _ms(t0)}
-
-
-def create_ticket(session_id, content, idempotency_key, version=1):
-    """登记工单 —— 这一步就是赛题要的"结构化结果回写"。
-
-    幂等的边界（重要，容易做错）：
-        同一个 idempotency_key 重复调用 → **返回同一条结果，created=False**，
-        不会产生第二条记录。断网重试、用户重复确认都不会脏数据。
-        但"用户改口"不是重复调用，它是**同一张工单的新版本**：
-        幂等键递增（...:v2），工单号不变，内容被更新，updated=True。
-        这样业务系统里始终只有一张工单、一个最终结论，不会留下两条互相矛盾的记录。
-
-    参数：
-        session_id       通话 ID（同时作为业务主键：一通电话一张工单）
-        content          结构化字段 dict（形状来自 config 的 writeback_template）
-        idempotency_key  幂等键，约定为 "会话ID:WRITEBACK:v版本号"
-        version          第几次回写，从 1 开始；改口时递增
-    返回：dict(ticket_id, created, updated, version, _ms)
-    """
-    t0 = time.time()
-    if idempotency_key in _TICKETS:
-        # 命中幂等：直接把上次的结果还回去，不新建也不更新
-        t = _TICKETS[idempotency_key]
-        return {"ticket_id": t["ticket_id"], "created": False, "updated": False,
-                "version": t["version"], "_ms": _ms(t0)}
-
-    # 同一通电话复用同一个工单号：改口是"更新"，不是"再开一张"
-    ticket_id = _TICKET_BY_SESSION.get(session_id)
-    updated = ticket_id is not None
-    if ticket_id is None:
-        # 用工单号的派生方式保持可预期，方便肉眼核对"同一通电话拿到的是同一个号"
-        digest = hashlib.md5(session_id.encode("utf-8")).hexdigest()[:8].upper()
-        ticket_id = "T%s" % digest
-        _TICKET_BY_SESSION[session_id] = ticket_id
-
-    ticket = {
-        "ticket_id": ticket_id,
-        "session_id": session_id,
-        "content": content,
-        "version": int(version),
-        "updated_at": int(time.time()),
-    }
-    _TICKETS[idempotency_key] = ticket
-    return {"ticket_id": ticket_id, "created": not updated, "updated": updated,
-            "version": int(version), "_ms": _ms(t0)}
-
-
-def ticket_for_session(session_id):
-    """取这通电话最新一版的工单（没有则 None）。验证改口是否真的更正了结论时用。"""
-    latest = None
-    for t in _TICKETS.values():
-        if t["session_id"] == session_id:
-            if latest is None or t["version"] >= latest["version"]:
-                latest = t
-    return latest
-
-
-def _reset_for_test():
-    """清空内存中的工单。仅自检脚本使用，业务代码不要调。"""
-    _TICKETS.clear()
-    _TICKET_BY_SESSION.clear()
-
-
+# ---------------------------------------------------------------------------
+# 契约入口（app.py 只认这一个函数）
+# ---------------------------------------------------------------------------
 def dispatch(tool_call):
     """工具总入口：按 name 分发。同时校验参数，缺参直接报错。
 
     这是 app.py 唯一需要调用的函数，新增工具时只改这里的分发表。
+    返回形状与改造前一致：成功带 `_ms`，失败带 `error`（**不抛异常**，
+    让编排层能兜底——赛题要求的"异常兜底"）。
     """
     name = (tool_call or {}).get("name")
     args = (tool_call or {}).get("args") or {}
+    ad = _adapter()
 
     if name == "query_customer":
-        return query_customer(args.get("keyword"))
+        return ad.call("query_customer", args.get("keyword"))
+
     if name == "query_order":
-        return query_order(args.get("customer_id"))
+        return ad.call("query_order", args.get("customer_id"))
+
     if name == "create_ticket":
-        return create_ticket(
-            session_id=args.get("session_id", ""),
-            content=args.get("content", {}),
-            idempotency_key=args.get("idempotency_key", ""),
-            version=args.get("version", 1),
-        )
+        content = args.get("content") or {}
+        # 回写前的格式闸门：字段型式不对就不往业务系统写，宁可这一轮失败
+        # 让编排播兜底话术，也不要往工单里塞脏数据。
+        check = validate_writeback(content)
+        if not check["ok"]:
+            return {"error": ERROR_WRITEBACK_INVALID,
+                    "message": "；".join(check["errors"]),
+                    "errors": check["errors"],
+                    "_ms": check["ms"]}
+        return ad.call("create_ticket",
+                       args.get("session_id", ""),
+                       content,
+                       args.get("idempotency_key", ""),
+                       args.get("version", 1))
+
     # 未知工具：不抛异常，返回结构化错误，让上层能兜底（赛题要求异常兜底）
-    return {"error": "UNKNOWN_TOOL", "name": name, "_ms": 0.0}
+    return {"error": ERROR_UNKNOWN_TOOL, "name": name, "_ms": 0.0}
+
+
+# ---------------------------------------------------------------------------
+# 回写字段校验（T12）
+# ---------------------------------------------------------------------------
+def validate_writeback(content):
+    """按 config_loader.writeback_schema() 校验回写内容。
+
+    返回：{"ok": bool, "errors": [人类可读的原因], "ms": 校验耗时}
+
+    只校验 schema 里声明过的**必填**字段：类型、枚举、长度。
+    **多余字段一律放行**——编排层会往 content 里加 writeback_version / order_id /
+    corrections 这些"跟着工单走的轨迹"，它们不是脏数据，不能因为"schema 里没有"
+    就把整张单拒掉。
+
+    为什么这件事必须在写之前做：
+        赛题维度 3 有"结构化回写完整度与格式合规性"。工单一旦写进业务系统，
+        下游就按它的字段计费/派单；缺字段的单子事后只能人工修，代价比拒绝高得多。
+    """
+    t0 = time.time()
+    errors = []
+
+    try:
+        import config_loader
+        schema = config_loader.writeback_schema() or {}
+    except Exception as exc:  # 配置读不出来时不要假装校验通过
+        return {"ok": False, "errors": ["读不到 writeback_schema：%s" % exc],
+                "ms": _ms(t0)}
+
+    # 兼容骨架阶段的扁平写法：没有 required/optional 就整份当必填、不查类型
+    if "required" in schema or "optional" in schema:
+        required = schema.get("required") or {}
+        optional = schema.get("optional") or {}
+    else:
+        required = {k: {} for k, v in schema.items() if not k.startswith("_")}
+        optional = {}
+
+    content = content or {}
+
+    for field, spec in required.items():
+        if field.startswith("_"):
+            continue
+        spec = spec if isinstance(spec, dict) else {}
+        if field not in content or content[field] is None:
+            errors.append("缺必填字段 %s（%s）" % (field, spec.get("desc", "")))
+            continue
+        errors.extend(_check_field(field, content[field], spec))
+
+    for field, spec in optional.items():
+        if field.startswith("_") or field not in content:
+            continue
+        spec = spec if isinstance(spec, dict) else {}
+        if content[field] is None:
+            continue  # optional 允许不填/为空
+        errors.extend(_check_field(field, content[field], spec))
+
+    return {"ok": not errors, "errors": errors, "ms": _ms(t0)}
+
+
+def _check_field(field, value, spec):
+    """单个字段的类型 / 枚举 / 长度检查。"""
+    errors = []
+    ftype = (spec.get("type") or "").strip()
+    checker = _TYPE_CHECKS.get(ftype)
+    if checker and not checker(value):
+        errors.append("字段 %s 类型应为 %s，实际是 %s"
+                      % (field, ftype, type(value).__name__))
+        return errors  # 类型都不对，后面就别查了
+
+    values = spec.get("values")
+    if values is not None and value not in values:
+        errors.append("字段 %s 取值 %r 不在枚举 %r 内" % (field, value, values))
+
+    max_chars = spec.get("max_chars")
+    if max_chars and isinstance(value, str) and len(value) > int(max_chars):
+        errors.append("字段 %s 超长（%d > %d）" % (field, len(value), int(max_chars)))
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# 兼容层：老调用点与自检脚本仍按函数名调，签名保持不变
+# ---------------------------------------------------------------------------
+def query_customer(keyword):
+    """按姓名或手机尾号查客户。返回 dict(found, customer)。"""
+    return _adapter().call("query_customer", keyword)
+
+
+def query_order(customer_id):
+    """查客户最近一笔订单。返回 dict(found, order)。"""
+    return _adapter().call("query_order", customer_id)
+
+
+def create_ticket(session_id, content, idempotency_key, version=1):
+    """登记工单 —— 结构化结果回写。幂等语义见 adapters/mock.py。"""
+    check = validate_writeback(content)
+    if not check["ok"]:
+        return {"error": ERROR_WRITEBACK_INVALID,
+                "message": "；".join(check["errors"]),
+                "errors": check["errors"], "_ms": check["ms"]}
+    return _adapter().call("create_ticket", session_id, content,
+                           idempotency_key, version)
+
+
+def ticket_for_session(session_id):
+    """取这通电话最新一版的工单（没有则 None）。"""
+    return _adapter().ticket_for_session(session_id)
+
+
+def _reset_for_test():
+    """清空内存中的工单。仅自检脚本使用，业务代码不要调。"""
+    adapters.reset_adapter()
 
 
 def _ms(t0):
