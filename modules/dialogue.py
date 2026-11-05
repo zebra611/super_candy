@@ -189,6 +189,8 @@ def new_session(session_id):
         "slot_history": {"tail": [], "name": []},
         # 改口轨迹：[{slot, from, to, turn}]，同时会进 slots 与回写 payload
         "corrections": [],
+        # 长会话记忆：跨环节事实 + 最近几轮原文（见 _remember / memory_brief）
+        "memory": {"recent": [], "facts": {}},
         # 这一轮用户话的识别置信度。由 respond 写入，_reply 读取后落进事件。
         "last_intent_conf": 0.0,
         # 第几版回写。用户改口时递增，配合幂等键让"同一张工单被更新"而不是新开一张。
@@ -733,6 +735,118 @@ def _is_reference_only(text):
 
 
 # ---------------------------------------------------------------------------
+# 长会话记忆（T4）
+#
+# 外呼一通电话可以聊到二三十轮。旧实现只保留 slots，而且 slots 会被后续轮次
+# 覆盖（"need" 每轮都可能被改写），于是出现两类问题：
+#     1. 用户第 2 轮说的诉求，到第 18 轮已经查不到了——问"我刚才说的什么"答不上；
+#     2. 措辞层没有上下文可注入，prompt 里那句"最近两轮对话"一直是占位符。
+#
+# 这里做的是**最小可用的长期记忆**，不是"让模型记住一切"：
+#     facts  跨环节不变的事实（首次诉求、客户称呼、订单号），只写一次不覆盖
+#     recent 最近 MEMORY_RECENT 轮的原文，供措辞层注入
+#
+# 两个刻意的限制：
+#     - 只留最近 6 轮原文：再多对 prompt 是噪声，对时延是负担；
+#     - 存之前先过禁语过滤：记忆会进 prompt、也可能被复述出来，
+#       一条带违规词的记忆等于把合规风险存进了上下文。
+# ---------------------------------------------------------------------------
+MEMORY_RECENT = 6
+MEMORY_TEXT_MAX = 60
+
+# "我刚才说的什么"这类问法的信号词。识别它不是为了炫技，
+# 是因为长会话里用户真的会问——答不上来，"记得住"这个考察点就是零。
+RECALL_MARKS = ("我刚才说", "我刚说", "我之前说", "我说过", "你还记得",
+                "还记得我", "前面说", "刚才提", "我说的是")
+
+
+def _safe_text(text, limit=MEMORY_TEXT_MAX):
+    """记忆里存的文本：先删禁语，再截断。
+
+    注意是**删词**不是整句丢弃：删掉违规词，剩下的仍然是有用的上下文；
+    整句丢弃会让记忆出现空洞，反而更容易让模型瞎补。
+    """
+    t = (text or "").strip()
+    for w in config_loader.forbidden_words():
+        if w and w in t:
+            t = t.replace(w, "")
+    return t[:limit]
+
+
+def _remember(session, user_text, out):
+    """记一轮：最近原文 + 从 slots 里抽出来的长期事实。
+
+    只在 respond 里调一次（所有出口都经过它）。挂在 _reply 上是不行的：
+    _reply 一次调用可能被同一轮里多次触发，会把一轮记成好几轮。
+    """
+    mem = session.setdefault("memory", {})
+    recent = mem.setdefault("recent", [])
+    recent.append({
+        "turn": int(session.get("turn", 0)),
+        "user": _safe_text(user_text),
+        "stage": (out or {}).get("stage", ""),
+        "intent": (out or {}).get("intent", ""),
+    })
+    if len(recent) > MEMORY_RECENT:
+        del recent[:-MEMORY_RECENT]          # 只留最近 N 轮
+
+    facts = mem.setdefault("facts", {})
+    slots = session.get("slots") or {}
+    # 诉求只记**第一次**。后面的 need 可能是改口，也可能是"用户表示不需要"，
+    # 那是结论不是诉求，覆盖掉就再也答不出"您最初说的是什么"。
+    if slots.get("need") and not facts.get("need"):
+        facts["need"] = _safe_text(slots["need"])
+    customer = slots.get("customer") or {}
+    if customer.get("name") and not facts.get("customer_name"):
+        facts["customer_name"] = customer["name"]
+    order = slots.get("order") or {}
+    if order.get("order_id") and not facts.get("order_id"):
+        facts["order_id"] = order["order_id"]
+
+
+def memory_brief(session):
+    """给措辞层（nlg）用的记忆摘要，没有可注入内容时返回空串。
+
+    格式是"客户 / 订单 / 诉求 / 最近三句"的短句拼接，不写 JSON——
+    prompt 里塞 JSON 会让模型开始照着格式输出结构化内容。
+    """
+    mem = session.get("memory") or {}
+    facts = mem.get("facts") or {}
+    parts = []
+    if facts.get("customer_name"):
+        parts.append("客户：%s" % facts["customer_name"])
+    if facts.get("order_id"):
+        parts.append("订单：%s" % facts["order_id"])
+    if facts.get("need"):
+        parts.append("诉求：%s" % facts["need"])
+    recent = [r.get("user") for r in (mem.get("recent") or []) if r.get("user")]
+    if recent:
+        parts.append("最近用户说：%s" % "；".join(recent[-3:]))
+    return " | ".join(parts)
+
+
+def _is_recall_question(text):
+    """这句是不是在问"我刚才说了什么"。"""
+    t = text or ""
+    return any(w in t for w in RECALL_MARKS)
+
+
+def _recall(session, text):
+    """从记忆里回溯用户说过的诉求。返回 None 表示答不了，交回正常流程。
+
+    身份没核验**绝对不复述**：记忆里可能有姓名、订单号，
+    在"还没确认对面是谁"的时候念出来，就是泄漏个人信息。
+    """
+    if not (session.get("slots") or {}).get("identity_confirmed"):
+        return None
+    facts = (session.get("memory") or {}).get("facts") or {}
+    need = facts.get("need")
+    if not need:
+        return None
+    return _reply(session, "您刚才提到的是：%s。这个我记着呢。" % need, intent="recall")
+
+
+# ---------------------------------------------------------------------------
 # 各阶段的处理器
 # 约定：每个处理器拿 (session, text, flags)，返回 _reply(...) 的结果
 # ---------------------------------------------------------------------------
@@ -1095,13 +1209,14 @@ def respond(session, user_text):
 
     全局规则（先于任何阶段判断）：
         - 空输入 → _handle_empty
-        - 要求挂断 → 直接结束，不回写（与"明确拒绝"区分）
+        - 要求转人工 / 挂断 → 直接收尾，不回写
+        - 问"我刚才说的什么" → 从记忆里回溯（身份已核验才允许，见 _recall）
     其余交给当前阶段的处理器。
 
     参数：
         session    new_session() 返回的 dict，会被就地修改
         user_text  用户这一轮说的话
-    返回：dict(reply_text, stage, next_stage, tool_call, intent)
+    返回：dict(reply_text, stage, next_stage, tool_call, intent, intent_conf)
     """
     text = (user_text or "").strip()
     session["turn"] += 1
@@ -1112,7 +1227,9 @@ def respond(session, user_text):
         # 空输入没有"意图"可言。显式归零，避免上一轮的高置信度被这一轮复用，
         # 事件里出现"用户没说话但 conf=0.95"这种没法解释的数。
         session["last_intent_conf"] = 0.0
-        return _handle_empty(session)
+        out = _handle_empty(session)
+        _remember(session, "", out)
+        return out
     session["empty_count"] = 0
 
     flags = _classify(text)
@@ -1126,15 +1243,21 @@ def respond(session, user_text):
     # 这里不改是因为 3 号的用例与看板已按这个值统计；新增的"听不懂"那条分支
     # 用 "handoff_unclear" 区分，两者在事件里能分开归因。
     if flags["handoff"] and session["stage"] not in ("WRITEBACK", "DONE"):
-        return _handoff(session)
-
+        out = _handoff(session)
     # 全局：要求挂断。注意与"明确拒绝"区分——两者同时出现时按拒绝处理，
     # 因为拒绝是业务结果，必须回写留痕（"不需要，别打了"属于这一类）。
-    if flags["hangup"] and not flags["no"] and session["stage"] not in ("WRITEBACK", "DONE"):
-        return _finish(session, config_loader.stage_config("GREETING").get("reply_hangup", ""), "hangup")
+    elif flags["hangup"] and not flags["no"] and session["stage"] not in ("WRITEBACK", "DONE"):
+        out = _finish(session, config_loader.stage_config("GREETING").get("reply_hangup", ""), "hangup")
+    else:
+        # 记忆回溯放在挂断之后、阶段处理之前：它是"回答问题"，
+        # 不该改变流程；也不该被某个阶段的处理器截走当成新诉求。
+        out = _recall(session, text) if _is_recall_question(text) else None
+        if out is None:
+            handler = _HANDLERS.get(session["stage"], _stage_done)
+            out = handler(session, text, flags)
 
-    handler = _HANDLERS.get(session["stage"], _stage_done)
-    return handler(session, text, flags)
+    _remember(session, text, out)
+    return out
 
 
 def compliance_guard(text):
