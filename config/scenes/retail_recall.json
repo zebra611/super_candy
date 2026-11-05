@@ -1,5 +1,5 @@
 {
-  "_comment": "场景 B：会员复购召回。用来证明\"换场景 = 换这个文件，代码一行不动\"：话术、必说话术、禁语、回写字段全换，状态机与代码不变。",
+  "_comment": "场景 B：会员复购召回。业务文案是本场景自己的，tools / nlg / knowledge / writeback 结构以 config/scene.json 为基准同步——这四段是契约，不能各写各的。",
   "scene_name": "会员复购召回（到店礼包）",
   "agent_name": "小惠",
   "company": "京东到家会员中心",
@@ -45,10 +45,33 @@
     "_why_two_voice_fields": "voice_name 是云端音色 ID（Cherry 是中文女声），voice 是浏览器 speechSynthesis 的音色名。两者不能混用：合成失败退回浏览器时，用的必须是后者，否则会静默无声。",
     "_todo": "现在是整句合成（非流式），首字要等整句出完。若实测首字逼近 2000ms 门槛，改成 X-DashScope-SSE 流式，首包就推给前端。"
   },
+  "nlg": {
+    "provider": "template",
+    "model": "qwen-turbo",
+    "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "timeout_ms": 400,
+    "max_chars": 45,
+    "temperature": 0.3,
+    "_why": "provider=template 表示不改写，直接用 config 里的骨架话术。默认必须关着：队友 clone 下来没密钥也要能跑，自检和跑批也不能每跑一次调 30 次模型。",
+    "_budget": "400ms 是硬上限不是参考值：服务端 P50 现在 974ms，加上 P50<=1300ms 才留得住余量。超了就降级回骨架话术，别等。",
+    "_doc": "完整契约（prompt 结构、降级顺序、验收标准）见 docs/17_任务2接口契约.md"
+  },
+  "tools": {
+    "provider": "mock",
+    "timeout_ms": 300,
+    "base_url": "http://127.0.0.1:8100",
+    "_why": "mock = modules/tools.py 里写死的假数据；real = 走 modules/adapters/ 下的真实适配器。默认 mock，理由同上：clone 下来就能跑。",
+    "_doc": "见 docs/17 第 4 节"
+  },
   "fallback": {
     "reply": "抱歉，我这边刚才没处理好，麻烦您再说一遍好吗？",
+    "reply_asr_fail": "不好意思，我这边没听清，您能再说一遍吗？",
+    "reply_orchestrator_error": "抱歉，系统刚刚卡了一下，我们再试一次好吗？",
+    "reply_tool_timeout": "我这边查得有点慢，稍后让专员给您回电说明，可以吗？",
+    "reply_business_reject": "这个情况我这边处理不了，我帮您转给专员跟进，可以吗？",
+    "reply_handoff": "好的，我帮您转接人工坐席，请稍等。",
     "reply_tool": "我这边查得有点慢，稍后让专员给您回电说明，可以吗？",
-    "_todo": "兜底话术要再细分：识别失败 / 编排异常 / 接口超时 / 业务拒绝，各自不同"
+    "_comment": "四类兜底 + 转人工各一句，互不相同；reply_tool 与 reply_tool_timeout 文案相同，是刻意保留的向后兼容（documents 与旧代码可能引用，删了会 KeyError）。"
   },
   "budget": {
     "max_turns": 40,
@@ -169,6 +192,13 @@
       "type": "str"
     }
   ],
+  "knowledge": {
+    "enabled": true,
+    "path": "config/kb_retail_recall.json",
+    "min_score": 1,
+    "max_answer_chars": 60,
+    "_why": "本场景用自己的知识库：礼包是否收费、券的有效期与到账时间，与服务类外呼的权益话术不是一回事"
+  },
   "answers": {
     "_comment": "常见问题标准答法：OFFER/CONFIRM 阶段命中关键词时优先用这里，避免自由发挥编造",
     "fee": [
@@ -187,14 +217,58 @@
     "unknown": "unknown"
   },
   "writeback_template": {
-    "_comment": "回写字段形状，真实实现要按 Mock 接口文档校准字段名与类型",
-    "call_result": "connected",
-    "identity_confirmed": true,
-    "need": "待填写",
-    "consent": true,
-    "coupon_id": "待填写",
-    "agent_version": "v1",
-    "note": "骨架阶段为占位内容"
+    "_comment": "回写字段形状。字段名待企业资料包公布后校准，但类型/必填性现在定死，校验器按这个写。default 是骨架阶段的合法缺省值，供 config_loader.writeback_template() 摊平成扁平 dict，保证 dialogue.py 的旧调用点不用改。",
+    "required": {
+      "call_result": {
+        "type": "enum",
+        "values": [
+          "connected",
+          "no_answer",
+          "refused",
+          "invalid"
+        ],
+        "default": "connected",
+        "desc": "通话结果"
+      },
+      "identity_confirmed": {
+        "type": "bool",
+        "default": false,
+        "desc": "身份是否核验通过"
+      },
+      "need": {
+        "type": "str",
+        "max_chars": 100,
+        "default": "未获取",
+        "desc": "用户诉求"
+      },
+      "consent": {
+        "type": "enum",
+        "values": [
+          true,
+          false,
+          "unknown"
+        ],
+        "default": "unknown",
+        "desc": "是否同意领取权益"
+      },
+      "agent_version": {
+        "type": "str",
+        "default": "v1",
+        "desc": "话术版本，进化学要溯源"
+      }
+    },
+    "optional": {
+      "ticket_ref": {
+        "type": "str",
+        "default": null,
+        "desc": "工单号"
+      },
+      "coupon_id": {
+        "type": "str",
+        "default": null,
+        "desc": "到店礼包券号（本场景独有，回写时由工具层填）"
+      }
+    }
   },
   "compliance": {
     "forbidden_words": [
@@ -230,6 +304,7 @@
   "_scene_meta": {
     "id": "retail_recall",
     "desc": "电商会员复购召回：到店礼包提醒 + 会员回访",
+    "contract_baseline": "config/scene.json（v2：tools / knowledge / writeback required-optional）",
     "who_may_edit": "4 号（平台与交付）维护结构，业务话术由业务方提供后替换"
   }
 }

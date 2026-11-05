@@ -1132,6 +1132,41 @@ def main():
            "入库文本 = %r（尾号应被打码）" % (_asr2 or {}).get("text")])
     end_call(sid_w)
 
+    # ---- 证据 14：场景包与主场景的契约不许漂（P1/P2 回归）----
+    # 起因：writeback_template 从扁平改成 required/optional、并新增 tools/knowledge 段时，
+    # config/scenes/ 下两个包没人切过去跑，validate() 一声不吭；等演示现场切场景，
+    # writeback_schema() 退化成"值表"，回写校验拿不到类型与枚举。
+    print()
+    print("=" * 74)
+    print("证据 14：全场景契约一致；旧扁平写回、required 缺 default 都会被拦下")
+    print("=" * 74)
+
+    _rows = config_loader.validate_all()
+    _bad = [(label, probs) for label, _path, probs in _rows if probs]
+    check("主场景与 config/scenes/ 下每个场景包都通过校验",
+          not _bad,
+          ["校验了 %d 份：%s" % (len(_rows), ", ".join(l for l, _p, _x in _rows))]
+          + ["%s: %s" % (l, "; ".join(ps[:2])) for l, ps in _bad])
+
+    _cfg = json.loads(json.dumps(config_loader.load()))
+    _flat = json.loads(json.dumps(_cfg))
+    _flat["writeback_template"] = {"call_result": "connected", "need": "待填写"}
+    _flat_probs = config_loader.validate(_flat)
+    check("回写模板退回旧扁平写法会被拦下（不再静默退化）",
+          any("旧扁平" in x for x in _flat_probs),
+          ["validate() 报：%s" % (_flat_probs[0] if _flat_probs else "无（说明又静默了）")])
+
+    _nodef = json.loads(json.dumps(_cfg))
+    _nodef["writeback_template"]["required"]["need"].pop("default", None)
+    _nodef_probs = config_loader.validate(_nodef)
+    def _flat_keys(cfg):
+        return set(config_loader._flatten_writeback(cfg.get("writeback_template") or {}).keys())
+    _lost = sorted(_flat_keys(_cfg) - _flat_keys(_nodef))
+    check("required 缺 default 会被拦下，且能指出摊平后会丢哪个字段",
+          any("缺 default" in x for x in _nodef_probs) and "need" in _lost,
+          ["validate() 报：%s" % next((x for x in _nodef_probs if "缺 default" in x), "无"),
+           "摊平对比：缺 default 后少了 %s" % (_lost or "无")])
+
     print()
     print("=" * 74)
     total = len(results)

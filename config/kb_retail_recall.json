@@ -1,0 +1,51 @@
+{
+  "_comment": "会员复购召回场景的知识条目库。与服务类外呼的 kb.json 分开：两边答的是不同业务问题，混在一份里必然有一边答错。",
+  "_schema": "id / patterns / answer / source_id / valid_from / valid_to / forbidden 全部必填，valid_* 可为 null",
+  "items": [
+    {
+      "id": "KB-RR-FEE-001",
+      "patterns": [
+        "收费",
+        "花钱",
+        "要钱",
+        "付费",
+        "免费",
+        "多少钱"
+      ],
+      "answer": "这份到店礼包是免费的，不需要您额外付费。",
+      "source_id": "业务资料包/会员礼包说明/第1节",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": []
+    },
+    {
+      "id": "KB-RR-VALIDITY-001",
+      "patterns": [
+        "多久",
+        "有效期",
+        "多长时间",
+        "期限",
+        "什么时候到期"
+      ],
+      "answer": "礼包有效期是七天，从登记当天开始算。",
+      "source_id": "业务资料包/会员礼包说明/第2节",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": []
+    },
+    {
+      "id": "KB-RR-ARRIVAL-001",
+      "patterns": [
+        "到账",
+        "什么时候到",
+        "怎么用",
+        "在哪看"
+      ],
+      "answer": "券会在登记后十分钟内到账，在我的卡券里能查到。",
+      "source_id": "业务资料包/会员礼包说明/第3节",
+      "valid_from": null,
+      "valid_to": null,
+      "forbidden": []
+    }
+  ]
+}
