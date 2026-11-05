@@ -32,3 +32,6 @@ config/secrets.json
 .idea/
 .DS_Store
 Thumbs.db
+
+# 评测每日归档（本地运行产物；趋势数据不进仓库，报告另存 eval/reports/）
+/eval/runs/
