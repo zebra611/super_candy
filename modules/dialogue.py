@@ -52,6 +52,42 @@ ANGRY_WORDS = ("投诉", "骗子", "烦", "垃圾", "滚", "气死", "恶心", "
 # 提问信号
 ASK_MARKS = ("吗", "？", "?", "多少", "多久", "怎么", "什么", "能不能", "是不是", "可以吗")
 
+# 要求转人工。**故意不含"投诉"**：投诉是情绪信号（见 ANGRY_WORDS），
+# 要致歉承接后继续解决问题，不能一句"帮您转人工"就把电话挂掉。
+# 评测用例 R04 就是"我要投诉你们"之后还要走完五个环节，含投诉会直接判负。
+HANDOFF_WORDS = ("转人工", "找人工", "人工客服", "转客服", "转接人工",
+                 "要真人", "真人接", "叫你们领导", "找你们领导")
+
+# ---------------------------------------------------------------------------
+# 兜底话术：按"为什么会兜底"分开
+#
+# 原来只有一句"抱歉，我这边刚才没处理好，麻烦您再说一遍好吗？"糊住所有情况，
+# 结果是三种完全不同的失败对用户说同一句话：
+#     识别没听清   —— 该请对方再说一遍
+#     接口超时     —— 再说一遍也没用，该承诺回电
+#     业务拒绝     —— 更不能让他重复，该换人处理
+# 用户重复三遍仍听到"麻烦您再说一遍"，体验比直接挂断还差。
+#
+# 结构：reason -> (配置键, 内置默认话术)
+#     配置键先查 `fallback` 段；`writeback` 额外兼容旧的 `stages.WRITEBACK` 段。
+#     内置默认是为了配置没补齐时也能跑（4 号补配置不用改代码）。
+# ---------------------------------------------------------------------------
+FALLBACK_SCENES = {
+    "asr": ("reply_asr",
+            "不好意思，这边没听清，您再说一遍好吗？"),
+    "error": ("reply",
+              "抱歉，我这边刚才没处理好，麻烦您再说一遍好吗？"),
+    "timeout": ("reply_timeout",
+                "我这边查询有点慢，稍后让专员给您回电说明，可以吗？"),
+    "business": ("reply_business",
+                 "这个情况我这边处理不了，稍后让专员跟您说明，可以吗？"),
+    "tool": ("reply_tool",
+             "我这边查得有点慢，稍后让专员给您回电说明，可以吗？"),
+    "writeback": ("reply_fail",
+                  "我这边登记时出了点问题，稍后会有专员联系您确认。感谢您的接听，再见。"),
+}
+_KEY_TO_REASON = dict((v[0], k) for k, v in FALLBACK_SCENES.items())
+
 
 def new_session(session_id):
     """创建一次通话的内存状态。
@@ -91,6 +127,7 @@ def _classify(text):
         no     明确拒绝
         yes    明确肯定
         ask    在提问
+        handoff 要求转人工（不含"投诉"——投诉要承接后继续处理）
         digits 文本里的 4 位数字（手机尾号）
 
     _todo 角色 2 接入大模型后，这里改成"模型输出的 intent + 置信度"，
@@ -98,7 +135,8 @@ def _classify(text):
     """
     t = (text or "").strip()
     flags = {"deny": False, "hangup": False, "angry": False,
-             "no": False, "yes": False, "ask": False, "digits": ""}
+             "no": False, "yes": False, "ask": False, "handoff": False,
+             "digits": ""}
 
     flags["deny"] = any(w in t for w in DENY_PERSON)
     flags["hangup"] = any(w in t for w in HANGUP_WORDS)
@@ -107,6 +145,8 @@ def _classify(text):
     # 关键：命中否定词时不再判肯定，"不要"里含"要"就是典型坑
     flags["yes"] = (not flags["no"]) and (t in YES_EXACT or any(w in t for w in YES_CONTAINS))
     flags["ask"] = any(m in t for m in ASK_MARKS)
+    # 同理："我不需要转人工"里的"转人工"是拒绝，不是要求
+    flags["handoff"] = (not flags["no"]) and any(w in t for w in HANDOFF_WORDS)
 
     # 手机尾号：连续 4 位数字
     digits = ""
@@ -495,14 +535,60 @@ def forced_end(session, reason):
     return _finish(session, text, reason)
 
 
-def safe_fallback(session):
-    """编排环节自己出错时的兜底回复：认错 + 请对方再说一遍，阶段不推进。
+def fallback_for(reason="error"):
+    """按失败原因取兜底话术。reason 取 FALLBACK_SCENES 的键。
+
+    取值顺序：`fallback.<键>` → （仅 writeback）`stages.WRITEBACK.<键>` → 内置默认。
+    为什么 writeback 要单独多查一层：那批话术早就写在 `stages.WRITEBACK` 里了，
+    直接搬到 `fallback` 段等于让 4 号改配置、让 3 号的用例重新对齐，收益为零。
+
+    为什么别的 reason 不去查 stages：`WRITEBACK.reply` 是**回写成功**的话术，
+    兜底时误拿到它就会对着用户说"已经为您登记完成"——这是最严重的一类事故。
+    所以只对白名单里的键开放第二次查找。
+    """
+    key, default = FALLBACK_SCENES.get(reason, FALLBACK_SCENES["error"])
+    text = config_loader.fallback_text(key)
+    if text:
+        return text
+    if reason == "writeback":
+        text = config_loader.stage_config("WRITEBACK").get(key)
+        if text:
+            return text
+    return default
+
+
+def fallback_key(reason="error"):
+    """某个 reason 对应的配置键，供写需求和查配置时对照。"""
+    return FALLBACK_SCENES.get(reason, FALLBACK_SCENES["error"])[0]
+
+
+def _handoff(session):
+    """转人工：礼貌收尾，并且**不下业务结论**。
+
+    为什么不回写：转人工意味着"这通电话没谈完"，业务结论应该由人工给出。
+    这时候写一张"未同意"的工单，等于替用户做了决定，人工接手时还会看到
+    一条自相矛盾的记录。
+
+    为什么走 `_finish` 而不是直接返回：`_finish` 会把阶段推到 DONE 并带上
+    end_reason，`_reply` 见到 end_reason 就跳过话术改写——"再见"被模型
+    改写成"拜拜下次聊"是外呼里很难解释的事故。
+    """
+    cfg = config_loader.stage_config("DONE")
+    text = (cfg.get("reply_handoff")
+            or config_loader.fallback_text("reply_handoff")
+            or "好的，我帮您转接人工同事，稍后会有专人和您联系，感谢您的接听，再见。")
+    return _finish(session, text, "handoff")
+
+
+def safe_fallback(session, reason="error"):
+    """编排环节自己出错时的兜底回复：认错 + 按原因给不同处理，阶段不推进。
 
     不推进阶段是刻意的：这一轮没听懂，下一轮应该从同一个环节重来，
     而不是假装已经过了这一关（否则会漏掉必说话术与确认）。
+
+    reason 只影响"说哪句"，不影响状态机——兜底永远不该改变业务进度。
     """
-    text = config_loader.fallback_text("reply", "抱歉，我这边刚才没处理好，麻烦您再说一遍好吗？")
-    return _reply(session, text, intent="error")
+    return _reply(session, fallback_for(reason), intent="error")
 
 
 def opening_line():
@@ -542,6 +628,11 @@ def respond(session, user_text):
 
     flags = _classify(text)
 
+    # 全局：要求转人工。放在挂断判断之前——"我要真人"和"别打了"是两种相反的诉求，
+    # 前者要承诺有人接手，后者要立刻结束；同时出现时以转人工为准（用户还在听）。
+    if flags["handoff"] and session["stage"] not in ("WRITEBACK", "DONE"):
+        return _handoff(session)
+
     # 全局：要求挂断。注意与"明确拒绝"区分——两者同时出现时按拒绝处理，
     # 因为拒绝是业务结果，必须回写留痕（"不需要，别打了"属于这一类）。
     if flags["hangup"] and not flags["no"] and session["stage"] not in ("WRITEBACK", "DONE"):
@@ -577,8 +668,13 @@ def compliance_guard(text):
 
 
 def fallback_text(key="reply_fail"):
-    """取兜底话术。目前用于回写失败时替换掉"已登记"那句。
+    """按**配置键**取兜底话术（老接口，`app.py:525` 在用）。
 
-    _todo 兜底话术应再细分：接口超时 / 业务拒绝 / 系统异常，各自不同。
+    注意它吃的是"键"不是"原因"——`reply_fail` 是配置里已有的键名。
+    新代码请用 `fallback_for(reason)`，按"为什么会兜底"来取，
+    可读性更好，也不会把键名和原因混成一个概念。
     """
-    return config_loader.stage_config("WRITEBACK").get(key, "稍后会有专员联系您。")
+    reason = _KEY_TO_REASON.get(key)
+    if reason:
+        return fallback_for(reason)
+    return config_loader.fallback_text(key) or ""
