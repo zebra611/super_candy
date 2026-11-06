@@ -1,0 +1,60 @@
+{
+  "_comment": "场景库：决定客户为什么打/接这通电话，以及什么叫‘这通电话处理好了’。与角色库正交——同一个角色可以出现在任何场景里，组合出 8×6=48 种对局。",
+  "_version": "v1",
+  "scenarios": [
+    {
+      "id": "S01",
+      "name": "延保权益回访",
+      "background": "客户三个月前买过家电，本次是例行回访并介绍免费延保权益",
+      "customer_goal": "搞清楚是不是骗子、要不要花钱",
+      "success_definition": "客户明确同意或明确拒绝，且工单已回写",
+      "expect_closed": true,
+      "flavor": ["你们怎么知道我买过东西", "这个延保是免费的吗"]
+    },
+    {
+      "id": "S02",
+      "name": "退订/别再打",
+      "background": "客户已被多次外呼，本次明确要求停止联系",
+      "customer_goal": "让对方别再打，并确认已经退订",
+      "success_definition": "记录拒绝意向并回写，不得继续推销",
+      "expect_closed": true,
+      "flavor": ["以后别给我打了", "把我号码删了"]
+    },
+    {
+      "id": "S03",
+      "name": "商品破损投诉",
+      "background": "客户收到的商品包装压坏，情绪激动要求赔偿",
+      "customer_goal": "要赔偿、要说法",
+      "success_definition": "承接情绪、记录诉求、不越权承诺赔偿",
+      "expect_closed": true,
+      "flavor": ["东西压烂了", "你们赔不赔"]
+    },
+    {
+      "id": "S04",
+      "name": "账单争议",
+      "background": "客户发现卡里被扣了 30 元，认为是乱收费",
+      "customer_goal": "问清楚扣款来源并要求退款",
+      "success_definition": "说明来源（资料包内）或承认不知道，记录诉求",
+      "expect_closed": true,
+      "flavor": ["我卡里怎么少了三十块", "谁让你们扣的"]
+    },
+    {
+      "id": "S05",
+      "name": "业务咨询",
+      "background": "客户主动询问权益有效期、是否收费、如何开票",
+      "customer_goal": "拿到准确答案",
+      "success_definition": "答案来自资料包，不知道就承认，不编造",
+      "expect_closed": false,
+      "flavor": ["这个能用多久", "能开发票吗"]
+    },
+    {
+      "id": "S06",
+      "name": "怀疑诈骗/骚扰",
+      "background": "客户怀疑是诈骗电话，追问资质与号码来源",
+      "customer_goal": "验证对方身份，否则挂断",
+      "success_definition": "自报身份、说明号码来源、不强行推进",
+      "expect_closed": false,
+      "flavor": ["你是不是骗子", "我号码你哪来的"]
+    }
+  ]
+}

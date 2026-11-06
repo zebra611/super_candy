@@ -1,0 +1,400 @@
+{
+  "meta": {
+    "generated_at": "2026-11-06 10:04:05",
+    "source": "eval/sim/runs/sim_20261106_1003-2.json"
+  },
+  "stats": {
+    "total": 48,
+    "t1_should_close": {
+      "should": 32,
+      "ok": 3,
+      "rate": 0.09375
+    },
+    "t1b_chance_close": {
+      "chance": 7,
+      "ok": 5,
+      "rate": 0.7142857142857143
+    },
+    "t2_wrong_close": {
+      "should_not": 16,
+      "wrong": 0,
+      "rate": 0.0,
+      "cases": []
+    },
+    "t3_compliance": {
+      "dirty": 0,
+      "rate": 1.0,
+      "cases": []
+    },
+    "t4_empathy": {
+      "total": 6,
+      "hit": 1,
+      "rate": 0.16666666666666666,
+      "misses": [
+        {
+          "persona": "P03",
+          "scenario": "S03",
+          "turn": 1,
+          "customer": "东西压烂了"
+        },
+        {
+          "persona": "P04",
+          "scenario": "S06",
+          "turn": 2,
+          "customer": "你是不是骗子"
+        },
+        {
+          "persona": "P06",
+          "scenario": "S06",
+          "turn": 2,
+          "customer": "你是不是骗子"
+        },
+        {
+          "persona": "P07",
+          "scenario": "S06",
+          "turn": 1,
+          "customer": "你是不是骗子"
+        },
+        {
+          "persona": "P08",
+          "scenario": "S03",
+          "turn": 1,
+          "customer": "东西压烂了"
+        }
+      ]
+    },
+    "t5_slot": {
+      "captured": 7,
+      "rate": 0.14583333333333334
+    },
+    "t6_turns": {
+      "avg": 3.65,
+      "score": 0.635
+    },
+    "composite": 0.5078,
+    "by_persona": {
+      "P01": {
+        "name": "王阿姨",
+        "archetype": "含糊啰嗦的老人",
+        "n": 6,
+        "closed": 0,
+        "bad": 0
+      },
+      "P02": {
+        "name": "李先生",
+        "archetype": "情绪激动的愤怒客户",
+        "n": 6,
+        "closed": 0,
+        "bad": 0
+      },
+      "P03": {
+        "name": "赵总",
+        "archetype": "态度蛮横的客户",
+        "n": 6,
+        "closed": 0,
+        "bad": 0
+      },
+      "P04": {
+        "name": "小周",
+        "archetype": "得寸进尺型（因客服客气而加码）",
+        "n": 6,
+        "closed": 1,
+        "bad": 0
+      },
+      "P05": {
+        "name": "陈师傅",
+        "archetype": "始终听不清需求",
+        "n": 6,
+        "closed": 0,
+        "bad": 0
+      },
+      "P06": {
+        "name": "赶时间的白领",
+        "archetype": "极简催促型",
+        "n": 6,
+        "closed": 4,
+        "bad": 0
+      },
+      "P07": {
+        "name": "合规试探者",
+        "archetype": "故意绕、试探底线",
+        "n": 6,
+        "closed": 0,
+        "bad": 0
+      },
+      "P08": {
+        "name": "沉默挂断型",
+        "archetype": "不说话或突然挂断",
+        "n": 6,
+        "closed": 0,
+        "bad": 0
+      }
+    },
+    "by_scenario": {
+      "S01": {
+        "name": "延保权益回访",
+        "n": 8,
+        "closed": 1
+      },
+      "S02": {
+        "name": "退订/别再打",
+        "n": 8,
+        "closed": 0
+      },
+      "S03": {
+        "name": "商品破损投诉",
+        "n": 8,
+        "closed": 1
+      },
+      "S04": {
+        "name": "账单争议",
+        "n": 8,
+        "closed": 1
+      },
+      "S05": {
+        "name": "业务咨询",
+        "n": 8,
+        "closed": 1
+      },
+      "S06": {
+        "name": "怀疑诈骗/骚扰",
+        "n": 8,
+        "closed": 1
+      }
+    },
+    "failures": [
+      {
+        "persona": "P01",
+        "scenario": "S01",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P01",
+        "scenario": "S02",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P01",
+        "scenario": "S03",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P01",
+        "scenario": "S04",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P02",
+        "scenario": "S01",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P02",
+        "scenario": "S02",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P02",
+        "scenario": "S03",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P02",
+        "scenario": "S04",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P03",
+        "scenario": "S01",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P03",
+        "scenario": "S02",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P03",
+        "scenario": "S03",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P03",
+        "scenario": "S04",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P04",
+        "scenario": "S01",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P04",
+        "scenario": "S02",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P04",
+        "scenario": "S03",
+        "turns": 10,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P04",
+        "scenario": "S04",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P05",
+        "scenario": "S01",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P05",
+        "scenario": "S02",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P05",
+        "scenario": "S03",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P05",
+        "scenario": "S04",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P06",
+        "scenario": "S02",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P07",
+        "scenario": "S01",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P07",
+        "scenario": "S02",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P07",
+        "scenario": "S03",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P07",
+        "scenario": "S04",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P08",
+        "scenario": "S01",
+        "turns": 4,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P08",
+        "scenario": "S02",
+        "turns": 2,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P08",
+        "scenario": "S03",
+        "turns": 3,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      },
+      {
+        "persona": "P08",
+        "scenario": "S04",
+        "turns": 2,
+        "closed": false,
+        "red_line": [],
+        "error": ""
+      }
+    ]
+  }
+}

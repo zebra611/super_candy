@@ -1,0 +1,3145 @@
+{
+  "generated_at": "2026-11-06 10:03:31",
+  "total": 48,
+  "records": [
+    {
+      "persona": "P01",
+      "persona_name": "王阿姨",
+      "archetype": "含糊啰嗦的老人",
+      "scenario": "S01",
+      "scenario_name": "延保权益回访",
+      "session_id": "s_4d1fef3e1c10",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "你是哪个单位的呀，再说一遍",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "这个延保是免费的吗",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "这个延保是免费的吗",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P01",
+      "persona_name": "王阿姨",
+      "archetype": "含糊啰嗦的老人",
+      "scenario": "S02",
+      "scenario_name": "退订/别再打",
+      "session_id": "s_a8e2570bed64",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "喂？谁呀……我这耳朵不太好使",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "是不是八八几几啊，我记不清了，你等会儿我找找纸",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "以后别给我打了",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P01",
+      "persona_name": "王阿姨",
+      "archetype": "含糊啰嗦的老人",
+      "scenario": "S03",
+      "scenario_name": "商品破损投诉",
+      "session_id": "s_5d510c0d499a",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "哎哟，你们又打电话来啦",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "尾号？啥尾号啊……我想想啊，我孙子昨天还来看我来着",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "是不是八八几几啊，我记不清了，你等会儿我找找纸",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P01",
+      "persona_name": "王阿姨",
+      "archetype": "含糊啰嗦的老人",
+      "scenario": "S04",
+      "scenario_name": "账单争议",
+      "session_id": "s_720e1f8b685e",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "你是哪个单位的呀，再说一遍",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "是不是八八几几啊，我记不清了，你等会儿我找找纸",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "是不是八八几几啊，我记不清了，你等会儿我找找纸",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P01",
+      "persona_name": "王阿姨",
+      "archetype": "含糊啰嗦的老人",
+      "scenario": "S05",
+      "scenario_name": "业务咨询",
+      "session_id": "s_2a05c6c9a6d9",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "啥？你大声点，我这耳朵背",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "这个能用多久",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "是不是八八几几啊，我记不清了，你等会儿我找找纸",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P01",
+      "persona_name": "王阿姨",
+      "archetype": "含糊啰嗦的老人",
+      "scenario": "S06",
+      "scenario_name": "怀疑诈骗/骚扰",
+      "session_id": "s_7ce4bfd7e477",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "哎哟，你们又打电话来啦",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "我号码你哪来的",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "是不是八八几几啊，我记不清了，你等会儿我找找纸",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P02",
+      "persona_name": "李先生",
+      "archetype": "情绪激动的愤怒客户",
+      "scenario": "S01",
+      "scenario_name": "延保权益回访",
+      "session_id": "s_50fe0f7ba4ef",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "少废话，先说你们怎么知道我电话的",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "这个延保是免费的吗",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "你们怎么知道我买过东西",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P02",
+      "persona_name": "李先生",
+      "archetype": "情绪激动的愤怒客户",
+      "scenario": "S02",
+      "scenario_name": "退订/别再打",
+      "session_id": "s_0eb9d49041dd",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "别跟我来这套！你们谁啊",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "以后别给我打了",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "你们连我是谁都不知道就打过来？",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P02",
+      "persona_name": "李先生",
+      "archetype": "情绪激动的愤怒客户",
+      "scenario": "S03",
+      "scenario_name": "商品破损投诉",
+      "session_id": "s_a07e3a241e44",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "别跟我来这套！你们谁啊",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "你们连我是谁都不知道就打过来？",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "你们连我是谁都不知道就打过来？",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P02",
+      "persona_name": "李先生",
+      "archetype": "情绪激动的愤怒客户",
+      "scenario": "S04",
+      "scenario_name": "账单争议",
+      "session_id": "s_681621f6ae2d",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "别跟我来这套！你们谁啊",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "尾号？我凭什么告诉你！",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "你们连我是谁都不知道就打过来？",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P02",
+      "persona_name": "李先生",
+      "archetype": "情绪激动的愤怒客户",
+      "scenario": "S05",
+      "scenario_name": "业务咨询",
+      "session_id": "s_f953dfe6f1bb",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "你们还有完没完了？一天打八百个电话！",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "你们连我是谁都不知道就打过来？",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "你们连我是谁都不知道就打过来？",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P02",
+      "persona_name": "李先生",
+      "archetype": "情绪激动的愤怒客户",
+      "scenario": "S06",
+      "scenario_name": "怀疑诈骗/骚扰",
+      "session_id": "s_925006d5dd38",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "你们还有完没完了？一天打八百个电话！",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "你们连我是谁都不知道就打过来？",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "尾号？我凭什么告诉你！",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P03",
+      "persona_name": "赵总",
+      "archetype": "态度蛮横的客户",
+      "scenario": "S01",
+      "scenario_name": "延保权益回访",
+      "session_id": "s_37e116a92e67",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "别念稿子，说人话",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "少来这套流程，我跟你没那么熟",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "这个延保是免费的吗",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P03",
+      "persona_name": "赵总",
+      "archetype": "态度蛮横的客户",
+      "scenario": "S02",
+      "scenario_name": "退订/别再打",
+      "session_id": "s_1aacff1e2c9a",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "别念稿子，说人话",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "把我号码删了",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "少来这套流程，我跟你没那么熟",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P03",
+      "persona_name": "赵总",
+      "archetype": "态度蛮横的客户",
+      "scenario": "S03",
+      "scenario_name": "商品破损投诉",
+      "session_id": "s_b0ad3a917311",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "别念稿子，说人话",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "东西压烂了",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "我凭什么给你报号码？你先证明你是官方的",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P03",
+      "persona_name": "赵总",
+      "archetype": "态度蛮横的客户",
+      "scenario": "S04",
+      "scenario_name": "账单争议",
+      "session_id": "s_7e8e88a01ae4",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "你谁啊？谁让你打的",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "我凭什么给你报号码？你先证明你是官方的",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "我卡里怎么少了三十块",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P03",
+      "persona_name": "赵总",
+      "archetype": "态度蛮横的客户",
+      "scenario": "S05",
+      "scenario_name": "业务咨询",
+      "session_id": "s_eb0bff508b12",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "有事快说，我时间很贵",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "能开发票吗",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "这个能用多久",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P03",
+      "persona_name": "赵总",
+      "archetype": "态度蛮横的客户",
+      "scenario": "S06",
+      "scenario_name": "怀疑诈骗/骚扰",
+      "session_id": "s_abe013bbe604",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "有事快说，我时间很贵",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "我凭什么给你报号码？你先证明你是官方的",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "少来这套流程，我跟你没那么熟",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P04",
+      "persona_name": "小周",
+      "archetype": "得寸进尺型（因客服客气而加码）",
+      "scenario": "S01",
+      "scenario_name": "延保权益回访",
+      "session_id": "s_1701b8706c1d",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "你好你好，你们服务态度真不错啊",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "这个延保是免费的吗",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "这个延保是免费的吗",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P04",
+      "persona_name": "小周",
+      "archetype": "得寸进尺型（因客服客气而加码）",
+      "scenario": "S02",
+      "scenario_name": "退订/别再打",
+      "session_id": "s_198831b1ddb5",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "哎，正好你在，我多问一句",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "以后别给我打了",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "把我号码删了",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P04",
+      "persona_name": "小周",
+      "archetype": "得寸进尺型（因客服客气而加码）",
+      "scenario": "S03",
+      "scenario_name": "商品破损投诉",
+      "session_id": "s_4ec2dec64a24",
+      "turns": 10,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": true,
+      "need_captured": true,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "态度真好，那我能多问几个问题吧",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "号码啊，尾号8866，你人这么好肯定给我办吧",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "核对上了，感谢配合。您上次在我们这儿有一笔订单，想跟您确认下使用体验，现在方便吗？",
+          "stage": "IDENTITY",
+          "next": "NEED",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "用着挺好的，就是吧……你能不能顺便帮我看看别的",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "您那笔订单金额是 2680.0 元，目前状态是已签收。您用着还顺手吗？",
+          "stage": "NEED",
+          "next": "NEED",
+          "blocked": false,
+          "turn": 2
+        },
+        {
+          "role": "user",
+          "text": "用着挺好的，就是吧……你能不能顺便帮我看看别的",
+          "turn": 3
+        },
+        {
+          "role": "agent",
+          "text": "您那笔订单金额是 2680.0 元，目前状态是已签收。您用着还顺手吗？",
+          "stage": "NEED",
+          "next": "NEED",
+          "blocked": false,
+          "turn": 3
+        },
+        {
+          "role": "user",
+          "text": "用着挺好的，就是吧……你能不能顺便帮我看看别的",
+          "turn": 4
+        },
+        {
+          "role": "agent",
+          "text": "您那笔订单金额是 2680.0 元，目前状态是已签收。您用着还顺手吗？",
+          "stage": "NEED",
+          "next": "NEED",
+          "blocked": false,
+          "turn": 4
+        },
+        {
+          "role": "user",
+          "text": "用着挺好的，就是吧……你能不能顺便帮我看看别的",
+          "turn": 5
+        },
+        {
+          "role": "agent",
+          "text": "您那笔订单金额是 2680.0 元，目前状态是已签收。您用着还顺手吗？",
+          "stage": "NEED",
+          "next": "NEED",
+          "blocked": false,
+          "turn": 5
+        },
+        {
+          "role": "user",
+          "text": "我这人好说话，你也帮我个忙呗",
+          "turn": 6
+        },
+        {
+          "role": "agent",
+          "text": "了解了，针对您的情况我们可以提供一个延保权益，不需要额外付费，您看可以吗？",
+          "stage": "NEED",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 6
+        },
+        {
+          "role": "user",
+          "text": "这个权益挺好，能不能再给我加一份",
+          "turn": 7
+        },
+        {
+          "role": "agent",
+          "text": "这个我这边确认不到，稍后让专员给您回电说明，可以吗？",
+          "stage": "OFFER",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 7
+        },
+        {
+          "role": "user",
+          "text": "你刚才说免费的哈，那我要是不要了，能不能折现",
+          "turn": 8
+        },
+        {
+          "role": "agent",
+          "text": "这份权益是免费的，不需要您额外付费。",
+          "stage": "OFFER",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 8
+        },
+        {
+          "role": "user",
+          "text": "你刚才说免费的哈，那我要是不要了，能不能折现",
+          "turn": 9
+        },
+        {
+          "role": "agent",
+          "text": "这份权益是免费的，不需要您额外付费。",
+          "stage": "OFFER",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 9
+        }
+      ]
+    },
+    {
+      "persona": "P04",
+      "persona_name": "小周",
+      "archetype": "得寸进尺型（因客服客气而加码）",
+      "scenario": "S04",
+      "scenario_name": "账单争议",
+      "session_id": "s_23edc3008770",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "态度真好，那我能多问几个问题吧",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "谁让你们扣的",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "我卡里怎么少了三十块",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P04",
+      "persona_name": "小周",
+      "archetype": "得寸进尺型（因客服客气而加码）",
+      "scenario": "S05",
+      "scenario_name": "业务咨询",
+      "session_id": "s_aaa45e9f168b",
+      "turns": 6,
+      "closed": true,
+      "consent": true,
+      "identity_confirmed": true,
+      "need_captured": true,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "哎，正好你在，我多问一句",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "号码啊，尾号8866，你人这么好肯定给我办吧",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "核对上了，感谢配合。您上次在我们这儿有一笔订单，想跟您确认下使用体验，现在方便吗？",
+          "stage": "IDENTITY",
+          "next": "NEED",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "我这人好说话，你也帮我个忙呗",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "了解了，针对您的情况我们可以提供一个延保权益，不需要额外付费，您看可以吗？",
+          "stage": "NEED",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 2
+        },
+        {
+          "role": "user",
+          "text": "这个权益挺好，能不能再给我加一份",
+          "turn": 3
+        },
+        {
+          "role": "agent",
+          "text": "这个我这边确认不到，稍后让专员给您回电说明，可以吗？",
+          "stage": "OFFER",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 3
+        },
+        {
+          "role": "user",
+          "text": "你刚才不是这么说的啊",
+          "turn": 4
+        },
+        {
+          "role": "agent",
+          "text": "那我和您确认一下：您同意领取这份延保权益，对吗？",
+          "stage": "OFFER",
+          "next": "CONFIRM",
+          "blocked": false,
+          "turn": 4
+        },
+        {
+          "role": "user",
+          "text": "你都这么说了，那我就同意呗，不过你得答应我下个月还有",
+          "turn": 5
+        },
+        {
+          "role": "agent",
+          "text": "好的，已经为您登记完成，稍后会有短信通知。感谢您的接听，再见。",
+          "stage": "WRITEBACK",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 5
+        }
+      ]
+    },
+    {
+      "persona": "P04",
+      "persona_name": "小周",
+      "archetype": "得寸进尺型（因客服客气而加码）",
+      "scenario": "S06",
+      "scenario_name": "怀疑诈骗/骚扰",
+      "session_id": "s_bda11549fc3e",
+      "turns": 10,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": true,
+      "need_captured": true,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "你好你好，你们服务态度真不错啊",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "号码啊，尾号8866，你人这么好肯定给我办吧",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "核对上了，感谢配合。您上次在我们这儿有一笔订单，想跟您确认下使用体验，现在方便吗？",
+          "stage": "IDENTITY",
+          "next": "NEED",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "你是不是骗子",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "您那笔订单金额是 2680.0 元，目前状态是已签收。您用着还顺手吗？",
+          "stage": "NEED",
+          "next": "NEED",
+          "blocked": false,
+          "turn": 2
+        },
+        {
+          "role": "user",
+          "text": "用着挺好的，就是吧……你能不能顺便帮我看看别的",
+          "turn": 3
+        },
+        {
+          "role": "agent",
+          "text": "您那笔订单金额是 2680.0 元，目前状态是已签收。您用着还顺手吗？",
+          "stage": "NEED",
+          "next": "NEED",
+          "blocked": false,
+          "turn": 3
+        },
+        {
+          "role": "user",
+          "text": "你刚才不是这么说的啊",
+          "turn": 4
+        },
+        {
+          "role": "agent",
+          "text": "了解了，针对您的情况我们可以提供一个延保权益，不需要额外付费，您看可以吗？",
+          "stage": "NEED",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 4
+        },
+        {
+          "role": "user",
+          "text": "这个权益挺好，能不能再给我加一份",
+          "turn": 5
+        },
+        {
+          "role": "agent",
+          "text": "这个我这边确认不到，稍后让专员给您回电说明，可以吗？",
+          "stage": "OFFER",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 5
+        },
+        {
+          "role": "user",
+          "text": "你这人怎么说话不算话",
+          "turn": 6
+        },
+        {
+          "role": "agent",
+          "text": "这个我这边确认不到，稍后让专员给您回电说明，可以吗？",
+          "stage": "OFFER",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 6
+        },
+        {
+          "role": "user",
+          "text": "这个权益挺好，能不能再给我加一份",
+          "turn": 7
+        },
+        {
+          "role": "agent",
+          "text": "这个我这边确认不到，稍后让专员给您回电说明，可以吗？",
+          "stage": "OFFER",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 7
+        },
+        {
+          "role": "user",
+          "text": "这个权益挺好，能不能再给我加一份",
+          "turn": 8
+        },
+        {
+          "role": "agent",
+          "text": "这个我这边确认不到，稍后让专员给您回电说明，可以吗？",
+          "stage": "OFFER",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 8
+        },
+        {
+          "role": "user",
+          "text": "你刚才说免费的哈，那我要是不要了，能不能折现",
+          "turn": 9
+        },
+        {
+          "role": "agent",
+          "text": "这份权益是免费的，不需要您额外付费。",
+          "stage": "OFFER",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 9
+        }
+      ]
+    },
+    {
+      "persona": "P05",
+      "persona_name": "陈师傅",
+      "archetype": "始终听不清需求",
+      "scenario": "S01",
+      "scenario_name": "延保权益回访",
+      "session_id": "s_0636f45ee6d9",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "你说什么？大点声",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "你们怎么知道我买过东西",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "这个延保是免费的吗",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P05",
+      "persona_name": "陈师傅",
+      "archetype": "始终听不清需求",
+      "scenario": "S02",
+      "scenario_name": "退订/别再打",
+      "session_id": "s_dd68ba73ad62",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "喂？喂？听得见吗，我这边信号不好",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "尾号？什么尾号？你刚说的我没听明白",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "尾号？什么尾号？你刚说的我没听明白",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P05",
+      "persona_name": "陈师傅",
+      "archetype": "始终听不清需求",
+      "scenario": "S03",
+      "scenario_name": "商品破损投诉",
+      "session_id": "s_e087b3b7c10f",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "喂？喂？听得见吗，我这边信号不好",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "你们赔不赔",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "是让我报手机号吗？多少位啊",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P05",
+      "persona_name": "陈师傅",
+      "archetype": "始终听不清需求",
+      "scenario": "S04",
+      "scenario_name": "账单争议",
+      "session_id": "s_ca6b60d36e1b",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "喂？喂？听得见吗，我这边信号不好",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "谁让你们扣的",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "我卡里怎么少了三十块",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P05",
+      "persona_name": "陈师傅",
+      "archetype": "始终听不清需求",
+      "scenario": "S05",
+      "scenario_name": "业务咨询",
+      "session_id": "s_0aea099e5d28",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "喂？喂？听得见吗，我这边信号不好",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "能开发票吗",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "能开发票吗",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P05",
+      "persona_name": "陈师傅",
+      "archetype": "始终听不清需求",
+      "scenario": "S06",
+      "scenario_name": "怀疑诈骗/骚扰",
+      "session_id": "s_e996d1decbcc",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "你再说一遍，刚才没听清",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "我号码你哪来的",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "我号码你哪来的",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P06",
+      "persona_name": "赶时间的白领",
+      "archetype": "极简催促型",
+      "scenario": "S01",
+      "scenario_name": "延保权益回访",
+      "session_id": "s_af3e361285bf",
+      "turns": 7,
+      "closed": true,
+      "consent": true,
+      "identity_confirmed": true,
+      "need_captured": true,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "哪位，快",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "这个延保是免费的吗",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "8866",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "核对上了，感谢配合。您上次在我们这儿有一笔订单，想跟您确认下使用体验，现在方便吗？",
+          "stage": "IDENTITY",
+          "next": "NEED",
+          "blocked": false,
+          "turn": 2
+        },
+        {
+          "role": "user",
+          "text": "就那样",
+          "turn": 3
+        },
+        {
+          "role": "agent",
+          "text": "了解了，针对您的情况我们可以提供一个延保权益，不需要额外付费，您看可以吗？",
+          "stage": "NEED",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 3
+        },
+        {
+          "role": "user",
+          "text": "行了别说了",
+          "turn": 4
+        },
+        {
+          "role": "agent",
+          "text": "那我和您确认一下：您同意领取这份延保权益，对吗？",
+          "stage": "OFFER",
+          "next": "CONFIRM",
+          "blocked": false,
+          "turn": 4
+        },
+        {
+          "role": "user",
+          "text": "行了别说了",
+          "turn": 5
+        },
+        {
+          "role": "agent",
+          "text": "您可以简单回我一句同意或者不需要就行。",
+          "stage": "CONFIRM",
+          "next": "CONFIRM",
+          "blocked": false,
+          "turn": 5
+        },
+        {
+          "role": "user",
+          "text": "行",
+          "turn": 6
+        },
+        {
+          "role": "agent",
+          "text": "好的，已经为您登记完成，稍后会有短信通知。感谢您的接听，再见。",
+          "stage": "WRITEBACK",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 6
+        }
+      ]
+    },
+    {
+      "persona": "P06",
+      "persona_name": "赶时间的白领",
+      "archetype": "极简催促型",
+      "scenario": "S02",
+      "scenario_name": "退订/别再打",
+      "session_id": "s_057c055cd329",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "长话短说",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "把我号码删了",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "把我号码删了",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P06",
+      "persona_name": "赶时间的白领",
+      "archetype": "极简催促型",
+      "scenario": "S03",
+      "scenario_name": "商品破损投诉",
+      "session_id": "s_26155a03d3c3",
+      "turns": 6,
+      "closed": true,
+      "consent": true,
+      "identity_confirmed": true,
+      "need_captured": true,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "长话短说",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "尾号8866，然后呢",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "核对上了，感谢配合。您上次在我们这儿有一笔订单，想跟您确认下使用体验，现在方便吗？",
+          "stage": "IDENTITY",
+          "next": "NEED",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "你们赔不赔",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "了解了，针对您的情况我们可以提供一个延保权益，不需要额外付费，您看可以吗？",
+          "stage": "NEED",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 2
+        },
+        {
+          "role": "user",
+          "text": "多少钱",
+          "turn": 3
+        },
+        {
+          "role": "agent",
+          "text": "这个我这边确认不到，稍后让专员给您回电说明，可以吗？",
+          "stage": "OFFER",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 3
+        },
+        {
+          "role": "user",
+          "text": "免费就办",
+          "turn": 4
+        },
+        {
+          "role": "agent",
+          "text": "那我和您确认一下：您同意领取这份延保权益，对吗？",
+          "stage": "OFFER",
+          "next": "CONFIRM",
+          "blocked": false,
+          "turn": 4
+        },
+        {
+          "role": "user",
+          "text": "行",
+          "turn": 5
+        },
+        {
+          "role": "agent",
+          "text": "好的，已经为您登记完成，稍后会有短信通知。感谢您的接听，再见。",
+          "stage": "WRITEBACK",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 5
+        }
+      ]
+    },
+    {
+      "persona": "P06",
+      "persona_name": "赶时间的白领",
+      "archetype": "极简催促型",
+      "scenario": "S04",
+      "scenario_name": "账单争议",
+      "session_id": "s_a8c5ce9eee9a",
+      "turns": 5,
+      "closed": true,
+      "consent": true,
+      "identity_confirmed": true,
+      "need_captured": true,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "哪位，快",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "尾号8866，然后呢",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "核对上了，感谢配合。您上次在我们这儿有一笔订单，想跟您确认下使用体验，现在方便吗？",
+          "stage": "IDENTITY",
+          "next": "NEED",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "就那样",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "了解了，针对您的情况我们可以提供一个延保权益，不需要额外付费，您看可以吗？",
+          "stage": "NEED",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 2
+        },
+        {
+          "role": "user",
+          "text": "免费就办",
+          "turn": 3
+        },
+        {
+          "role": "agent",
+          "text": "那我和您确认一下：您同意领取这份延保权益，对吗？",
+          "stage": "OFFER",
+          "next": "CONFIRM",
+          "blocked": false,
+          "turn": 3
+        },
+        {
+          "role": "user",
+          "text": "行",
+          "turn": 4
+        },
+        {
+          "role": "agent",
+          "text": "好的，已经为您登记完成，稍后会有短信通知。感谢您的接听，再见。",
+          "stage": "WRITEBACK",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 4
+        }
+      ]
+    },
+    {
+      "persona": "P06",
+      "persona_name": "赶时间的白领",
+      "archetype": "极简催促型",
+      "scenario": "S05",
+      "scenario_name": "业务咨询",
+      "session_id": "s_ce9beda871b4",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "哪位，快",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "这个能用多久",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "这个能用多久",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P06",
+      "persona_name": "赶时间的白领",
+      "archetype": "极简催促型",
+      "scenario": "S06",
+      "scenario_name": "怀疑诈骗/骚扰",
+      "session_id": "s_420ebf9255f6",
+      "turns": 6,
+      "closed": true,
+      "consent": true,
+      "identity_confirmed": true,
+      "need_captured": true,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "长话短说",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "8866",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "核对上了，感谢配合。您上次在我们这儿有一笔订单，想跟您确认下使用体验，现在方便吗？",
+          "stage": "IDENTITY",
+          "next": "NEED",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "你是不是骗子",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "您那笔订单金额是 2680.0 元，目前状态是已签收。您用着还顺手吗？",
+          "stage": "NEED",
+          "next": "NEED",
+          "blocked": false,
+          "turn": 2
+        },
+        {
+          "role": "user",
+          "text": "还行",
+          "turn": 3
+        },
+        {
+          "role": "agent",
+          "text": "了解了，针对您的情况我们可以提供一个延保权益，不需要额外付费，您看可以吗？",
+          "stage": "NEED",
+          "next": "OFFER",
+          "blocked": false,
+          "turn": 3
+        },
+        {
+          "role": "user",
+          "text": "免费就办",
+          "turn": 4
+        },
+        {
+          "role": "agent",
+          "text": "那我和您确认一下：您同意领取这份延保权益，对吗？",
+          "stage": "OFFER",
+          "next": "CONFIRM",
+          "blocked": false,
+          "turn": 4
+        },
+        {
+          "role": "user",
+          "text": "可以",
+          "turn": 5
+        },
+        {
+          "role": "agent",
+          "text": "好的，已经为您登记完成，稍后会有短信通知。感谢您的接听，再见。",
+          "stage": "WRITEBACK",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 5
+        }
+      ]
+    },
+    {
+      "persona": "P07",
+      "persona_name": "合规试探者",
+      "archetype": "故意绕、试探底线",
+      "scenario": "S01",
+      "scenario_name": "延保权益回访",
+      "session_id": "s_5b16509004eb",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "我录音了啊，你先说你是哪家公司",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "我先不报，你先说你们怎么拿到我号码的",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "核验可以，你先说信息从哪来的",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P07",
+      "persona_name": "合规试探者",
+      "archetype": "故意绕、试探底线",
+      "scenario": "S02",
+      "scenario_name": "退订/别再打",
+      "session_id": "s_dcc9f80de534",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "我录音了啊，你先说你是哪家公司",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "把我号码删了",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "我先不报，你先说你们怎么拿到我号码的",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P07",
+      "persona_name": "合规试探者",
+      "archetype": "故意绕、试探底线",
+      "scenario": "S03",
+      "scenario_name": "商品破损投诉",
+      "session_id": "s_e35e2dc8be63",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "你先报公司全称和工号",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "我先不报，你先说你们怎么拿到我号码的",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "我先不报，你先说你们怎么拿到我号码的",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P07",
+      "persona_name": "合规试探者",
+      "archetype": "故意绕、试探底线",
+      "scenario": "S04",
+      "scenario_name": "账单争议",
+      "session_id": "s_c9b678044618",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "你们这通电话有备案吗",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "我卡里怎么少了三十块",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "我先不报，你先说你们怎么拿到我号码的",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P07",
+      "persona_name": "合规试探者",
+      "archetype": "故意绕、试探底线",
+      "scenario": "S05",
+      "scenario_name": "业务咨询",
+      "session_id": "s_3a89068fa375",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "你们这通电话有备案吗",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "这个能用多久",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "我先不报，你先说你们怎么拿到我号码的",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P07",
+      "persona_name": "合规试探者",
+      "archetype": "故意绕、试探底线",
+      "scenario": "S06",
+      "scenario_name": "怀疑诈骗/骚扰",
+      "session_id": "s_e42c5a3efcd9",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "你们这通电话有备案吗",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "你是不是骗子",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "核验可以，你先说信息从哪来的",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P08",
+      "persona_name": "沉默挂断型",
+      "archetype": "不说话或突然挂断",
+      "scenario": "S01",
+      "scenario_name": "延保权益回访",
+      "session_id": "s_6a839add06e9",
+      "turns": 4,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "嗯",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "你们怎么知道我买过东西",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "您还在吗？我这边听不到声音，您方便的时候说一声就行。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 2
+        },
+        {
+          "role": "user",
+          "text": "",
+          "turn": 3
+        },
+        {
+          "role": "agent",
+          "text": "看来信号不太好，我先不打扰您了，稍后再联系您，再见。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 3
+        }
+      ]
+    },
+    {
+      "persona": "P08",
+      "persona_name": "沉默挂断型",
+      "archetype": "不说话或突然挂断",
+      "scenario": "S02",
+      "scenario_name": "退订/别再打",
+      "session_id": "s_fba25a8d9e20",
+      "turns": 2,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "您还在吗？我这边听不到声音，您方便的时候说一声就行。",
+          "stage": "GREETING",
+          "next": "GREETING",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "看来信号不太好，我先不打扰您了，稍后再联系您，再见。",
+          "stage": "GREETING",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 1
+        }
+      ]
+    },
+    {
+      "persona": "P08",
+      "persona_name": "沉默挂断型",
+      "archetype": "不说话或突然挂断",
+      "scenario": "S03",
+      "scenario_name": "商品破损投诉",
+      "session_id": "s_4ec14bbe2dcf",
+      "turns": 3,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "喂",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "东西压烂了",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "你们赔不赔",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 2
+        }
+      ]
+    },
+    {
+      "persona": "P08",
+      "persona_name": "沉默挂断型",
+      "archetype": "不说话或突然挂断",
+      "scenario": "S04",
+      "scenario_name": "账单争议",
+      "session_id": "s_c03d69810dc9",
+      "turns": 2,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "您还在吗？我这边听不到声音，您方便的时候说一声就行。",
+          "stage": "GREETING",
+          "next": "GREETING",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "看来信号不太好，我先不打扰您了，稍后再联系您，再见。",
+          "stage": "GREETING",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 1
+        }
+      ]
+    },
+    {
+      "persona": "P08",
+      "persona_name": "沉默挂断型",
+      "archetype": "不说话或突然挂断",
+      "scenario": "S05",
+      "scenario_name": "业务咨询",
+      "session_id": "s_6e84cfc13cc7",
+      "turns": 4,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "嗯",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "能开发票吗",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "您还在吗？我这边听不到声音，您方便的时候说一声就行。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 2
+        },
+        {
+          "role": "user",
+          "text": "",
+          "turn": 3
+        },
+        {
+          "role": "agent",
+          "text": "看来信号不太好，我先不打扰您了，稍后再联系您，再见。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 3
+        }
+      ]
+    },
+    {
+      "persona": "P08",
+      "persona_name": "沉默挂断型",
+      "archetype": "不说话或突然挂断",
+      "scenario": "S06",
+      "scenario_name": "怀疑诈骗/骚扰",
+      "session_id": "s_3bc280208760",
+      "turns": 5,
+      "closed": false,
+      "consent": "",
+      "identity_confirmed": false,
+      "need_captured": false,
+      "red_line_failed": [],
+      "error": "",
+      "error_events": 0,
+      "transcript": [
+        {
+          "role": "user",
+          "text": "",
+          "turn": 0
+        },
+        {
+          "role": "agent",
+          "text": "您还在吗？我这边听不到声音，您方便的时候说一声就行。",
+          "stage": "GREETING",
+          "next": "GREETING",
+          "blocked": false,
+          "turn": 0
+        },
+        {
+          "role": "user",
+          "text": "你是不是骗子",
+          "turn": 1
+        },
+        {
+          "role": "agent",
+          "text": "非常抱歉让您有这样的感受，好的，为了核对身份，方便说一下您手机号后四位吗？",
+          "stage": "GREETING",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 1
+        },
+        {
+          "role": "user",
+          "text": "我号码你哪来的",
+          "turn": 2
+        },
+        {
+          "role": "agent",
+          "text": "没关系，那方便说一下您的姓名吗？我核对一下。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 2
+        },
+        {
+          "role": "user",
+          "text": "",
+          "turn": 3
+        },
+        {
+          "role": "agent",
+          "text": "您还在吗？我这边听不到声音，您方便的时候说一声就行。",
+          "stage": "IDENTITY",
+          "next": "IDENTITY",
+          "blocked": false,
+          "turn": 3
+        },
+        {
+          "role": "user",
+          "text": "",
+          "turn": 4
+        },
+        {
+          "role": "agent",
+          "text": "看来信号不太好，我先不打扰您了，稍后再联系您，再见。",
+          "stage": "IDENTITY",
+          "next": "DONE",
+          "blocked": false,
+          "turn": 4
+        }
+      ]
+    }
+  ]
+}
