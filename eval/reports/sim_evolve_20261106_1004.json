@@ -1,0 +1,56 @@
+{
+  "history": [
+    {
+      "gen": 1,
+      "pairs": 48,
+      "max_turns": 10,
+      "composite": 0.5078,
+      "chance_close": 0.7142857142857143,
+      "chance_n": 7,
+      "empathy": 0.16666666666666666,
+      "dirty": 0,
+      "avg_turns": 3.65,
+      "personas": [
+        "P01",
+        "P02",
+        "P03",
+        "P04",
+        "P05",
+        "P06",
+        "P07",
+        "P08"
+      ]
+    },
+    {
+      "gen": 2,
+      "pairs": 6,
+      "max_turns": 10,
+      "composite": 0.3792,
+      "chance_close": 0.3333333333333333,
+      "chance_n": 3,
+      "empathy": 0.0,
+      "dirty": 0,
+      "avg_turns": 5.83,
+      "personas": [
+        "P04"
+      ]
+    },
+    {
+      "gen": 3,
+      "pairs": 6,
+      "max_turns": 14,
+      "composite": 0.4783,
+      "chance_close": 0.6666666666666666,
+      "chance_n": 3,
+      "empathy": 0.0,
+      "dirty": 0,
+      "avg_turns": 7.0,
+      "personas": [
+        "P04"
+      ]
+    }
+  ],
+  "stuck": {
+    "P04": 5
+  }
+}
