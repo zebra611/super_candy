@@ -195,6 +195,7 @@ def main():
         rows.append({
             "id": case["id"], "category": case["category"],
             "ok": ok, "closed": closed, "consent": consent, "problems": problems,
+            "holdout": bool(case.get("holdout")),
         })
 
     # ---- 输出表格 ----
@@ -217,6 +218,14 @@ def main():
           % (cs["should_ok"], cs["should"], cs["rate"] * 100,
              cs["wrongly"], cs["should_not"], cs["undeclared"]))
     print("事件库：%s（临时库，生产库 data/events.db 未被写入）" % events.DB_PATH)
+
+    # 留出集只用于验收：它一旦参与调优，就不再是留出集。
+    _hold = [r for r in rows if r.get("holdout")]
+    if _hold:
+        _hp = sum(1 for r in _hold if r["ok"])
+        _hc = sum(1 for r in _hold if r["closed"])
+        print("留出集：通过 %d/%d（%.0f%%）｜闭环 %d/%d｜**仅作验收用，不得据此调整规则或提示词**"
+              % (_hp, len(_hold), _hp * 100.0 / len(_hold), _hc, len(_hold)))
 
     by_cat = {}
     for r in rows:
