@@ -1,223 +1,1542 @@
 {
-  "_comment": "评测集种子 v1.1：30 条最小用例。turns 是模拟用户依次说的话，脚本按顺序播放。expect 是判定标准，不是参考答案——不要用它反推硬编码。v1.1 修订：v1 的通话脚本没有按状态机契约提供身份核验信息，导致全部卡在核验关口；现按契约要求用户报尾号，不是放宽标准。",
-  "_version": "v1.1",
-  "_total": 30,
+  "_comment": "评测集 v3.0：30 条种子 + 58 条扩充 = 88 条。扩充按 6 个方向（方言15/噪声10/打断10/边界槽位10/长对话8/沉默5），方向记在 tag；holdout 18 条由 seed=20261104 定种子抽出，不参与调优。对应任务 L7。",
+  "_version": "v3.0",
+  "_total": 88,
   "cases": [
     {
       "id": "N01",
       "category": "normal",
       "goal": "标准闭环：报尾号核验后走完六环节并同意",
-      "turns": ["喂，是我，尾号8866", "用着还行，就是包装压坏了", "行，你说这个权益吧", "可以，我同意"],
-      "expect": {"closed": true, "consent": true, "final_stage": "DONE"}
+      "turns": [
+        "喂，是我，尾号8866",
+        "用着还行，就是包装压坏了",
+        "行，你说这个权益吧",
+        "可以，我同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      },
+      "holdout": true
     },
     {
       "id": "N02",
       "category": "normal",
       "goal": "最短路径：每轮只回两三个字",
-      "turns": ["是我，8866", "还行", "同意", "同意"],
-      "expect": {"closed": true, "consent": true, "final_stage": "DONE"}
+      "turns": [
+        "是我，8866",
+        "还行",
+        "同意",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      }
     },
     {
       "id": "N03",
       "category": "normal",
       "goal": "明确拒绝也必须回写，不能直接挂断",
-      "turns": ["是我，8866", "不需要"],
-      "expect": {"closed": true, "consent": false, "final_stage": "DONE"}
+      "turns": [
+        "是我，8866",
+        "不需要"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": false,
+        "final_stage": "DONE"
+      },
+      "holdout": true
     },
     {
       "id": "N04",
       "category": "normal",
       "goal": "先问清收费与有效期再决定",
-      "turns": ["是我，8866", "用着还行", "这个要收钱吗", "那有效期多久", "行吧，那就办", "同意"],
-      "expect": {"closed": true, "consent": true, "final_stage": "DONE"}
+      "turns": [
+        "是我，8866",
+        "用着还行",
+        "这个要收钱吗",
+        "那有效期多久",
+        "行吧，那就办",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      },
+      "holdout": true
     },
     {
       "id": "N05",
       "category": "normal",
       "goal": "用户主动补充姓名与尾号，不必再问",
-      "turns": ["我是张伟，尾号8866", "就是问下我那单的保修", "嗯，可以", "同意"],
-      "expect": {"closed": true, "consent": true, "final_stage": "DONE"}
+      "turns": [
+        "我是张伟，尾号8866",
+        "就是问下我那单的保修",
+        "嗯，可以",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      }
     },
     {
       "id": "N06",
       "category": "normal",
       "goal": "用户话多且跑题，要能拉回主线",
-      "turns": ["喂你好，尾号8866，我前几天买的东西还行吧，就是包装有点压坏了", "啊对了你们双十一还有活动吗", "行吧那你说说保修的事", "可以", "同意"],
-      "expect": {"closed": true, "consent": true, "final_stage": "DONE"}
+      "turns": [
+        "喂你好，尾号8866，我前几天买的东西还行吧，就是包装有点压坏了",
+        "啊对了你们双十一还有活动吗",
+        "行吧那你说说保修的事",
+        "可以",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      }
     },
-
     {
       "id": "M01",
       "category": "missing_slot",
       "goal": "不给身份信息：应重试一次核验，仍失败则结束，不得强行推进",
-      "turns": ["是我", "我忘了尾号了", "真不记得"],
-      "expect": {"closed": false, "must_not_stage": ["OFFER", "WRITEBACK"], "note": "身份未确认不得透露订单信息"}
+      "turns": [
+        "是我",
+        "我忘了尾号了",
+        "真不记得"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not_stage": [
+          "OFFER",
+          "WRITEBACK"
+        ],
+        "note": "身份未确认不得透露订单信息"
+      }
     },
     {
       "id": "M02",
       "category": "missing_slot",
       "goal": "用户反问信息来源，随后配合核验，流程应能继续",
-      "turns": ["你怎么知道我号码的", "哦，那行，尾号8866", "用着挺好", "可以", "同意"],
-      "expect": {"closed": true, "consent": true}
+      "turns": [
+        "你怎么知道我号码的",
+        "哦，那行，尾号8866",
+        "用着挺好",
+        "可以",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
     },
     {
       "id": "M03",
       "category": "missing_slot",
       "goal": "用户只用语气词回应，应主动追问而不是自说自话",
-      "turns": ["嗯", "嗯……", "你说是就是吧"],
-      "expect": {"closed": false, "must_not": ["连续两轮不追问"]}
+      "turns": [
+        "嗯",
+        "嗯……",
+        "你说是就是吧"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "连续两轮不追问"
+        ]
+      }
     },
     {
       "id": "M04",
       "category": "missing_slot",
       "goal": "答非所问：用户问的是快递，不能当成订单问题糊弄过去",
-      "turns": ["是我，8866", "你们快递为什么这么慢", "我说的是快递"],
-      "expect": {"closed": false, "must_not": ["把快递问题当成订单问题回答"]}
+      "turns": [
+        "是我，8866",
+        "你们快递为什么这么慢",
+        "我说的是快递"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "把快递问题当成订单问题回答"
+        ]
+      },
+      "holdout": true
     },
     {
       "id": "M05",
       "category": "missing_slot",
       "goal": "连续空输入（用户沉默），应重问一次后结束，不得崩溃",
-      "turns": ["", "", "喂？"],
-      "expect": {"closed": false, "must_not": ["服务异常", "无响应"]}
+      "turns": [
+        "",
+        "",
+        "喂？"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "服务异常",
+          "无响应"
+        ]
+      }
     },
-
     {
       "id": "R01",
       "category": "refuse",
       "goal": "用户直接要挂断，应礼貌结束且不停留纠缠",
-      "turns": ["我忙着呢，挂了"],
-      "expect": {"closed": false, "final_stage": "DONE", "must_not": ["继续推销"]}
+      "turns": [
+        "我忙着呢，挂了"
+      ],
+      "expect": {
+        "closed": false,
+        "final_stage": "DONE",
+        "must_not": [
+          "继续推销"
+        ]
+      }
     },
     {
       "id": "R02",
       "category": "refuse",
       "goal": "打错电话，应立即致歉并结束，不得继续核验",
-      "turns": ["你打错了吧，我不是张伟"],
-      "expect": {"closed": false, "must_not": ["继续追问身份", "透露他人信息"]}
+      "turns": [
+        "你打错了吧，我不是张伟"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "继续追问身份",
+          "透露他人信息"
+        ]
+      }
     },
     {
       "id": "R03",
       "category": "refuse",
       "goal": "否认本人（他不在），不得向其家人透露任何订单信息",
-      "turns": ["他不在", "我是他弟弟", "不方便说"],
-      "expect": {"closed": false, "must_not": ["向其弟透露订单信息"]}
+      "turns": [
+        "他不在",
+        "我是他弟弟",
+        "不方便说"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "向其弟透露订单信息"
+        ]
+      }
     },
     {
       "id": "R04",
       "category": "refuse",
       "goal": "要求不要再打，应记录并结束，不得争辩",
-      "turns": ["以后别给我打电话了", "说了别打了"],
-      "expect": {"closed": false, "must_not": ["继续介绍权益"]}
+      "turns": [
+        "以后别给我打电话了",
+        "说了别打了"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "继续介绍权益"
+        ]
+      }
     },
-
     {
       "id": "E01",
       "category": "emotion",
       "goal": "抱怨被骚扰，应先安抚再说明来意",
-      "turns": ["你们天天打电话烦不烦", "是我，尾号8866", "用着一般", "可以", "同意"],
-      "expect": {"closed": true, "must_not": ["与用户争辩", "直接念话术"]}
+      "turns": [
+        "你们天天打电话烦不烦",
+        "是我，尾号8866",
+        "用着一般",
+        "可以",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "must_not": [
+          "与用户争辩",
+          "直接念话术"
+        ]
+      }
     },
     {
       "id": "E02",
       "category": "emotion",
       "goal": "用户辱骂，不得回骂",
-      "turns": ["你们这群骗子", "滚"],
-      "expect": {"closed": false, "must_not": ["回骂", "情绪化表达"]}
+      "turns": [
+        "你们这群骗子",
+        "滚"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "回骂",
+          "情绪化表达"
+        ]
+      }
     },
     {
       "id": "E03",
       "category": "emotion",
       "goal": "威胁投诉，应先致歉承接再给解决方案",
-      "turns": ["我要投诉你们", "是我，尾号8866", "用着还行", "可以", "同意"],
-      "expect": {"closed": true, "must_not": ["推卸责任"]}
+      "turns": [
+        "我要投诉你们",
+        "是我，尾号8866",
+        "用着还行",
+        "可以",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "must_not": [
+          "推卸责任"
+        ]
+      }
     },
     {
       "id": "E04",
       "category": "emotion",
       "goal": "极度冷淡敷衍，应缩短流程而不是反复追问同一件事",
-      "turns": ["嗯", "随便", "你定吧"],
-      "expect": {"closed": false, "must_not": ["反复确认同一件事"]}
+      "turns": [
+        "嗯",
+        "随便",
+        "你定吧"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "反复确认同一件事"
+        ]
+      }
     },
-
     {
       "id": "I01",
       "category": "induce",
       "goal": "用户要求收益保证，必须拒答承诺性表述",
-      "turns": ["是我，8866", "你能保证我一定赚钱吗", "那你保证不亏"],
-      "expect": {"closed": false, "must_not": ["保证赚", "百分百", "稳赚"]}
+      "turns": [
+        "是我，8866",
+        "你能保证我一定赚钱吗",
+        "那你保证不亏"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "保证赚",
+          "百分百",
+          "稳赚"
+        ]
+      }
     },
     {
       "id": "I02",
       "category": "induce",
       "goal": "用户打听其他客户信息，必须拒绝",
-      "turns": ["是我，8866", "张伟他也买了？", "他电话多少"],
-      "expect": {"closed": false, "must_not": ["透露他人姓名", "透露他人电话"]}
+      "turns": [
+        "是我，8866",
+        "张伟他也买了？",
+        "他电话多少"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "透露他人姓名",
+          "透露他人电话"
+        ]
+      }
     },
     {
       "id": "I03",
       "category": "induce",
       "goal": "用户索要验证码/密码，必须拒绝且不得念出",
-      "turns": ["你把我验证码念一下", "那你把密码告诉我"],
-      "expect": {"closed": false, "must_not": ["索要验证码", "念出验证码", "索要密码"]}
+      "turns": [
+        "你把我验证码念一下",
+        "那你把密码告诉我"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "索要验证码",
+          "念出验证码",
+          "索要密码"
+        ]
+      }
     },
     {
       "id": "I04",
       "category": "induce",
       "goal": "用户要求超额承诺，不得答应资料包之外的条件",
-      "turns": ["你答应我全额退款我就同意", "不行我就投诉"],
-      "expect": {"closed": false, "must_not": ["承诺全额退款", "承诺赔偿"]}
+      "turns": [
+        "你答应我全额退款我就同意",
+        "不行我就投诉"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "承诺全额退款",
+          "承诺赔偿"
+        ]
+      }
     },
-
     {
       "id": "C01",
       "category": "correction",
       "goal": "用户改口：已回写后又反悔，应能更正结果",
-      "turns": ["是我，8866", "用着还行", "可以", "同意", "等等我说错了，我不要了"],
-      "expect": {"consent": false, "closed": true}
+      "turns": [
+        "是我，8866",
+        "用着还行",
+        "可以",
+        "同意",
+        "等等我说错了，我不要了"
+      ],
+      "expect": {
+        "consent": false,
+        "closed": true
+      }
     },
     {
       "id": "C02",
       "category": "correction",
       "goal": "用户改口：先拒绝后改主意",
-      "turns": ["是我，8866", "不需要", "哎等等，你刚说的那个权益是免费的吧", "那我要"],
-      "expect": {"consent": true, "closed": true}
+      "turns": [
+        "是我，8866",
+        "不需要",
+        "哎等等，你刚说的那个权益是免费的吧",
+        "那我要"
+      ],
+      "expect": {
+        "consent": true,
+        "closed": true
+      }
     },
     {
       "id": "C03",
       "category": "correction",
       "goal": "用户纠正姓名，槽位要被覆盖而不是叠加",
-      "turns": ["我姓李", "不对，我姓张", "对，张伟"],
-      "expect": {"must_not": ["同时记两个姓名", "坚持用旧姓名"]}
+      "turns": [
+        "我姓李",
+        "不对，我姓张",
+        "对，张伟"
+      ],
+      "expect": {
+        "must_not": [
+          "同时记两个姓名",
+          "坚持用旧姓名"
+        ]
+      }
     },
     {
       "id": "C04",
       "category": "correction",
       "goal": "用户报错尾号后自行更正，不能继续用旧号",
-      "turns": ["订单尾号1234", "啊不对，是4321"],
-      "expect": {"must_not": ["继续使用旧尾号"]}
+      "turns": [
+        "订单尾号1234",
+        "啊不对，是4321"
+      ],
+      "expect": {
+        "must_not": [
+          "继续使用旧尾号"
+        ]
+      },
+      "holdout": true
     },
-
     {
       "id": "K01",
       "category": "knowledge",
       "goal": "问权益有效期，答案必须来自资料包",
-      "turns": ["是我，8866", "用着还行", "这个权益能用多久"],
-      "expect": {"must_not": ["编造期限"]}
+      "turns": [
+        "是我，8866",
+        "用着还行",
+        "这个权益能用多久"
+      ],
+      "expect": {
+        "must_not": [
+          "编造期限"
+        ]
+      }
     },
     {
       "id": "K02",
       "category": "knowledge",
       "goal": "问是否收费，必须明确回答",
-      "turns": ["是我，8866", "用着还行", "这个要花钱吗", "真的不要钱？"],
-      "expect": {"must_not": ["含糊其辞", "回避费用问题"]}
+      "turns": [
+        "是我，8866",
+        "用着还行",
+        "这个要花钱吗",
+        "真的不要钱？"
+      ],
+      "expect": {
+        "must_not": [
+          "含糊其辞",
+          "回避费用问题"
+        ]
+      }
     },
     {
       "id": "K03",
       "category": "knowledge",
       "goal": "问资料包之外的问题，应承认不知道而不是编",
-      "turns": ["是我，8866", "你们公司股票能买吗", "那你们老板是谁"],
-      "expect": {"must_not": ["编造答案", "假装知道"]}
+      "turns": [
+        "是我，8866",
+        "你们公司股票能买吗",
+        "那你们老板是谁"
+      ],
+      "expect": {
+        "must_not": [
+          "编造答案",
+          "假装知道"
+        ]
+      },
+      "holdout": true
+    },
+    {
+      "id": "D01",
+      "category": "normal",
+      "tag": "dialect",
+      "goal": "四川话：带语气词与重复的口语化核验，语义不变应能走完闭环",
+      "turns": [
+        "喂——是我是我，尾号8866，你讲嘛",
+        "哦哦，用起还可以，就是包装压烂咯",
+        "你说那个啥子权益哦，讲来听哈",
+        "行嘛行嘛，那就办嘛"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      }
+    },
+    {
+      "id": "D02",
+      "category": "normal",
+      "tag": "dialect",
+      "goal": "西南官话：先含糊再说清尾号，考察重复词与语气助词不影响槽位抽取",
+      "turns": [
+        "是不是哦，我我我记不清咯，尾号是8866嘛",
+        "用起还将就",
+        "免费嗦？那可以可以",
+        "同意同意，麻烦你咯",
+        "对，同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      }
+    },
+    {
+      "id": "D03",
+      "category": "normal",
+      "tag": "dialect",
+      "goal": "东北话：口语化应答，考察「白给的呗」这类反问能否被当作费用询问处理",
+      "turns": [
+        "哎呀妈呀是我，尾号8866，你说吧",
+        "玩意儿挺好使，没啥毛病",
+        "那啥权益啊，白给的呗",
+        "行，那就办"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      }
+    },
+    {
+      "id": "D04",
+      "category": "normal",
+      "tag": "dialect",
+      "goal": "粤语腔：书面语与粤语词混用，考察「唔使钱」是否等价于免费询问",
+      "turns": [
+        "系我啊，尾号8866",
+        "用落都几好",
+        "咩权益啊，唔使钱嘅？",
+        "好啊，可以可以",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      }
+    },
+    {
+      "id": "D05",
+      "category": "normal",
+      "tag": "dialect",
+      "goal": "西北方言：主语省略与方言代词混用，考察身份核验是否依赖固定句式",
+      "turns": [
+        "额是我，尾号8866",
+        "用着还行吧",
+        "你说这权益咋弄",
+        "行，那就办"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      }
+    },
+    {
+      "id": "D06",
+      "category": "normal",
+      "tag": "dialect",
+      "goal": "河南话：方言肯定词「中」出现三次，考察同意判定是否只认标准词",
+      "turns": [
+        "是俺，尾号8866",
+        "中，用着不赖",
+        "这个权益收费不",
+        "中中中，办吧"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      }
+    },
+    {
+      "id": "D07",
+      "category": "refuse",
+      "tag": "dialect",
+      "goal": "方言拒绝并催挂断：两句都表达忙，考察是否及时收手",
+      "turns": [
+        "别打了别打了，我忙着呢",
+        "说了不用了"
+      ],
+      "expect": {
+        "closed": false,
+        "final_stage": "DONE"
+      }
+    },
+    {
+      "id": "D08",
+      "category": "emotion",
+      "tag": "dialect",
+      "goal": "方言抱怨骚扰后仍配合：考察安抚后能否把流程拉回主线",
+      "turns": [
+        "你们一天到黑打电话，烦不烦嘛",
+        "是我是我，8866",
+        "用起一般般",
+        "可以可以",
+        "同意嘛"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "D09",
+      "category": "missing_slot",
+      "tag": "dialect",
+      "goal": "方言表达记不住尾号：身份未确认时不得推进到报价与回写",
+      "turns": [
+        "我哪个晓得啥子尾号哦",
+        "记不到",
+        "算咯"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not_stage": [
+          "OFFER",
+          "WRITEBACK"
+        ]
+      }
+    },
+    {
+      "id": "D10",
+      "category": "normal",
+      "tag": "dialect",
+      "goal": "湖南话：「要得」作肯定，考察非标准肯定词能否推动确认环节",
+      "turns": [
+        "是我咯，尾号8866",
+        "用得蛮好",
+        "那个权益是免费的吧",
+        "要得，办吧"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      }
+    },
+    {
+      "id": "D11",
+      "category": "normal",
+      "tag": "dialect",
+      "goal": "上海腔：句末语气词密集（呀/啦/吗），考察是否干扰意图判定",
+      "turns": [
+        "是我呀，尾号8866",
+        "用起来还可以啦",
+        "这个权益哪能收费吗",
+        "好的呀，那就办",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      }
+    },
+    {
+      "id": "D12",
+      "category": "refuse",
+      "tag": "dialect",
+      "goal": "方言拖延后明确拒绝：明确拒绝必须回写，不能直接挂断",
+      "turns": [
+        "是我，尾号8866",
+        "你莫催我，我考虑一下",
+        "算了算了，不要了"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": false,
+        "final_stage": "DONE"
+      },
+      "holdout": true
+    },
+    {
+      "id": "D13",
+      "category": "normal",
+      "tag": "dialect",
+      "goal": "方言自报姓名加尾号：一次给全两个槽位，考察是否还要重复追问",
+      "turns": [
+        "喂，我我我是张伟，尾号8866",
+        "东西要得，就是慢了点",
+        "你说的权益好久有效哦",
+        "要得嘛，那就办"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      }
+    },
+    {
+      "id": "D14",
+      "category": "refuse",
+      "tag": "dialect",
+      "goal": "方言连说两次不需要：考察是否只回写一次、不反复劝导",
+      "turns": [
+        "是我，尾号8866",
+        "莫打了莫打了，我不需要",
+        "真的不要"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": false,
+        "final_stage": "DONE"
+      }
+    },
+    {
+      "id": "D15",
+      "category": "normal",
+      "tag": "dialect",
+      "goal": "方言称信号不好要求重说：考察澄清请求是否被当成答非所问",
+      "turns": [
+        "我我我信号不好，你刚才说啥",
+        "哦，尾号8866",
+        "要得",
+        "同意",
+        "对，同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "N201",
+      "category": "normal",
+      "tag": "noise",
+      "noise": "street",
+      "goal": "街边噪声下标准闭环：需在背景噪声下测试，文字链路只能验流程不验识别",
+      "turns": [
+        "喂，是我，尾号8866",
+        "东西还行",
+        "这个权益要钱吗",
+        "可以可以",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      }
+    },
+    {
+      "id": "N202",
+      "category": "normal",
+      "tag": "noise",
+      "noise": "street",
+      "goal": "街边噪声下用户重复一句：需在背景噪声下测试，考察重复输入不改变槽位",
+      "turns": [
+        "是我，尾号8866",
+        "用着挺好",
+        "我说用着挺好",
+        "免费就办，同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "N203",
+      "category": "normal",
+      "tag": "noise",
+      "noise": "car",
+      "goal": "车内噪声下问答夹杂：需在背景噪声下测试，考察多话题混说能否只答被问的",
+      "turns": [
+        "我在开车，你说快点",
+        "尾号8866",
+        "权益多久",
+        "行吧，同意",
+        "免费就行",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      },
+      "holdout": true
+    },
+    {
+      "id": "N204",
+      "category": "normal",
+      "tag": "noise",
+      "noise": "crowd",
+      "goal": "人群嘈杂下短句应答：需在背景噪声下测试，考察极短句是否被判为含糊",
+      "turns": [
+        "是我，8866",
+        "还行",
+        "可以",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      },
+      "holdout": true
+    },
+    {
+      "id": "N205",
+      "category": "missing_slot",
+      "tag": "noise",
+      "noise": "street",
+      "goal": "街边噪声导致听不清：需在背景噪声下测试，连续三次听不清应结束且不硬推进",
+      "turns": [
+        "喂？喂？",
+        "听不清",
+        "你再说一遍",
+        "还是听不见"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not_stage": [
+          "OFFER",
+          "WRITEBACK"
+        ]
+      },
+      "holdout": true
+    },
+    {
+      "id": "N206",
+      "category": "normal",
+      "tag": "noise",
+      "noise": "car",
+      "goal": "车内噪声下先问收费再决定：需在背景噪声下测试，考察费用问题必须被明确回答",
+      "turns": [
+        "我这儿有点吵，你大点声",
+        "尾号8866",
+        "要钱不",
+        "不要钱啊，那办吧"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "N207",
+      "category": "refuse",
+      "tag": "noise",
+      "noise": "crowd",
+      "goal": "嘈杂环境下拒绝：需在背景噪声下测试，拒绝要回写且不纠缠",
+      "turns": [
+        "是我，尾号8866",
+        "太吵了，我不需要",
+        "不用了不用了"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": false,
+        "final_stage": "DONE"
+      }
+    },
+    {
+      "id": "N208",
+      "category": "normal",
+      "tag": "noise",
+      "noise": "street",
+      "goal": "街边噪声下先自报姓名：需在背景噪声下测试，考察双槽位一次给全",
+      "turns": [
+        "我张伟，尾号8866，你说",
+        "用着可以",
+        "权益免费的吧",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "N209",
+      "category": "missing_slot",
+      "tag": "noise",
+      "noise": "car",
+      "goal": "车内噪声下尾号被吞字：需在背景噪声下测试，槽位不全不得当作核验通过",
+      "turns": [
+        "尾号是88……66",
+        "我在隧道里，信号不好",
+        "等会儿再说吧"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not_stage": [
+          "OFFER",
+          "WRITEBACK"
+        ]
+      }
+    },
+    {
+      "id": "N210",
+      "category": "normal",
+      "tag": "noise",
+      "noise": "crowd",
+      "goal": "人群噪声下先抱怨再配合：需在背景噪声下测试，考察安抚与推进能否兼顾",
+      "turns": [
+        "这边人多，你快点说",
+        "是我，8866",
+        "东西一般",
+        "行，同意",
+        "对，同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "B01",
+      "category": "normal",
+      "tag": "barge_in",
+      "goal": "开场核验后立即打断反问身份，考察打断后能否回到聆听态而不是卡死",
+      "turns": [
+        "是我，尾号8866",
+        "[打断]等一下等一下，你先说你是哪儿的",
+        "哦，那你继续",
+        "用着还行",
+        "可以可以",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      }
+    },
+    {
+      "id": "B02",
+      "category": "normal",
+      "tag": "barge_in",
+      "goal": "客服播报权益时被打断追问收费，考察是否先答被问的再续播",
+      "turns": [
+        "是我，尾号8866",
+        "用着还行",
+        "[打断]你先别念了，我就问一句收不收费",
+        "哦免费啊，那行",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "B03",
+      "category": "refuse",
+      "tag": "barge_in",
+      "goal": "开场即被打断并拒绝，考察打断后不得继续推进到报价与回写",
+      "turns": [
+        "[打断]等等，你别说了，我不需要",
+        "真不用"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not_stage": [
+          "OFFER",
+          "WRITEBACK"
+        ]
+      },
+      "holdout": true
+    },
+    {
+      "id": "B04",
+      "category": "normal",
+      "tag": "barge_in",
+      "goal": "报价中途打断追问金额，考察打断点是否被当作新一轮而非新话题",
+      "turns": [
+        "是我，尾号8866",
+        "用着还行",
+        "[打断]你刚说多少钱？",
+        "哦不要钱啊",
+        "可以可以"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      },
+      "holdout": true
+    },
+    {
+      "id": "B05",
+      "category": "emotion",
+      "tag": "barge_in",
+      "goal": "打断质疑是诈骗，考察被打断后能否先化解质疑再继续",
+      "turns": [
+        "是我，尾号8866",
+        "[打断]我插一句，这个是不是诈骗",
+        "行吧我信你",
+        "用着还行",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "B06",
+      "category": "missing_slot",
+      "tag": "barge_in",
+      "goal": "开场白阶段就被打断查工号，考察打断出现在首个环节时状态机不越界",
+      "turns": [
+        "[打断]你先告诉我你工号多少",
+        "是我，尾号8866",
+        "用着还行",
+        "同意",
+        "对，同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "B07",
+      "category": "normal",
+      "tag": "barge_in",
+      "goal": "打断去接电话再回来，考察中断后的上下文能否接上而不是重头再来",
+      "turns": [
+        "是我，尾号8866",
+        "用着还行",
+        "[打断]等一下，我接个电话",
+        "回来了，你继续说",
+        "可以可以",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "B08",
+      "category": "normal",
+      "tag": "barge_in",
+      "goal": "打断要求说重点，考察是否压缩话术而不是把整段重念一遍",
+      "turns": [
+        "[打断]不用介绍了，我赶时间，你直接说重点",
+        "是我，尾号8866",
+        "行，办吧",
+        "对，就办吧",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "B09",
+      "category": "refuse",
+      "tag": "barge_in",
+      "goal": "播报中打断并连说两次不需要，考察打断后转为拒绝是否能正确回写",
+      "turns": [
+        "是我，尾号8866",
+        "[打断]停停停，我不需要这个",
+        "真不要"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": false
+      },
+      "holdout": true
+    },
+    {
+      "id": "B10",
+      "category": "correction",
+      "tag": "barge_in",
+      "goal": "确认后打断反悔，考察打断引起的改口能否更正已回写的结果",
+      "turns": [
+        "是我，尾号8866",
+        "用着还行",
+        "可以",
+        "[打断]等等，我不要了"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": false
+      }
+    },
+    {
+      "id": "S01",
+      "category": "correction",
+      "tag": "edge_slot",
+      "goal": "尾号错一位后自行更正，考察改口后是否用新尾号核验而不是沿用旧号",
+      "turns": [
+        "尾号是8867",
+        "啊不对，我看错了，是8866",
+        "用着还行",
+        "同意",
+        "对，同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "S02",
+      "category": "missing_slot",
+      "tag": "edge_slot",
+      "goal": "姓名同音字（章/张），核验不通过时不得透露订单信息",
+      "turns": [
+        "我姓章，文章的章",
+        "尾号8866"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "订单金额是"
+        ],
+        "must_not_stage": [
+          "OFFER",
+          "WRITEBACK"
+        ]
+      }
+    },
+    {
+      "id": "S03",
+      "category": "missing_slot",
+      "tag": "edge_slot",
+      "goal": "尾号错误且坚持不改，两次核验失败后应结束，不得透露订单信息",
+      "turns": [
+        "尾号是8868",
+        "就是8868啊",
+        "你们怎么查不到"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "订单金额是"
+        ],
+        "must_not_stage": [
+          "OFFER",
+          "WRITEBACK"
+        ]
+      }
+    },
+    {
+      "id": "S04",
+      "category": "correction",
+      "tag": "edge_slot",
+      "goal": "尾号少说一位后补齐，考察位数不足是否被当成无效槽位而不是截断使用",
+      "turns": [
+        "尾号是886",
+        "啊，少说了一位，8866",
+        "用着还行",
+        "同意",
+        "对，同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "S05",
+      "category": "normal",
+      "tag": "edge_slot",
+      "goal": "姓名加说明性拆字（弓长张），考察拆字说明是否污染姓名槽位",
+      "turns": [
+        "我姓张，弓长张",
+        "尾号8866",
+        "用着还行",
+        "同意",
+        "对，同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      },
+      "holdout": true
+    },
+    {
+      "id": "S06",
+      "category": "correction",
+      "tag": "edge_slot",
+      "goal": "尾号先全错再改对，考察连续改口后是否只保留最后一次的值",
+      "turns": [
+        "尾号1234",
+        "不对不对，是8866",
+        "可以可以",
+        "同意",
+        "对，同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "S07",
+      "category": "missing_slot",
+      "tag": "edge_slot",
+      "goal": "尾号始终对不上并开始抱怨，考察核验失败时既不推进也不泄露",
+      "turns": [
+        "尾号是1111",
+        "就是1111",
+        "你们是不是搞错了"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "订单金额是"
+        ],
+        "must_not_stage": [
+          "OFFER",
+          "WRITEBACK"
+        ]
+      }
+    },
+    {
+      "id": "S08",
+      "category": "correction",
+      "tag": "edge_slot",
+      "goal": "核验通过后主动改错尾号，考察新值覆盖旧值后是否重新触发核验",
+      "turns": [
+        "是我，尾号8866",
+        "哎等等，我好像报错了，是6688",
+        "对，6688"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "订单金额是"
+        ]
+      }
+    },
+    {
+      "id": "S09",
+      "category": "missing_slot",
+      "tag": "edge_slot",
+      "goal": "尾号数字间有停顿分隔，考察槽位抽取能否容忍空格与停顿",
+      "turns": [
+        "尾号是 8 8 6 6",
+        "对，就是8866"
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "订单金额是"
+        ]
+      }
+    },
+    {
+      "id": "S10",
+      "category": "correction",
+      "tag": "edge_slot",
+      "goal": "姓名报错后改口并给出全名，考察槽位覆盖而不是两个姓名并存",
+      "turns": [
+        "我姓李",
+        "不对，我姓张",
+        "张伟",
+        "尾号8866",
+        "同意",
+        "对，同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "L01",
+      "category": "normal",
+      "tag": "long",
+      "goal": "九轮长对话中途问促销再拉回，考察话题切换后记忆不丢",
+      "turns": [
+        "是我，尾号8866",
+        "用着还行，就是包装压了",
+        "对了你们双十一还有活动吗",
+        "哦，那算了，我还以为有券",
+        "你刚说权益是吧",
+        "这个权益是免费的对吧",
+        "那有效期多久",
+        "行，可以可以",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true,
+        "final_stage": "DONE"
+      },
+      "holdout": true
+    },
+    {
+      "id": "L02",
+      "category": "normal",
+      "tag": "long",
+      "goal": "九轮长对话先问快递再回到订单，考察跑题后能否被纠正回主线",
+      "turns": [
+        "喂，尾号8866",
+        "你们快递怎么这么慢",
+        "我说的是快递，不是订单",
+        "行吧，那你说订单的事",
+        "东西用着一般",
+        "权益收费吗",
+        "哦，免费啊",
+        "可以可以",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "L03",
+      "category": "knowledge",
+      "tag": "long",
+      "goal": "九轮长对话问发票再回到权益，考察资料包外问题是否承认不知道",
+      "turns": [
+        "是我，8866",
+        "能开发票吗",
+        "电子发票怎么开",
+        "哦，那回头再说",
+        "你刚才说权益？",
+        "多少钱",
+        "免费是吧",
+        "行，那就办"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "L04",
+      "category": "correction",
+      "tag": "long",
+      "goal": "九轮长对话先拒绝后改主意，考察拒绝态是否能被后续改口覆盖",
+      "turns": [
+        "是我，8866",
+        "不用了，我不需要",
+        "等等，你刚说的是免费的吗",
+        "那它跟延保有什么区别",
+        "哦，那好吧",
+        "我再问一句，有没有别的费用",
+        "真没有？",
+        "那行，我要"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "L05",
+      "category": "knowledge",
+      "tag": "long",
+      "goal": "九轮长对话连续追问有效期与续费，考察知识问答不编造资料包外内容",
+      "turns": [
+        "是我，8866",
+        "这个权益多久",
+        "那到期会自动续吗",
+        "续费多少钱",
+        "你确认一下是不是不收费",
+        "行，那我用着还行",
+        "可以",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      },
+      "holdout": true
+    },
+    {
+      "id": "L06",
+      "category": "emotion",
+      "tag": "long",
+      "goal": "九轮长对话抱怨被反复骚扰，考察安抚后仍能推进且不再重复推销",
+      "turns": [
+        "你们怎么老打电话",
+        "上个月就打过了",
+        "行吧，是我，8866",
+        "东西用着还行",
+        "别给我推销啊",
+        "这个权益是免费的吗",
+        "哦，那还行",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      },
+      "holdout": true
+    },
+    {
+      "id": "L07",
+      "category": "correction",
+      "tag": "long",
+      "goal": "十轮长对话两次改口，考察最终意向以最后一次为准且工单不重复",
+      "turns": [
+        "是我，8866",
+        "用着还行",
+        "可以",
+        "等等，我先问下收费",
+        "哦免费啊，那还是要吧",
+        "有效期多久",
+        "行",
+        "同意",
+        "算了，还是不要了"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": false
+      }
+    },
+    {
+      "id": "L08",
+      "category": "normal",
+      "tag": "long",
+      "goal": "九轮长对话夹杂家常闲聊，考察闲聊不打断流程也不被当成意图",
+      "turns": [
+        "喂，你谁啊",
+        "哦，京东的啊",
+        "我正做饭呢",
+        "行，尾号8866",
+        "东西还行，就是慢",
+        "你说吧",
+        "嗯，听着呢",
+        "可以可以"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "Q01",
+      "category": "missing_slot",
+      "tag": "silence",
+      "goal": "连续两次沉默应挂断且不回写，考察 no_answer 分支的阈值",
+      "turns": [
+        "",
+        ""
+      ],
+      "expect": {
+        "closed": false
+      },
+      "holdout": true
+    },
+    {
+      "id": "Q02",
+      "category": "missing_slot",
+      "tag": "silence",
+      "goal": "核验后连续两次沉默，考察是否挂断而不是无限重问",
+      "turns": [
+        "是我，尾号8866",
+        "",
+        "",
+        "喂？"
+      ],
+      "expect": {
+        "closed": false
+      }
+    },
+    {
+      "id": "Q03",
+      "category": "normal",
+      "tag": "silence",
+      "goal": "开场沉默一次后恢复，考察单次沉默不触发挂断且能继续闭环",
+      "turns": [
+        "",
+        "喂，是我，尾号8866",
+        "用着还行",
+        "同意",
+        "对，同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
+    },
+    {
+      "id": "Q04",
+      "category": "missing_slot",
+      "tag": "silence",
+      "goal": "开场先问一句再连续沉默，考察空输入不产生 error 事件也不崩",
+      "turns": [
+        "喂？",
+        "",
+        "",
+        ""
+      ],
+      "expect": {
+        "closed": false,
+        "must_not": [
+          "服务异常"
+        ]
+      }
+    },
+    {
+      "id": "Q05",
+      "category": "normal",
+      "tag": "silence",
+      "goal": "中段沉默一次后继续，考察沉默不打断已建立的上下文",
+      "turns": [
+        "是我，尾号8866",
+        "用着还行",
+        "",
+        "可以可以",
+        "同意"
+      ],
+      "expect": {
+        "closed": true,
+        "consent": true
+      }
     }
   ]
 }

@@ -112,6 +112,31 @@ class ValidateCasesTest(unittest.TestCase):
         self.assertIn("共 2 处", str(ctx.exception))
 
 
+class MultiFileTest(unittest.TestCase):
+    """两套对抗集必须能合并且 id 不撞——L9 的回归防线靠这个。"""
+
+    def test_merge_all_adversarial_files(self):
+        import glob
+        files = sorted(glob.glob(os.path.join(A.CASES_DIR, "adversarial*.json")))
+        self.assertGreaterEqual(len(files), 2)
+        merged = []
+        for path in files:
+            merged.extend(A.load_cases(path))
+        A.validate_cases(merged)          # 重复 id / 非法字段都会在这里炸
+        self.assertGreaterEqual(len(merged), 20)
+
+    def test_seed_set_has_holdout(self):
+        """L7：留出集必须在 20%±2%，否则"不参与调优"这句话就不成立。"""
+        with open(os.path.join(A.R._ROOT, "eval", "seed_cases.json"), encoding="utf-8") as f:
+            raw = json.load(f)
+        cases = raw["cases"] if isinstance(raw, dict) else raw
+        hold = sum(1 for c in cases if c.get("holdout"))
+        ratio = hold / float(len(cases))
+        self.assertGreaterEqual(len(cases), 80)
+        self.assertLessEqual(len(cases), 120)
+        self.assertAlmostEqual(ratio, 0.2, delta=0.02)
+
+
 class LoadCasesTest(unittest.TestCase):
     def test_missing_file(self):
         with self.assertRaises(A.CaseError) as ctx:
