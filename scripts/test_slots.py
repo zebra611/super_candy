@@ -40,8 +40,14 @@ class AskLogicTest(unittest.TestCase):
                       "第一句核验追问没说尾号：%r" % outs[0]["reply_text"])
 
     def test_asks_alternate_and_never_repeat(self):
-        """四个追问句必须互不相同——重复同一句是这轮改造要消灭的问题。"""
-        _, outs = _run(["是我", "呃", "嗯", "呃"], "slot-alternate")
+        """四个追问句必须互不相同——重复同一句是这轮改造要消灭的问题。
+
+        11-06 起这里的输入从"呃/嗯"改成"报了但对不上的数字/姓名"。
+        原因：T12 之后连续含糊会走退出机制（见 test_unclear_exit），
+        再用语气词当输入，测的就是退出而不是轮换了。
+        用"报错值"才测得到想测的东西：用户真的答了，只是答错。
+        """
+        _, outs = _run(["是我", "1234", "王五", "5678"], "slot-alternate")
         asks = [o["reply_text"] for o in outs[1:]]
         self.assertEqual(len(asks), len(set(asks)), "有重复追问：%r" % asks)
         tail_hits = sum(1 for a in asks if "尾号" in a or "后四位" in a or "最后四位" in a)
@@ -50,17 +56,44 @@ class AskLogicTest(unittest.TestCase):
         self.assertGreater(name_hits, 0, "三轮里一次都没问姓名：%r" % asks)
 
     def test_slot_asked_at_most_twice(self):
-        s, _ = _run(["是我", "呃", "嗯", "呃", "嗯"], "slot-cap")
+        s, _ = _run(["是我", "1234", "王五", "5678", "赵六"], "slot-cap")
         for slot, n in s["slot_asks"].items():
             self.assertLessEqual(n, dialogue.SLOT_ASK_MAX,
                                  "槽位 %s 问了 %d 次，超过上限 %d" % (slot, n, dialogue.SLOT_ASK_MAX))
 
     def test_exhaust_then_finish(self):
         """两个槽位都问满还核不上 → 收尾（end_reason=identity_failed），不是无限追问。"""
-        s, outs = _run(["是我", "呃", "嗯", "呃", "嗯", "呃"], "slot-exhaust")
+        s, outs = _run(["是我", "1234", "王五", "5678", "赵六"], "slot-exhaust")
         self.assertEqual("DONE", s["stage"])
         self.assertEqual("identity_failed", outs[4].get("end_reason"))
         self.assertEqual(0, s.get("writeback_version", 0), "身份没核上不能回写工单")
+
+
+class UnclearExitTest(unittest.TestCase):
+    """T12：连续含糊必须能退出，而不是在尾号/姓名之间轮换问法。"""
+
+    def test_unclear_exit(self):
+        s, outs = _run(["是我", "嗯", "哦"], "slot-unclear")
+        self.assertEqual("DONE", s["stage"], "连续含糊应退出，实际停在 %s" % s["stage"])
+        self.assertEqual("unclear", outs[-1].get("end_reason"),
+                         "退出原因应是 unclear（与'核对不上'区分）：%r" % outs[-1].get("end_reason"))
+        self.assertIn("专员", outs[-1]["reply_text"], "退出话术要给去向：%r" % outs[-1]["reply_text"])
+        self.assertEqual(0, s.get("writeback_version", 0), "用户什么都没说过，不能回写工单")
+
+    def test_unclear_first_time_apologises(self):
+        """第一次含糊不是直接挂断：先致歉再请对方重说。"""
+        s, outs = _run(["是我", "嗯"], "slot-unclear-1")
+        self.assertEqual("IDENTITY", s["stage"], "第一次含糊不该收尾")
+        self.assertIn("不好", outs[-1]["reply_text"], "第一次含糊应先致歉：%r" % outs[-1]["reply_text"])
+
+    def test_unclear_counter_is_separate_from_slot_asks(self):
+        """含糊不能消耗槽位额度——否则用户清嗓子两次就没机会报尾号了。"""
+        s, _ = _run(["是我"], "slot-unclear-count")
+        before = dict(s["slot_asks"])
+        dialogue.respond(s, "嗯")
+        self.assertEqual(before, s["slot_asks"],
+                         "含糊把槽位额度吃掉了：是 %r，含糊一轮后变成 %r"
+                         % (before, s["slot_asks"]))
 
     def test_wrong_tail_asks_name_not_tail_again(self):
         """报了尾号但对不上，下一句该问姓名——再问一遍尾号等于没听见用户说话。"""

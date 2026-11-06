@@ -1256,6 +1256,82 @@ def main():
         check("%s.py 通过（失败时这个总闸门会红）" % _suite, _run.returncode == 0,
               ["退出码 %d；末行：%s" % (_run.returncode, _last)])
 
+    # ---- 证据 19：任务 2 七项（T2-T12）的离线自测挂进总闸门 ----
+    #
+    # 为什么必须挂进来：T2-T12 改的是 dialogue.py / nlg.py，一共 200 多行。
+    # 如果只写各自的自测脚本、不进 verify，那么任何人改这两个文件，
+    # 只要没人想起来单独跑一遍，总闸门照样全绿——"改坏了没人知道"。
+    # 这里的做法和证据 18 一致：跑脚本看退出码，再用几条直接断言钉住关键行为
+    # （脚本能跑绿但行为没生效，是更隐蔽的一种失败）。
+    print()
+    print("=" * 74)
+    print("证据 19：任务 2 七项（T2-T12）的离线自测全部通过")
+    print("=" * 74)
+
+    for _suite in ("test_intent", "test_slots", "test_correction",
+                   "test_memory", "test_nlg", "test_kb", "test_fallback"):
+        _path = os.path.join(ROOT, "scripts", _suite + ".py")
+        _run = subprocess.run([sys.executable, _path], cwd=ROOT,
+                              capture_output=True, text=True, timeout=180)
+        _out = ((_run.stdout or "") + (_run.stderr or "")).strip().splitlines()
+        _last = _out[-1][:88] if _out else "(无输出)"
+        check("%s.py 通过（失败时这个总闸门会红）" % _suite, _run.returncode == 0,
+              ["退出码 %d；末行：%s" % (_run.returncode, _last)])
+
+    # 直接断言：只跑脚本不够，脚本自己也可能被改弱。
+    from modules import dialogue as _dlg
+    from modules import intent as _intent
+    from modules import nlg as _nlg
+
+    _base_offer = "权益有效期是十二个月，从登记当天开始算。"
+    check("T2 期限同义换算放行（十二个月 == 一年），不把合法换算当篡改",
+          _nlg._facts_ok(_base_offer, "这份权益有效期是一年，从登记当天算起。"),
+          ["_facts_ok(十二个月, 一年) = %r" % _nlg._facts_ok(_base_offer, "这份权益有效期是一年，从登记当天算起。")])
+    check("T2 换个数仍然拦（十二个月 → 三年），放行的边界没有被放宽成随便改",
+          not _nlg._facts_ok(_base_offer, "这份权益有效期是三年。"),
+          ["_facts_ok(十二个月, 三年) = %r" % _nlg._facts_ok(_base_offer, "这份权益有效期是三年。")])
+
+    _p = _nlg._user_prompt({"memory": {"recent": [{"user": "包装压坏了"}]},
+                            "slots": {"last_user_text": "用着还行"}}, "再来一句", "OFFER")
+    check("T3 「最近两轮对话」注入的是真实上文，不是占位符",
+          "包装压坏了" in _p and "【最近两轮对话】（无）" not in _p,
+          ["prompt 片段：" + [ln for ln in _p.splitlines() if "最近两轮" in ln][0]])
+
+    check("T10 混合句「好的嗯」判成肯定（以前判 unknown，用户答应了还被再问一遍）",
+          _dlg.classify("好的嗯")["yes"] and _dlg.classify("好的嗯")["conf"] >= _dlg.YES_MIN_CONF,
+          ["yes=%r conf=%r" % (_dlg.classify("好的嗯")["yes"], _dlg.classify("好的嗯")["conf"])])
+    check("T10 否定作用域：「不要了」仍判拒绝（不能被'后说的赢'误伤）",
+          _dlg.classify("不要了")["no"] and not _dlg.classify("不要了")["yes"],
+          ["no=%r yes=%r" % (_dlg.classify("不要了")["no"], _dlg.classify("不要了")["yes"])])
+
+    _s = _dlg.new_session("verify-t8")
+    _dlg.respond(_s, "是我，尾号8866")
+    _dlg.respond(_s, "包装压坏了")
+    _out8 = _dlg.respond(_s, "你们这是骗子服务")
+    check("T8 带情绪时暂停推进（OFFER 不再问'您同意领取吗'）",
+          _out8["next_stage"] == "OFFER" and "同意领取" not in _out8["reply_text"],
+          ["next_stage=%s" % _out8["next_stage"], "回复：" + _out8["reply_text"][:40]])
+
+    _s9 = _dlg.new_session("verify-t9")
+    _dlg.respond(_s9, "是我，尾号8866")
+    _dlg.respond(_s9, "包装压坏了")
+    _dlg.respond(_s9, "等等我改一下其实是屏幕碎了")
+    check("T9 阶段边界的改口落进 need 槽位",
+          _s9["slots"].get("need") == "屏幕碎了",
+          ["need=%r" % _s9["slots"].get("need")])
+
+    _s12 = _dlg.new_session("verify-t12")
+    _dlg.respond(_s12, "是我")
+    _dlg.respond(_s12, "嗯")
+    _out12 = _dlg.respond(_s12, "哦")
+    check("T12 连续含糊有退出机制（end_reason=unclear，不是无限轮换问法）",
+          _out12.get("end_reason") == "unclear",
+          ["end_reason=%r" % _out12.get("end_reason"), "回复：" + _out12["reply_text"][:40]])
+
+    check("T5 意图识别可外挂模型且默认不联网（provider=template 时逐字节不变）",
+          _intent.classify("同意")["yes"] and _intent.classify("同意")["evidence"] != "model",
+          ["默认路径 evidence=%r" % _intent.classify("同意")["evidence"]])
+
     print()
     print("=" * 74)
     total = len(results)

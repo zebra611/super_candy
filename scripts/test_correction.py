@@ -149,5 +149,55 @@ class ReferenceTest(unittest.TestCase):
         self.assertEqual("NEED", s["stage"], "提问应留在 NEED 回答，不是追问")
 
 
+class ReferenceResolveTest(unittest.TestCase):
+    """T6：指代要能解析到"这通电话里提过的那件事"，不只是追问。"""
+
+    def _to_offer(self, sid):
+        s, _ = _run(["是我，8866", "包装压坏了"], sid)
+        self.assertEqual("OFFER", s["stage"])
+        return s
+
+    def test_reference_at_offer_does_not_advance(self):
+        """OFFER 阶段一句"就那个"不能推进到确认——它什么都没确认。"""
+        s = self._to_offer("ref-offer-advance")
+        out = dialogue.respond(s, "就是那个")
+        self.assertEqual("OFFER", s["stage"], "指代把阶段推进了")
+        self.assertEqual("reference", out["intent"])
+        self.assertIn("权益", out["reply_text"], "没解析到这份权益：%r" % out["reply_text"])
+
+    def test_reference_resolves_order_when_named(self):
+        s = self._to_offer("ref-order")
+        out = dialogue.respond(s, "那个订单呢")
+        self.assertEqual("OFFER", s["stage"])
+        self.assertEqual("reference", out["intent"])
+        self.assertIn("订单", out["reply_text"])
+
+    def test_three_turns_of_reference_same_ticket(self):
+        """连续三轮指代之后仍能走完，而且只产生**一张**工单。
+
+        "同一工单"不是靠人肉记的：回写幂等键是 `session_id:vN`，
+        只要版本号没被指代搅乱，就永远是同一张单。
+        这个断言就是在守这条——指代不该让流程重来一遍、也不该多开一单。
+        """
+        s = self._to_offer("ref-three")
+        for i in range(3):
+            out = dialogue.respond(s, "就是刚才那个")
+            self.assertEqual("OFFER", s["stage"], "第 %d 轮指代把阶段推走了" % (i + 1))
+            self.assertEqual("reference", out["intent"])
+        dialogue.respond(s, "同意")
+        out = dialogue.respond(s, "同意")
+        self.assertEqual("DONE", s["stage"])
+        self.assertEqual(1, s.get("writeback_version"), "指代让同一通电话开了两张工单")
+        self.assertEqual(1, (out.get("tool_call") or {}).get("args", {}).get("version"))
+
+    def test_unresolvable_reference_still_clarifies(self):
+        """解析不了就诚实追问，不要硬答一个猜的对象。"""
+        s = dialogue.new_session("ref-none")
+        dialogue.respond(s, "是我，8866")
+        out = dialogue.respond(s, "就是那个")
+        self.assertEqual("NEED", s["stage"])
+        self.assertEqual("unclear", out["intent"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

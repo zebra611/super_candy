@@ -21,13 +21,12 @@
     `provider=template`（默认）时行为与接入前完全一致：verify 73/73、eval 30/30。
     离线自测见 `scripts/test_nlg.py`（14 条，不联网）。
 
-**已知限制：骨架里有中文期限的环节，改写大概率被拦**
-    实测 OFFER 环节骨架"有效期十二个月"被模型改成"有效期一年"，随后被
-    `_facts_ok()` 按"金额/期限标志词"规则拦下（多出「年」），这一轮退回骨架。
-    这是**刻意保守**，不是 bug：意思虽然对，但"十二个月"和"一年"是两种业务承诺
-    的表述方式，改写层没有资格替业务改口径。代价是 OFFER 这一环的自然化收益接近 0。
-    要提高命中率，应该改骨架话术本身（例如骨架就写"一年"），而不是放宽规则——
-    放宽规则等于把编造业务事实的口子重新打开。
+**期限表述：同义换算现在是允许的（2026-11-06 改）**
+    以前 OFFER 环节骨架"有效期十二个月"被改成"有效期一年"会被 `_facts_ok()` 整句拦掉，
+    理由是"换了一种业务承诺的表述方式"，代价是 OFFER 这一环的改写命中率接近 0。
+    现在放行了**同义换算**：把两边的期限换算到同一单位后逐个相等就过
+    （12 个月 == 1 年），金额、折扣、百分比仍然一律拦。
+    边界写死在 `_facts_ok()` 里：允许"换个说法说同一个数"，不允许"换个数"。
 
 **实测：model 不能配 qwen-turbo**
     本账号对 `qwen-turbo` 持续返回 429 `limit_requests`（不是偶发限流，是没额度）。
@@ -203,9 +202,14 @@ def _user_prompt(session, base_text, stage):
     """按 docs/17 第 3.3 节组织上下文。
 
     **只读 session，绝不写。** slots 是业务事实的唯一来源。
-    现在 session 里还没有 last_user_text / last_user_angry / recent_turns
-    三个字段（要 dialogue.py 加，那是队长的地盘），所以这里全部 .get 兜底：
-    字段一加上，这段自动生效，不用再改。
+
+    「最近两轮对话」这一格长期是占位符（T3）：prompt 里写着"（无）"，
+    模型拿不到上文，改写出来的话经常和用户刚说的对不上——用户说"包装压坏了"，
+    改写后的开场还是"您用得还顺手吗"。
+    现在从两个地方取，按可用性依次回退：
+        1. `session["recent_turns"]`（如果将来 dialogue 直接提供）；
+        2. `session["memory"]["recent"]`（dialogue 一直在记，每轮一条 {user, stage}）。
+    都不存在时仍然回落"（无）"，不抛异常——这是外呼主链路，宁少不崩。
     """
     state = session or {}
     slots = state.get("slots") or {}
@@ -217,9 +221,22 @@ def _user_prompt(session, base_text, stage):
     if not title and isinstance(order, dict):
         title = order.get("order_id") or ""
 
-    last_user = state.get("last_user_text") or "（未知）"
-    mood = "带情绪" if state.get("last_user_angry") else "平静"
-    history = state.get("recent_turns") or []
+    # 用户刚说的那句：dialogue 放在 slots.last_user_text 里（历史遗留位置），
+    # 顶层同名字段也支持，两边都读，避免以后再挪位置又断一次。
+    last_user = (state.get("last_user_text")
+                 or slots.get("last_user_text")
+                 or "（未知）")
+
+    # 情绪：优先读 dialogue 显式落下的标记，其次读最近一轮的 flags。
+    angry = state.get("last_user_angry")
+    if angry is None:
+        angry = bool((state.get("last_flags") or {}).get("angry"))
+    mood = "带情绪" if angry else "平静"
+
+    history = state.get("recent_turns")
+    if not history:
+        recent = (state.get("memory") or {}).get("recent") or []
+        history = [r.get("user") for r in recent if (r.get("user") or "").strip()]
     hist = "；".join(str(h) for h in list(history)[-2:]) or "（无）"
 
     # 注意：这里不放手机号、不放完整单号——prompt 不进事件库，但也没必要多传。
@@ -254,18 +271,70 @@ def _facts_ok(base, text):
     两条规则：
         1. 3 位以上的数字（金额、单号、手机号、年份）不得是骨架里没有的；
            只查 3 位以上，是为了不误伤"后四位"这类正常表述。
-        2. 金额/期限/日期标志词，骨架里没有就别加——"十二个月"改成"一年"
-           虽然意思对，但换了一种业务承诺的表述方式，一律保守拦掉。
+        2. 金额/期限/日期标志词，骨架里没有就别加。
     """
     base_nums = set(re.findall(r"\d+(?:\.\d+)?", base))
     for num in re.findall(r"\d+(?:\.\d+)?", text):
         if len(num.replace(".", "")) >= 3 and num not in base_nums:
             return False
 
-    for mark in _FACT_MARKS:
-        if mark in text and mark not in base:
-            return False
-    return True
+    bad = [m for m in _FACT_MARKS if m in text and m not in base]
+    if not bad:
+        return True
+
+    # 期限的**同义换算**放行（T2）。
+    #
+    # "有效期十二个月"被改成"有效期一年"以前会被整句丢弃，理由是"换了一种业务承诺的
+    # 表述方式"。这个理由对金额成立，对期限不成立：十二个月和一年是同一个数，
+    # 不是两种承诺。实测代价很具体——OFFER 是每一通电话都要走的一环，
+    # 这一环的改写命中率接近 0，等于改写层在最该自然的地方全程哑火。
+    #
+    # 放行的边界很窄，三条同时满足才过：
+    #   ① 多出来的标志词只涉及期限单位（年月日天），金额/折扣/百分比一律照拦；
+    #   ② 骨架与改写里的期限，换算成同一单位后**逐个相等**（12 个月 == 1 年）；
+    #   ③ 骨架里本来没有期限、改写却凭空加了一个 → 不相等，照拦。
+    # 换句话说：允许"换个说法说同一个数"，不允许"换个数"。
+    if set(bad) <= set("年月日天") and _periods(base) == _periods(text):
+        return True
+    return False
+
+
+# 期限表达式：阿拉伯数字或中文数字 + 时间单位。
+# 中文数字要单独处理——"十二个月"里的"十二"不是 12，正则 \d 抓不到。
+_PERIOD_RE = re.compile(r"(\d+|[一二两三四五六七八九十半]+)\s*(个工作日|工作日|个月|月|年|天|日|小时|分钟)")
+_CN_DIGIT = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+             "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+_UNIT_KIND = {"年": ("month", 12), "个月": ("month", 1), "月": ("month", 1),
+              "天": ("day", 1), "日": ("day", 1), "工作日": ("workday", 1),
+              "小时": ("hour", 1), "分钟": ("minute", 1)}
+
+
+def _cn_to_num(s):
+    """中文数字转数值，认不出来返回 None（认不出来就不做同义判定，按原规则拦）。"""
+    if s.isdigit():
+        return int(s)
+    if s == "半":
+        return 0.5
+    if s in _CN_DIGIT:
+        return _CN_DIGIT[s]
+    if "十" in s:
+        head, _, tail = s.partition("十")
+        tens = _CN_DIGIT.get(head, 1) if head else 1
+        ones = _CN_DIGIT.get(tail, 0) if tail else 0
+        return tens * 10 + ones
+    return None
+
+
+def _periods(text):
+    """把一句话里的期限都换算成"同一单位下的数值"，排序后用于比较。"""
+    out = []
+    for m in _PERIOD_RE.finditer(text or ""):
+        num = _cn_to_num(m.group(1))
+        kind = _UNIT_KIND.get(m.group(2))
+        if num is None or not kind:
+            continue
+        out.append((kind[0], num * kind[1]))
+    return sorted(out)
 
 
 def _length_ok(base, text):
