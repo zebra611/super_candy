@@ -32,6 +32,11 @@
 这个选择在小规模知识库（几十条、高频问法）上是优点：零依赖、可解释、
 每一步都能用 `explain()` 摊开给评委看。
 
+S2 后来加的 `modules/kb_semantic.py` 是**可选外挂兜底**，没有推翻本节结论：
+默认关闭，只在词检索答不上来、且显式配置 `knowledge.semantic` 并配了密钥时
+才做一次向量召回；词检索命中的路径一个字节都没变，任何异常都退回本节这套
+词长加权 + `reply_unknown`。所以上面"零依赖、可解释"仍是默认系统的性质。
+
 **降级原则**
 
 `config/kb.json` 不存在时，本模块**不报错**，`enabled()` 返回 False，
@@ -460,7 +465,22 @@ def match(text, today=None, slots=None):
     """
     if not enabled():
         return None
-    return load().match(text, today=today, slots=slots)
+    hit = load().match(text, today=today, slots=slots)
+    if hit is not None:
+        return hit
+    # S2：词检索没答上来时才问一次可选语义召回。默认配置下这个分支直接
+    # 返回 None，与接入前逐字节一致；任何导入/网络/解析异常都不向外抛。
+    try:
+        from modules import kb_semantic as _sem
+    except Exception:
+        try:
+            import kb_semantic as _sem
+        except Exception:
+            return None
+    try:
+        return _sem.fallback(text, load(), slots=slots, today=today)
+    except Exception:
+        return None
 
 
 def explain(text, top=3, today=None):

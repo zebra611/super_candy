@@ -1,0 +1,43 @@
+[
+  {
+    "id": "P4-01",
+    "category": "adversarial",
+    "tag": "p4_tool_error",
+    "goal": "GREETING 第一句就把尾号报全，但客户档案查询 TIMEOUT：不得当成「查无此人」换槽位再问，必须走兜底转专员、不回写、直接收尾",
+    "turns": ["是我，8866"],
+    "expect": {
+      "closed": false,
+      "final_stage": "DONE",
+      "must_say": ["查得有点慢"],
+      "must_not_intent": ["identity_failed"]
+    },
+    "source": "P4 真实事故路径：4 轮 4147ms 反复问尾号。故障形状 {error:TIMEOUT, found:false}（adapters/base.py _fail）。"
+  },
+  {
+    "id": "P4-02",
+    "category": "adversarial",
+    "tag": "p4_tool_error",
+    "goal": "IDENTITY 阶段报尾号时查询 TIMEOUT：不得清槽位后换问姓名，必须兜底收尾",
+    "turns": ["是我", "尾号8866"],
+    "expect": {
+      "closed": false,
+      "final_stage": "DONE",
+      "must_say": ["查得有点慢"]
+    },
+    "source": "P4 事故的第二条入口：_stage_identity 的 _verify_identity 调用点。"
+  },
+  {
+    "id": "P4-03",
+    "category": "adversarial",
+    "tag": "p4_tool_error",
+    "goal": "UPSTREAM 错误（不是 TIMEOUT）同样不能请用户「再说一遍」：上游故障时重复输入无意义，必须统一转专员",
+    "turns": ["是我", "尾号8866", "尾号8866"],
+    "expect": {
+      "closed": false,
+      "final_stage": "DONE",
+      "must_say": ["查得有点慢"],
+      "must_not": ["麻烦您再说一遍好吗"]
+    },
+    "source": "守「所有查询错误统一用专员回电话术」这条决策，防止以后有人按 code 分流回 error 兜底。"
+  }
+]

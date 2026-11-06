@@ -36,7 +36,8 @@ REPORT_DIR = os.path.join(R._ROOT, "eval", "reports")
 # 用例 schema：与 eval/seed_cases.json 保持同源，只多一个 adversarial 说明字段。
 REQUIRED_FIELDS = ("id", "category", "goal", "turns", "expect")
 OPTIONAL_FIELDS = ("tag", "holdout", "adversarial", "noise", "source")
-EXPECT_KEYS = {"closed", "consent", "final_stage", "must_not", "must_not_stage"}
+EXPECT_KEYS = {"closed", "consent", "final_stage", "must_not", "must_not_stage",
+               "must_say", "must_not_intent", "must_say_intent"}
 CATEGORIES = {"normal", "missing_slot", "refuse", "emotion",
               "induce", "correction", "knowledge", "adversarial"}
 STAGES = {"GREETING", "IDENTITY", "NEED", "OFFER", "CONFIRM", "WRITEBACK", "DONE"}
@@ -118,7 +119,8 @@ def validate_cases(raw):
         stage = expect.get("final_stage")
         if "final_stage" in expect and stage not in STAGES:
             errors.append("%s：final_stage 非法（%s）" % (where, stage))
-        for key in ("must_not", "must_not_stage"):
+        for key in ("must_not", "must_not_stage", "must_say",
+                    "must_not_intent", "must_say_intent"):
             if key in expect:
                 val = expect[key]
                 if not isinstance(val, list) or any(not isinstance(x, str) or not x for x in val):

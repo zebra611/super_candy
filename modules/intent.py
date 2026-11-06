@@ -21,7 +21,7 @@
     	  模型把"12345678"读成尾号 5678，就是把客户核验到别人账上。
 
 **实测口径**
-    `scripts/intent_bench.py` 用 24 条口语化改写样本对比两版：
+    `scripts/intent_bench.py` 用 25 条口语化改写样本对比两版：
         规则版  —— 关键词 + 位置规则
         模型版  —— 同一条样本交给 qwen-flash 判标签
     T5 的验收不是"模型更高"，而是"不低"：口径见 docs/24 与 PR 描述。
@@ -108,33 +108,43 @@ def classify(text):
 
 
 def _ask_model(text, cfg):
-    """调模型拿一个 (label, conf)；任何异常返回 None。这里绝不 raise。"""
-    key = config_loader.secret("dashscope_api_key")
+    """调模型拿一个 (label, conf)；任何异常返回 None。这里绝不 raise。
+
+    注意 try 的范围：**密钥读取、请求体构造、Request 构造**都在保护范围内。
+    以前只包了 urlopen 那一段，`config_loader.secret` 读文件失败（secrets.json
+    损坏/权限问题）会把 OSError 直接漏到 dialogue.respond，整轮通话崩掉，
+    与模块顶部「调用方不需要写 try」的契约不符（S1 探针 D7 实测）。
+    """
+    try:
+        key = config_loader.secret("dashscope_api_key")
+    except Exception as exc:
+        _warn_once("secret_fail", "密钥读取失败，意图识别保持规则版：%s" % str(exc)[:80])
+        return None
     if not key:
         _warn_once("no_key", "未配置 dashscope_api_key，意图识别保持规则版")
         return None
 
-    body = {
-        "model": cfg.get("model") or _DEFAULT_MODEL,
-        "messages": [
-            {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": "用户：%s" % (text or "")},
-        ],
-        "temperature": 0.0,
-        "max_tokens": 40,
-        "stream": False,
-    }
-    req = urllib.request.Request(
-        cfg.get("endpoint") or _ENDPOINT,
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
-        method="POST")
-    timeout_ms = _as_int(cfg.get("timeout_ms"), _DEFAULT_TIMEOUT_MS)
     try:
+        body = {
+            "model": cfg.get("model") or _DEFAULT_MODEL,
+            "messages": [
+                {"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": "用户：%s" % (text or "")},
+            ],
+            "temperature": 0.0,
+            "max_tokens": 40,
+            "stream": False,
+        }
+        req = urllib.request.Request(
+            cfg.get("endpoint") or _ENDPOINT,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+            method="POST")
+        timeout_ms = _as_int(cfg.get("timeout_ms"), _DEFAULT_TIMEOUT_MS)
         with urllib.request.urlopen(req, timeout=timeout_ms / 1000.0) as resp:
             payload = json.loads(resp.read().decode("utf-8", "replace"))
         raw = payload["choices"][0]["message"]["content"] or ""
-    except Exception as exc:                  # 超时 / 4xx / 5xx / 解析失败
+    except Exception as exc:                  # 超时 / 4xx / 5xx / 解析失败 / 构造失败
         _warn_once("call_fail", "意图模型调用失败，退回规则版：%s" % str(exc)[:80])
         return None
 

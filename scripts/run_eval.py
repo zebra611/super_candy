@@ -119,15 +119,33 @@ def judge(case, last, evs):
     # 1) 收集所有 Agent 说过的话与经历过的阶段
     texts = [e["payload"].get("text", "") for e in evs if e["type"] == "agent_reply"]
     stages = [e["payload"].get("stage", "") for e in evs if e["type"] == "agent_reply"]
+    intents = [e["payload"].get("intent", "") for e in evs if e["type"] == "agent_reply"]
     joined = " ".join(texts)
 
-    # 2) 硬性违规：说错话 / 走错阶段
+    # 2) 硬性违规：说错话 / 走错阶段 / 该说的没说
     for bad in expect.get("must_not", []):
         if bad and bad in joined:
             problems.append("说了不该说的：%s" % bad)
+    # must_say 是 must_not 的反面：光靠「最终闭环」判不出中间轮有没有接住
+    # 用户的话。T17 真实通话用例就吃过这个亏——把反问式承接和 3 位尾号
+    # 引导关掉之后，系统仍能在后面几轮把信息补回来闭环，5 条用例全绿。
+    # 加这一条，中间轮的「说明来意」「请说四位」才能被真正钉住。
+    for good in expect.get("must_say", []):
+        if good and good not in joined:
+            problems.append("该说的没说：%s" % good)
     for bad_stage in expect.get("must_not_stage", []):
         if bad_stage in stages:
             problems.append("越界进入阶段：%s" % bad_stage)
+    # 意图断言比文本断言稳：开场白里本来就带「我是京东客服中心」，
+    # 用 must_not 去排除"没说明来意"会连开场白一起误伤（T17-R5 实测）。
+    # intent 是每轮 agent_reply 的结构化字段，才能干净地区分
+    # 「真提问走噪声通道」和「被误判成反问式火气走了 complain 承接」。
+    for bad_intent in expect.get("must_not_intent", []):
+        if bad_intent in intents:
+            problems.append("不该出现的意图：%s" % bad_intent)
+    for good_intent in expect.get("must_say_intent", []):
+        if good_intent and good_intent not in intents:
+            problems.append("该出现却没出现的意图：%s" % good_intent)
 
     # 3) 结局判定
     closed = any(e["type"] == "writeback" for e in evs)
