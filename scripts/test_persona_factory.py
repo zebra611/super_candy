@@ -39,9 +39,15 @@ class BuildCaseTest(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
         self.assertTrue(all(i.startswith("EV") for i in ids))
 
-    def test_turns_are_seven(self):
+    def test_turns_are_seven_or_eight(self):
+        """7 轮是基线；需要补一句 CONFIRM 答复的人设是 8 轮（Q1 分诊后加）。
+
+        为什么允许 8：7 轮里核身+诉求+异议一挤，最后一句刚好停在 CONFIRM 复述，
+        「同意」没机会说，用例必然不闭环。补一句确认，比削掉 CONFIRM
+        合规必答要素正确（T13/N206 同一个坑）。
+        """
         for c in self.cases:
-            self.assertEqual(len(c["turns"]), 7)
+            self.assertIn(len(c["turns"]), (7, 8), c["id"])
 
     def test_refusal_persona_expects_false(self):
         # C08 沉默型不是"拒绝"，它连话都不说，单独由下面那条测；

@@ -57,7 +57,11 @@ YES_CONTAINS = ("同意", "没问题", "那就办", "办吧", "可以可以", "�
                 # 都是诉求不是同意，加裸词会把它们误判成同意并提前闭环。
                 # 只收带承接词或带动作补语的确定说法。
                 "那行，我要", "行，我要", "好，我要", "那好，我要",
-                "我要办", "给我办", "办一个", "我要这个", "那我办吧")
+                "我要办", "给我办", "办一个", "我要这个", "那我办吧",
+                # Q1-D5：CONFIRM 复述后最自然的答复是「我确认」「就这么办」，
+                # 原来都不在词表，conf 0.45 被判 ambiguous，还要再追问一遍才回写。
+                # 刻意不加裸词「确认」——「我要确认一下账单」是提问不是同意。
+                "我确认", "确认了", "确认办", "就这么办", "就这么定", "就按这个办")
 
 NO_EXACT = {"不", "不要", "不用", "不了", "算了", "拒绝", "没兴趣", "不需要", "别打"}
 NO_CONTAINS = ("不要", "不用", "不需要", "没兴趣", "算了", "别打", "拒绝", "不办", "不了")
@@ -97,6 +101,21 @@ def _is_rhetorical_displeasure(text):
     if any(x in core for x in _RHETORICAL_EXCLUDE):
         return False
     return any(w in core for w in RHETORICAL_DISPLEASURE)
+
+
+# Q1-D2：用户拒绝「提供身份信息」的几种说法，必须与「拒绝这份权益」分开：
+#   "我凭什么告诉你"        → 拒绝核身 → 解释为什么核对 + 给替代路径
+#   "要钱的话我就不要了"    → 不是拒绝核身，是在问收费 → 答 KB 后继续核对
+# 只认明确的"不给信息"表达，不把裸「不要 / 不办」算进来——那两个在核身阶段
+# 多半是在问"收不收费"，直接挂断就是 11-06 之前「要钱不？要钱我可不要」
+# 被 refused_identity 一刀切掉的老毛病。
+_REFUSE_IDENTITY = ("不报", "不说", "不告诉", "不想说", "不方便说",
+                    "凭什么", "不提供", "别问", "不用核", "不核", "不验")
+
+
+def _refuse_identity(text):
+    core = _norm(text)
+    return bool(core) and any(w in core for w in _REFUSE_IDENTITY)
 
 # "不要钱 / 不收钱"里的"不要"修饰的是"钱"，不是"这个服务"（T10 否定作用域）。
 # 不区分的话，"不要钱啊，那办上吧"会被判成拒绝——把一个想办的客户记成"客户拒绝"，
@@ -1538,6 +1557,22 @@ def _stage_greeting(session, text, flags):
         if slot:
             return _ask_identity(session, slot, next_stage="IDENTITY")
 
+    # Q1-D6：第一句就问「号码哪来的 / 我凭什么告诉你」——先正面回答，再核对。
+    # 开场不答问题直接要尾号，是最容易被挂断的开场之一（Q1 分诊 Q1-R3）。
+    # 回答仍要带核身问题，否则用户答完就沉默了。
+    if flags.get("ask") or _refuse_identity(text):
+        hit = kb.match(text) if kb.enabled() else None
+        if hit and hit.get("answer"):
+            identity_cfg = config_loader.stage_config("IDENTITY")
+            ask = identity_cfg.get(
+                "reply_ask_tail",
+                "好的，为了核对身份，方便说一下您手机号的尾号吗？就是后四位。")
+            # 手工记一次账：这句既答了问题也问了尾号，下一轮该按「问过 tail」算。
+            session["slot_asks"]["tail"] = session["slot_asks"].get("tail", 0) + 1
+            session["last_asked_slot"] = "tail"
+            return _reply(session, "%s %s" % (hit["answer"], ask),
+                          next_stage="IDENTITY", intent="greeting_ask")
+
     # 其它任何应答都往下走：核对身份。这里就用"问尾号"那一句——
     # 它是这一环的第一个问题，走同一套话术与记账，别让第一问和后续追问
     # 变成两套逻辑（以前就是这样：第一问读 stages.IDENTITY.reply，
@@ -1562,9 +1597,11 @@ def _stage_identity(session, text, flags):
     if flags["deny"]:
         return _finish(session, config_loader.stage_config("GREETING").get("reply_deny", ""), "not_me")
 
-    # 用户在核验环节就明确拒绝：不要再追着问信息，直接结束。
-    # 注意这里不回写——身份都没确认，写回去的业务结果没有意义。
-    if flags["no"] or flags["hangup"]:
+    # 用户在核验环节要求挂断：直接结束，不回写（身份没确认，写回去没意义）。
+    # Q1-D2：原来 `flags["no"]` 也走这里，导致「要钱不？要钱我可不要」被当成
+    # 拒绝核身直接挂断——用户问的是收费，不是不肯报尾号。现在 `no` 交给下面
+    # 的 `not took` 分支按内容分流：拒绝提供信息才解释+收尾，问收费先答再重问。
+    if flags["hangup"]:
         return _finish(session, config_loader.stage_config("GREETING").get("reply_hangup", ""), "refused_identity")
 
     # 带情绪（T8）：核验环节挨骂，最不该做的就是"您手机号后四位是多少"接着问。
@@ -1661,16 +1698,58 @@ def _stage_identity(session, text, flags):
     # 真正的分离要在音频前端做（说话人分离/波束成形），见
     # competition/官方资料包/嘈杂人声降噪_C6.md；这里是文本层兜底。
     if not took:
+        # 这一轮没给出可核身信息，但**不等于**没听清。Q1 分诊（24 条失败里
+        # 20 条是这个根因）暴露：原来的写法把「提问 / 质疑 / 拒绝提供信息」
+        # 全回成「有杂音没听清」，用户连问四轮都被敷衍，最后还被挂断。
+        # 真噪声（evidence=noise）已在上面单独走了通道，这里按内容分三条路：
         session["noise_turns"] = int(session.get("noise_turns", 0)) + 1
         if session["noise_turns"] >= NOISE_MAX:
             return _finish(session,
                            _identity_text("reply_noise_final",
                                           "可能这边信号不太好，我先不打扰您了，稍后会有专员与您联系，再见。"),
                            "no_voice")
-        return _reply(session,
-                      _identity_text("reply_noise",
-                                     "不好意思，刚才有点杂音没听清，您方便再说一次吗？"),
-                      intent="noise")
+
+        # ① 明确拒绝提供身份信息（不报/不说/凭什么/不告诉）：
+        #    不能追着要，也不能一句「再见」挂掉——先解释为什么核对，
+        #    并给替代路径（订单号 / 姓名 / 尾号任一）。两次仍拒绝才收尾。
+        if _refuse_identity(text):
+            session["identity_refusals"] = int(session.get("identity_refusals", 0)) + 1
+            if session["identity_refusals"] >= 2:
+                return _finish(
+                    session,
+                    _identity_text("reply_refuse_final",
+                                   "理解您的顾虑，那我不勉强。稍后会有专员用官方号码联系您，您可以先核实身份。再见。"),
+                    "refused_identity")
+            return _reply(
+                session,
+                _identity_text("reply_refuse_identity",
+                               "理解您谨慎，这边核对只是想确认是您本人接听。您不方便报尾号的话，"
+                               "报一下订单号、或者您登记的姓名，任意一个都行。"),
+                intent="identity_refuse")
+
+        # ② 提问 / 质疑（"你先说号码哪来的"、"核验这么麻烦"）：先正面回答。
+        #    知识库答得上就答（带出处），答不上也要给一句可核实的承诺，
+        #    然后把话题拉回核身。绝不回「没听清」——那是把用户的问题当空气。
+        hit = kb.match(text) if kb.enabled() else None
+        if hit and hit.get("answer"):
+            return _reply(
+                session,
+                "%s 另外麻烦您报一下手机号后四位，我核对完马上给您办。" % hit["answer"],
+                intent="identity_ask")
+        if flags.get("ask") or flags.get("no"):
+            return _reply(
+                session,
+                _identity_text("reply_ask_identity",
+                               "您问的这个问题我记下了，稍后专员给您详细解答。"
+                               "这边先把身份核对一下，方便说一下手机号后四位吗？"),
+                intent="identity_ask")
+
+        # ③ 跑题 / 絮叨（有实义、既不是提问也不是拒绝）：中性承接 + 拉回话题。
+        return _reply(
+            session,
+            _identity_text("reply_offtopic",
+                           "嗯，您说的我记下了。咱们先把身份核对一下，方便说一下手机号后四位吗？"),
+            intent="identity_offtopic")
 
     session["noise_turns"] = 0              # 人在回答了，噪声累计归零
     session["identity_attempts"] += 1

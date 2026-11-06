@@ -1,9 +1,16 @@
-"""评测跑批：把 eval/seed_cases.json 的 30 条用例跑一遍，出分数表。
+"""评测跑批：把评测集的用例跑一遍，出分数表。
 
 用法：
-    python scripts/run_eval.py            # 跑全部用例
-    python scripts/run_eval.py --fresh    # 先清空事件库再跑（推荐，便于对比）
-    python scripts/run_eval.py N01 I02    # 只跑指定用例
+    python scripts/run_eval.py                      # 跑默认评测集（售后主场景）
+    python scripts/run_eval.py --scene pop_reject   # 跑赛题场景（Q5）
+    python scripts/run_eval.py --cases eval/personas_generated.json
+    python scripts/run_eval.py --strict             # 有用例失败时 exit 1（Q3，接 CI）
+    python scripts/run_eval.py --report eval/reports/eval_main.md
+    python scripts/run_eval.py N01 I02              # 只跑指定用例
+
+`--scene` 必须在 import app **之前**生效：app 里有几处「启动时读一次」的缓存，
+import 之后再切场景，赛题用例会被售后话术与售后假客户跑一遍——
+分数看着绿，其实测的不是赛题链路。所以参数在模块级就解析（见 `_scan_argv`）。
 
 它做什么：
     对每条用例开一个 session，按 turns 依次调 handle_turn（进程内直调，
@@ -22,6 +29,7 @@ import shutil
 import sys
 import tempfile
 from atexit import register as _atexit
+from datetime import datetime
 
 # 让脚本能从任意目录运行：把项目根目录加进 sys.path
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -61,11 +69,45 @@ _assert_isolated()
 
 import config_loader              # noqa: E402
 
-# C4/Q5：跑批场景可切换。EVAL_SCENE=pop_reject 时先重读配置再 import app，
-# 否则 app 里那些「启动时读一次」的缓存会留在售后主场景，赛题用例会被
-# 用售后话术与售后假客户跑一遍，分数看着绿其实测的不是赛题链路。
-# 不设就保持默认（售后），老命令逐字节不变。
-_EVAL_SCENE = os.environ.get("EVAL_SCENE", "").strip()
+# C4/Q5：跑批场景可切换，且必须赶在 `import app` 之前。
+# 这里在模块级解析参数，而不是等 main()——app 在 import 时就把配置读进缓存了，
+# 事后调 set_scene 只能改「每轮现读」的那部分，启动期缓存的仍留在旧场景。
+# 不传 --scene 且不设 EVAL_SCENE 时保持默认（售后），老命令逐字节不变。
+def _scan_argv(argv):
+    """一次性解析参数。main() 与模块级都读它，避免两处口径漂移。"""
+    opts = {"scene": "", "cases": "", "report": "",
+            "strict": False, "fresh": False, "ids": []}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        matched = False
+        for key in ("scene", "cases", "report"):
+            flag = "--" + key
+            if a == flag and i + 1 < len(argv):
+                opts[key] = argv[i + 1]
+                i += 2
+                matched = True
+                break
+            if a.startswith(flag + "="):
+                opts[key] = a.split("=", 1)[1]
+                i += 1
+                matched = True
+                break
+        if matched:
+            continue
+        if a == "--strict":
+            opts["strict"] = True
+        elif a == "--fresh":
+            opts["fresh"] = True
+        elif not a.startswith("--"):
+            opts["ids"].append(a)
+        i += 1
+    return opts
+
+
+_OPTS = _scan_argv(sys.argv[1:])
+
+_EVAL_SCENE = (_OPTS["scene"] or os.environ.get("EVAL_SCENE", "")).strip()
 if _EVAL_SCENE:
     os.environ["APP_SCENE"] = _EVAL_SCENE
     config_loader.load(force=True)
@@ -84,13 +126,20 @@ config_loader.nlg_config = lambda: {**config_loader.load().get("nlg", {}), "prov
 
 from app import end_call, handle_turn, start_call   # noqa: E402
 
-CASES_PATH = os.path.join(_ROOT, "eval", "seed_cases.json")
+CASES_PATH = (_OPTS["cases"] if _OPTS["cases"]
+              else os.path.join(_ROOT, "eval", "seed_cases.json"))
+if not os.path.isabs(CASES_PATH):
+    CASES_PATH = os.path.join(_ROOT, CASES_PATH)
 
 
 def load_cases():
-    """读评测集。JSON 不合法会直接抛错——这是故意的，别拿坏数据跑分。"""
+    """读评测集。JSON 不合法会直接抛错——这是故意的，别拿坏数据跑分。
+
+    支持顶层是 {"cases": [...]} 或直接是列表（画像工厂产物是列表）。
+    """
     with open(CASES_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["cases"]
+        data = json.load(f)
+    return data["cases"] if isinstance(data, dict) else data
 
 
 def run_case(case):
@@ -206,9 +255,57 @@ def closure_stats(cases, rows):
     }
 
 
+def _write_report(path, rows, cs, by_cat):
+    """把这一轮结果落一份 markdown（Q5：两个场景分开存档，不靠翻聊天记录）。
+
+    字段只在报告里出现、不参与判定——报告算错了会误导人，
+    所以判定口径一律复用 `judge` 的结论，这里只做排版。
+    """
+    path = path if os.path.isabs(path) else os.path.join(_ROOT, path)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    passed = sum(1 for r in rows if r["ok"])
+    lines = [
+        "# 评测报告：%s" % (_EVAL_SCENE or "售后主场景"),
+        "",
+        "> 生成时间：%s；用例文件：`%s`；事件库为临时库，生产库未被写入。"
+        % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+           os.path.relpath(CASES_PATH, _ROOT)),
+        "> 本报告是**文字驱动**的流程验证，不含语音识别与时延；"
+        "通过率不等于真实来电者上的准确率（口径见 `docs/24`、`docs/21`）。",
+        "",
+        "## 汇总",
+        "",
+        "| 指标 | 值 |",
+        "|---|---|",
+        "| 通过率 | **%d/%d = %.0f%%** |" % (passed, len(rows),
+                                              passed * 100.0 / max(1, len(rows))),
+        "| 应闭环达成 | %d/%d = %.0f%% |" % (cs["should_ok"], cs["should"],
+                                             cs["rate"] * 100),
+        "| 误闭环 | %d/%d |" % (cs["wrongly"], cs["should_not"]),
+        "| 未声明不计入 | %d 条 |" % cs["undeclared"],
+        "",
+        "分类通过：" + "；".join("%s %d/%d" % (k, v[1], v[0])
+                             for k, v in by_cat.items()),
+        "",
+        "## 明细",
+        "",
+        "| ID | 类别 | 结论 | 闭环 | 意向 | 问题 |",
+        "|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        lines.append("| %s | %s | %s | %s | %s | %s |" % (
+            r["id"], r["category"], "通过" if r["ok"] else "**失败**",
+            "是" if r["closed"] else "否",
+            str(r["consent"]) if r["consent"] not in ("", None) else "-",
+            "；".join(r["problems"]) or ""))
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    return path
+
+
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    fresh = "--fresh" in sys.argv
+    args = _OPTS["ids"]
+    fresh = _OPTS["fresh"]
 
     if fresh:
         # 现在每轮都跑在全新的临时库里，--fresh 已经没有实际作用。
@@ -269,6 +366,16 @@ def main():
     print("\n注意：这批用例是**文字驱动**的，不经过语音识别，也不测时延。"
           "它只证明业务流水线（环节推进、回写、纠错、合规）通了；"
           "100% 的成因与过拟合风险见 docs/06 第 7 节，汇报前必读。")
+
+    if _OPTS["report"]:
+        _p = _write_report(_OPTS["report"], rows, cs, by_cat)
+        print("报告已写入：%s" % os.path.relpath(_p, _ROOT))
+
+    # Q3：--strict 只在显式传参时改变退出码。不传参仍返回 0，
+    # 现有调用方（C4 跑批、演示脚本）行为逐字节不变。
+    if _OPTS["strict"] and passed != len(rows):
+        print("\n--strict：%d 条未通过，返回 1" % (len(rows) - passed))
+        return 1
     return 0
 
 

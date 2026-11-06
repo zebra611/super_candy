@@ -39,7 +39,10 @@ OPTIONAL_FIELDS = ("tag", "holdout", "adversarial", "noise", "source")
 EXPECT_KEYS = {"closed", "consent", "final_stage", "must_not", "must_not_stage",
                "must_say", "must_not_intent", "must_say_intent"}
 CATEGORIES = {"normal", "missing_slot", "refuse", "emotion",
-              "induce", "correction", "knowledge", "adversarial"}
+              "induce", "correction", "knowledge", "adversarial",
+              # Q4：从画像工厂分诊转正的回归用例单独一类。
+              # 不混进 adversarial，是因为要能一眼看出「这条是守历史缺陷的」。
+              "regression"}
 STAGES = {"GREETING", "IDENTITY", "NEED", "OFFER", "CONFIRM", "WRITEBACK", "DONE"}
 MAX_TURNS = 20
 
