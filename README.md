@@ -37,6 +37,13 @@ GitHub 的 Contributors 只显示账号名，看不出是谁，所以这里给�
 
 > 最新在最上面。每条改动都附当时的回归结果，断言数即验收标准。
 
+**2026-11-06 · 评测与质检工具链（R3）**：闭环率改为双指标（**应闭环 11/11、误闭环 0/14**，
+未声明 5 条单列）；跑批加启动断言，事件库不在临时目录直接拒绝启动；`bench_voice` 分位数改线性插值、
+补样本数与超时条数；新增对抗集 10 条与三套评测脚本（`adversarial_run` / `eval_suite` / `daily_run`）；
+回写合规率口径定稿（主口径按回写次数、辅口径按会话）。`verify` 新增证据 17（闭环口径）
+与证据 18（评测工具链自测 43 条），**87→91 条**。
+回归：`verify.py` **91/91**、`run_eval.py` 30/30（应闭环 11/11、误闭环 0/14）、单测 43 条全过。
+
 **2026-11-05 · 文档：团队对照表 + 贡献归属口径**：README 开头新增 5 人对照表
 （姓名 / 角色 / GitHub 账号 / 负责区域），`docs/11` 与 `CONTRIBUTING` 的区域表补上账号
 ——原来只有姓名，新人看不出审核请求该发给谁，也看不出 Contributors 里 `Peter13856981023`
@@ -57,7 +64,7 @@ GitHub 的 Contributors 只显示账号名，看不出是谁，所以这里给�
 （"包装压坏了，想问怎么处理"被整句当提问，需求不落库，回溯只能念上一句）、
 **21 条知识条目的假溯源编号**（编造的章节号改成"占位:"前缀 + placeholder 标记）。
 另把 7 个自测脚本挂进 `verify` 总闸门（原来 2500 行新代码零覆盖）。
-回归：`verify.py` **86/86**、`run_eval.py` 30/30（闭环 11/30）、`--check-all` 3/3。
+回归：`verify.py` **86/86**、`run_eval.py` 30/30（闭环 11/30，当时口径）、`--check-all` 3/3。
 
 **2026-11-05 · S2 WebSocket 双向通道（角色 1：张博涵部分）**：`/ws/call` 落地——
 音频帧从 HTTP 分片改为 WS 直推、TTS 分段"就绪即推"（不再轮询 `/api/tts/rest`）、
@@ -378,7 +385,7 @@ wsproto.py         RFC 6455 编解码（纯标准库，可离线断言）
 web/index.html      AudioWorklet 采集、五态状态机、能量 VAD、三段式打断、双口径面板
 web/dashboard.html  指标看板：KPI、时延双口径、事件分布、质检汇总、库体检
 mock_business/      独立 Mock 业务服务：查客户 / 查订单 / 建工单（幂等）
-scripts/            verify（86 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
+scripts/            verify（91 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
                     task2_metrics（四项指标出数）/ check_realtime_asr（流式识别连通验证）
                     test_*（七项能力的离线自测，已作为证据 16 挂进 verify）
                     clean_events · archive_events（库体检/归档）/ check_key / 试听 / 录音验识别
@@ -394,7 +401,7 @@ reviews/            PR 审核记录
 ## 七、怎么验证我改的东西没坏
 
 ```bash
-python scripts/verify.py       # 86 条行为断言，用临时库，不污染 data/
+python scripts/verify.py       # 91 条行为断言，用临时库，不污染 data/
 python scripts/run_eval.py     # 30 条用例跑批（离线，不调云端）
 python config_loader.py        # 配置结构与占位符校验（一秒出结果）
 python scripts/archive_events.py --stats   # 事件库体检：体积、行数、索引
