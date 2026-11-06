@@ -1760,6 +1760,16 @@ def main():
           ["退出码 %d；末行：%s" % (_qc1.returncode,
                                     (_qc1_out or ["无输出"])[-1][:80])])
 
+    # Q4 起画像生成物不进仓库：CI / 新克隆环境里没有这个文件。
+    # 所以这里先按生成器复算一次（固定顺序、只用标准库、毫秒级），
+    # 否则 Q2 课程与 Q4 断言会在干净环境里直接红——那不是缺陷，是没准备输入。
+    _personas_path = os.path.join(ROOT, "eval", "personas_generated.json")
+    if not os.path.exists(_personas_path):
+        subprocess.run([sys.executable,
+                        os.path.join(ROOT, "scripts", "gen_adversarial.py")],
+                       cwd=ROOT, capture_output=True, text=True, timeout=120,
+                       env=_ENV)
+
     _qc2 = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
                                                         "course_evolution.py"),
                            "--self-test",
