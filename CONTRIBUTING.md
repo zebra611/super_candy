@@ -42,11 +42,11 @@ git log --oneline -5 -- docs/ contracts.py app.py config/scene.json
 
 | 区域 | 归属文件 | 负责人 | 这个区域负责什么 |
 |---|---|---|---|
-| **R1 实时语音与终端** | `modules/voice.py`<br>`web/index.html` | 张博涵（1 号·队长） | VAD、流式 ASR、流式 TTS、打断、录音与播报界面 |
-| **R2A 对话编排** | `modules/dialogue.py` | 佟欣（2A） | 状态机、意图判断、槽位填充、话术选择、多轮纠错 |
-| **R2B 工具与业务** | `modules/tools.py` | 潘柏亦（2B） | 工具调用、Mock 接口适配、结构化回写、幂等与错误码 |
-| **R3 质检与自进化** | `modules/eval.py`<br>`eval/`<br>`scripts/run_eval.py` | 刘源（3 号） | 全量质检、评测集、失败归因、进化闭环 |
-| **R4 平台与交付** | `app.py`<br>`events.py`<br>`config_loader.py`<br>`config/scene.json`<br>`启动.bat`<br>`README.md`、`docs/` | 黄睿哲（4 号） | 路由与链路串联、事件流、配置、部署、文档 |
+| **R1 实时语音与终端** | `modules/voice.py`<br>`web/index.html` | 张博涵（1 号·队长，`@zebra611`） | VAD、流式 ASR、流式 TTS、打断、录音与播报界面 |
+| **R2A 对话编排** | `modules/dialogue.py` | 佟欣（2A，`@tongxin-txtxtx`） | 状态机、意图判断、槽位填充、话术选择、多轮纠错 |
+| **R2B 工具与业务** | `modules/tools.py` | 潘柏亦（2B，`@Peter13856981023`） | 工具调用、Mock 接口适配、结构化回写、幂等与错误码 |
+| **R3 质检与自进化** | `modules/eval.py`<br>`eval/`<br>`scripts/run_eval.py` | 刘源（3 号，`@Matt163ly`） | 全量质检、评测集、失败归因、进化闭环 |
+| **R4 平台与交付** | `app.py`<br>`events.py`<br>`config_loader.py`<br>`config/scene.json`<br>`启动.bat`<br>`README.md`、`docs/` | 黄睿哲（4 号，`@yingbaoyue`） | 路由与链路串联、事件流、配置、部署、文档 |
 | **契约层（禁改区）** | `contracts.py` | 全员共有 | 事件类型、状态机阶段名、工具签名 |
 
 > **R2 是两个人一个任务**（佟欣 + 潘柏亦），所以边界必须比别的区域更硬：佟欣只决定"下一句说什么、什么时候调工具、传什么参数"，潘柏亦只负责"给了参数就按契约返回"。两人之间唯一的约定是 `contracts.py` 里的工具签名，谁都不许单方面改。
