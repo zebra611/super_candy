@@ -35,3 +35,6 @@ Thumbs.db
 
 # 评测每日归档（本地运行产物；趋势数据不进仓库，报告另存 eval/reports/）
 /eval/runs/
+
+# 评测报告是生成物（本地另存或走 CI 产物），不进仓库
+/eval/reports/
