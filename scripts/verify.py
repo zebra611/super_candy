@@ -54,6 +54,12 @@ _orig_tts_config = config_loader.tts_config
 config_loader.tts_config = lambda: {
     "provider": "browser", "voice": "zh-CN-XiaoxiaoNeural", "rate": 1.05}
 
+# nlg 同理必须强制关掉：自检断言的是确定性文本（must_say / 关键短语），
+# 而 qwen-flash 改写会改措辞（实测把"同意或者不需要"改写成"同意或不需要"直接打红）。
+# 演示机把 nlg.provider 打开是合法的本地选择，但不能让自检结果随它波动——
+# 所以这里无条件压回 template，保证 verify 永远测的是规则层。见 docs/17 §3.4 的降级语义。
+config_loader.nlg_config = lambda: {**config_loader.load().get("nlg", {}), "provider": "template"}
+
 results = []
 
 # 让"用户报尾号"这类剧本可以反复跑：工单是内存态的，每次自检从头开始
