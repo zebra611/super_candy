@@ -185,5 +185,85 @@ class TestAcceptPath(unittest.TestCase):
                          "session 被改写了，违反 docs/17 第 3.1 节的只读约定")
 
 
+class TestPeriodEquivalence(unittest.TestCase):
+    """T2：期限的**同义换算**放行，换个数照拦。
+
+    这一组测的是"放行的边界在哪"——只测"一年能过"是不够的，
+    真正的风险是有人顺手把"三年"也放过。
+    """
+
+    def test_twelve_months_equals_one_year(self):
+        base = "权益有效期是十二个月，从登记当天开始算。"
+        text = "这个权益有效期是一年，从登记当天算起。"
+        self.assertTrue(nlg._facts_ok(base, text), "十二个月→一年是同一个数，不该拦")
+
+    def test_arabic_and_chinese_are_the_same(self):
+        self.assertTrue(nlg._facts_ok("有效期十二个月", "有效期 12 个月"))
+
+    def test_different_duration_blocked(self):
+        base = "权益有效期是十二个月。"
+        text = "这个权益有效期是三年，很划算。"
+        self.assertFalse(nlg._facts_ok(base, text), "把十二个月改成三年是编造业务事实")
+
+    def test_added_duration_blocked(self):
+        """骨架里没有期限，改写却凭空加一个——这是最危险的一类。"""
+        self.assertFalse(nlg._facts_ok("这份权益是免费的。", "这份权益免费一年，很划算。"))
+
+    def test_amount_still_blocked(self):
+        """金额不享受同义换算：多一个"元"就是编造。"""
+        self.assertFalse(nlg._facts_ok("不需要您额外付费。", "不需要您额外付费，省 300 元。"))
+
+    def test_period_units_parsed(self):
+        self.assertEqual([("month", 12)], nlg._periods("有效期十二个月"))
+        self.assertEqual([("month", 12)], nlg._periods("有效期一年"))
+        self.assertEqual([("month", 36)], nlg._periods("三年"))
+        self.assertEqual([("day", 7), ("month", 12)], nlg._periods("一年内七天可退"))
+
+
+class TestPromptContext(unittest.TestCase):
+    """T3：「最近两轮对话」必须真的注入，不是占位符。
+
+    验收方式是"固定输入，注入前后输出不同"——所以这里直接比 prompt 文本，
+    不去比对模型返回，避免把网络和模型波动混进测试。
+    """
+
+    def _prompt(self, session):
+        return nlg._user_prompt(session, "这份权益是免费的。", "OFFER")
+
+    def test_recent_two_turns_injected(self):
+        s = {"memory": {"recent": [
+            {"turn": 1, "user": "是我，尾号8866", "stage": "GREETING"},
+            {"turn": 2, "user": "包装压坏了", "stage": "NEED"},
+        ]}, "slots": {"last_user_text": "用着还行"}}
+        p = self._prompt(s)
+        self.assertIn("包装压坏了", p, "最近一轮没进 prompt：\n" + p)
+        self.assertIn("是我，尾号8866", p, "上上轮没进 prompt：\n" + p)
+        self.assertNotIn("【最近两轮对话】（无）", p, "还是占位符")
+
+    def test_only_last_two(self):
+        s = {"memory": {"recent": [
+            {"turn": 1, "user": "第一句"},
+            {"turn": 2, "user": "第二句"},
+            {"turn": 3, "user": "第三句"},
+        ]}}
+        p = self._prompt(s)
+        self.assertIn("第三句", p)
+        self.assertIn("第二句", p)
+        self.assertNotIn("第一句", p, "只该注入最近两轮，多了对 prompt 是噪声")
+
+    def test_empty_history_stays_placeholder(self):
+        p = self._prompt({"slots": {}})
+        self.assertIn("【最近两轮对话】（无）", p)
+
+    def test_last_user_text_read_from_slots(self):
+        """dialogue 把原话存在 slots.last_user_text 里，这里必须读得到。"""
+        p = self._prompt({"slots": {"last_user_text": "屏幕碎了"}})
+        self.assertIn("【客户刚说】屏幕碎了", p)
+
+    def test_mood_follows_flags(self):
+        p = self._prompt({"slots": {}, "last_flags": {"angry": True}})
+        self.assertIn("【客户情绪】带情绪", p)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2 if "-v" in sys.argv else 1)

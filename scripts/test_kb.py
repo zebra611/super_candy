@@ -253,5 +253,51 @@ class ValidatorTest(unittest.TestCase):
         self.assertTrue(any("多久" in w for w in warns), warns)
 
 
+class PlaceholderTest(unittest.TestCase):
+    """C2：官方话术的【】占位符——先原样念，后槽位填充。
+
+    官方案例里的占位符有两套写法（空的【】与【XX】【XXX】【XXXX】），
+    这里两种都要覆盖，且都要能说清"哪几个还没填上"。
+    """
+
+    CASE = "您申请的【XX】品牌资质，因【驳回原因】未通过，请在【】天内补充。"
+
+    def test_no_slots_keeps_verbatim(self):
+        text, missing = kb.render(self.CASE)
+        self.assertEqual(self.CASE, text, "没给槽位时必须原样念，不能删也不能猜")
+        self.assertEqual(["XX", "驳回原因", "（空占位符）"], missing)
+
+    def test_filled_slots_replaced(self):
+        text, missing = kb.render(self.CASE, {"XX": "米家", "驳回原因": "授权书过期"})
+        self.assertIn("米家品牌资质", text)
+        self.assertIn("授权书过期", text)
+        self.assertNotIn("【XX】", text)
+        self.assertEqual(["（空占位符）"], missing, "只该剩空的那个")
+
+    def test_slot_key_is_placeholder_text(self):
+        """槽位键就是括号里的原文——这条不写清，接 C1 时必然对不上。"""
+        text, _ = kb.render(self.CASE, {"XX": "米家"})
+        self.assertNotIn("米家", kb.render(self.CASE, {"brand": "米家"})[0],
+                         "键名对不上时不该生效")
+
+    def test_empty_slot_value_does_not_replace(self):
+        """传了键但值是空串 → 视为没填，不能渲染出一个空洞。"""
+        text, missing = kb.render("申请【XX】品牌", {"XX": ""})
+        self.assertIn("【XX】", text)
+        self.assertIn("XX", missing)
+
+    def test_plain_answer_unchanged(self):
+        """没有占位符的普通答案，行为必须与接入前逐字节一致。"""
+        text, missing = kb.render("这份权益是免费的。", {"XX": "米家"})
+        self.assertEqual("这份权益是免费的。", text)
+        self.assertEqual([], missing)
+
+    def test_match_carries_missing(self):
+        """match() 的返回里要带 missing，调用方不用自己再解析一遍。"""
+        hit = kb.match("这个要花钱吗")
+        self.assertIsNotNone(hit)
+        self.assertEqual([], hit["missing"], "出厂知识库不该有没填的占位符")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

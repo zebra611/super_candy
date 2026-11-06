@@ -24,7 +24,7 @@
 import re
 
 import config_loader
-from modules import kb, nlg, tools
+from modules import intent, kb, nlg, tools
 
 # ---------------------------------------------------------------------------
 # 意图关键词表
@@ -41,8 +41,14 @@ from modules import kb, nlg, tools
 YES_EXACT = {"是", "对", "好", "行", "可以", "是的", "对的",
              "好的", "行吧", "是啊", "同意", "要", "需要", "没问题"}
 # 包含即算肯定（长句里带这些词）
+#
+# 补这几个是 11-06 对抗跑批暴露的：AD02「免费的是吧，那就要，要要」与
+# AD03「不要钱啊，那办上吧」都是**嘴上说要、词表里没有**的说法，
+# 结果被判 unknown，一路问到"您可以简单回我一句同意或者不需要"。
+# 加词比改规则安全：它们是明确表态，不是含糊。
 YES_CONTAINS = ("同意", "没问题", "那就办", "办吧", "可以可以", "就这样", "要了", "需要",
-                "那我要", "就要", "我同意")
+                "那我要", "就要", "我同意",
+                "那就要", "就要了", "要要", "办上吧", "还是办", "就办", "那我办", "要要要")
 
 NO_EXACT = {"不", "不要", "不用", "不了", "算了", "拒绝", "没兴趣", "不需要", "别打"}
 NO_CONTAINS = ("不要", "不用", "不需要", "没兴趣", "算了", "别打", "拒绝", "不办", "不了")
@@ -53,20 +59,47 @@ DENY_PERSON = ("不是本人", "我不是", "打错", "他不在", "不是他", 
 # 要求结束通话（与"拒绝"不同：拒绝要回写，挂断不回写）
 HANGUP_WORDS = ("挂了", "先挂", "忙着", "没空", "不聊了", "别打了", "不要再打")
 
-# 情绪信号
+# 情绪信号（骂/威胁这类**强情绪**）
 ANGRY_WORDS = ("投诉", "骗子", "烦", "垃圾", "滚", "气死", "恶心", "骚扰")
+
+# 抱怨/泄气信号（T11）。与 ANGRY_WORDS 刻意的区别：那些是"骂人"，
+# 这些是"我说了也没用"——不是攻击客服，是**放弃沟通**。
+# 不接住这句话的后果比挨骂更严重：用户下一句往往就是"算了，挂了吧"。
+# 实测"那你还要我说啥"以前直接换来一句"您同意领取吗"，用户会觉得自己在自说自话。
+COMPLAIN_WORDS = ("说啥", "让我说", "有啥用", "有什么用", "说了有用", "说了也没用",
+                  "还要我说", "说了白说", "问这有啥", "白问了")
+
+# "不要钱 / 不收钱"里的"不要"修饰的是"钱"，不是"这个服务"（T10 否定作用域）。
+# 不区分的话，"不要钱啊，那办上吧"会被判成拒绝——把一个想办的客户记成"客户拒绝"，
+# 业务侧拿着这张工单去做挽留，用户接到第二个电话会更火。
+FREE_MARKS = ("不要钱", "不用钱", "不收钱", "不要费用", "不收费", "不要花钱", "不用花钱")
+
+# 改口信号（T9）。只用在阶段**切换边界**：用户已经听过方案，又回头改诉求。
+# "等等我改一下其实是屏幕碎了"以前被判 unknown，诉求仍是旧的，客服继续按旧诉求推销。
+# 注意这里不含单独一个"不是"——它太常见（"不是本人""不是这个意思"），
+# 一律当改口会把否认、拒绝全搅成改口。
+CORRECTION_MARKS = ("改一下", "改口", "说错了", "我说错", "其实是", "更正",
+                    "重新说", "等等我", "我说的是")
 
 # 提问信号
 # "到哪 / 哪了"是物流查询的高频问法（"这单到哪了"），不含它们就会被当成
 # 一条诉求记下来并推进到方案沟通——用户明明在问，客服却在推销。
 ASK_MARKS = ("吗", "？", "?", "多少", "多久", "怎么", "什么", "能不能", "是不是", "可以吗",
-             "到哪", "哪了")
+             "到哪", "哪了",
+             # "在哪里改""去哪儿补"是赛题里最高频的一类追问（操作路径类），
+             # 不含它们，一句真问题会被当成新诉求记进工单。
+             "哪里", "在哪", "哪儿")
 
 # 要求转人工。**故意不含"投诉"**：投诉是情绪信号（见 ANGRY_WORDS），
 # 要致歉承接后继续解决问题，不能一句"帮您转人工"就把电话挂掉。
 # 评测用例 R04 就是"我要投诉你们"之后还要走完五个环节，含投诉会直接判负。
 HANDOFF_WORDS = ("转人工", "找人工", "人工客服", "转客服", "转接人工",
-                 "要真人", "真人接", "叫你们领导", "找你们领导")
+                 "要真人", "真人接", "叫你们领导", "找你们领导",
+                 # 口语说法：客户不会说"转人工"，说的是"转个人""找管事的"。
+                 # 漏掉这两种，一句明确的转人工请求会被判成提问（含"能不能"），
+                 # 于是客服继续按原流程问下去——这是最不该出错的漏判。
+                 "转个人", "转接人工", "管事的", "找你们负责", "负责人",
+                 "叫你们领导", "上级")
 
 # 弱肯定：嘴上答应了，但明显没拿定主意。
 # "好吧""应该可以""差不多"这类回答如果直接当同意回写，业务侧会拿着一份
@@ -190,6 +223,16 @@ def new_session(session_id):
         "identity_slots": {"tail": "", "name": ""},
         "slot_asks": {"tail": 0, "name": 0},
         "last_asked_slot": "",
+        # 连续含糊次数（T12）。核验环节用户连说"嗯/哦"时用来决定什么时候收尾。
+        "identity_vague": 0,
+        # 带情绪的次数（T8）。只用于统计与话术轮换，不做转人工——
+        # 见 ANGRY_HOLD 上关于"骂两句就转人工等于把电话关掉"的说明。
+        "angry_holds": 0,
+        # 通内指代（T6）：这通电话里提过的对象，键是类型、值是给人看的称呼。
+        # 只认同一通电话内的指代，跨通话的"上次那个"不解析（那需要客户档案，
+        # 查不到就硬答等于编造）。
+        "referents": {},
+        "last_referent": "",
         # 每个槽位被提交过的值（按顺序）。用来判"这是不是改口"——
         # 当前值查不到就会被清空，拿清空后的值比较会把中间那次改口弄丢。
         "slot_history": {"tail": [], "name": []},
@@ -202,6 +245,11 @@ def new_session(session_id):
         # 第几版回写。用户改口时递增，配合幂等键让"同一张工单被更新"而不是新开一张。
         "writeback_version": 0,
     }
+
+
+# 中文数字 → 阿拉伯数字，只用于"报尾号"这一种场景（见 classify 里的说明）。
+_CN_DIGIT_CHARS = {"零": "0", "〇": "0", "一": "1", "二": "2", "三": "3", "四": "4",
+                   "五": "5", "六": "6", "七": "7", "八": "8", "九": "9"}
 
 
 def classify(text):
@@ -226,7 +274,7 @@ def classify(text):
     """
     t = (text or "").strip()
     n = _norm(t)
-    flags = {"deny": False, "hangup": False, "angry": False,
+    flags = {"deny": False, "hangup": False, "angry": False, "complain": False,
              "no": False, "yes": False, "ask": False, "handoff": False,
              "digits": "", "vague": False, "conf": CONF_NONE, "evidence": "none"}
 
@@ -246,37 +294,95 @@ def classify(text):
     if any(w in t for w in ANGRY_WORDS):
         flags["angry"] = True
         strong.append(("angry", CONF_CONTAINS))
+    # 抱怨单独一个标记，不并进 angry：angry 的处理是"暂停推进+致歉"，
+    # complain 的处理是"致歉后照常往下走"——用户只是在泄气，不是要中断这通电话。
+    if any(w in t for w in COMPLAIN_WORDS):
+        flags["complain"] = True
+        strong.append(("complain", CONF_CONTAINS))
 
-    if n in NO_EXACT:
+    # 否定作用域（T10）：先说"是不是不要钱"这类**免费语境**，"不要"修饰的是钱。
+    free_ctx = any(w in t for w in FREE_MARKS)
+    no_spans = []
+    no_pos = -1
+    if n in NO_EXACT and not free_ctx:
         flags["no"] = True
+        no_pos = max(t.find(n), 0)
+        no_spans.append((no_pos, no_pos + len(n)))
         strong.append(("no", CONF_EXACT))
-    elif any(w in t for w in NO_CONTAINS):
-        flags["no"] = True
-        strong.append(("no", CONF_CONTAINS))
+    elif not free_ctx:
+        # 每个否定词的**每一次出现**都要记区间，不能只记第一次：
+        # "不要了不要了"里第二个"要"落在第二段"不要"里，
+        # 只记第一段会让它漏出来，把一句重复拒绝判成同意。
+        for w in NO_CONTAINS:
+            start = 0
+            while True:
+                i = t.find(w, start)
+                if i < 0:
+                    break
+                no_spans.append((i, i + len(w)))
+                no_pos = max(no_pos, i)
+                start = i + 1
+        if no_pos >= 0:
+            flags["no"] = True
+            strong.append(("no", CONF_CONTAINS))
 
-    # 关键：命中否定词时不再判肯定，"不要"里含"要"就是典型坑
-    if not flags["no"]:
-        if n in YES_EXACT:
-            flags["yes"] = True
-            strong.append(("yes", CONF_EXACT))
-        elif any(w in t for w in WEAK_YES):
-            flags["yes"] = True
-            strong.append(("yes", CONF_WEAK))
-        elif any(w in t for w in YES_CONTAINS):
-            flags["yes"] = True
-            strong.append(("yes", CONF_CONTAINS))
+    # 关键：命中否定词时不再是"直接不判肯定"，而是**只认否定词外面的肯定词**。
+    #
+    # 这一条以前写成 `if not flags["no"]:`，代价是把两种完全不同的句子并成了一类：
+    #   "不要了"        —— "要"在"不要"里面，是拒绝（必须继续判成拒绝）
+    #   "算了还是办吧"    —— "办吧"在"算了"后面，是改口（被判成了拒绝）
+    # 判据是**位置**：肯定词落在否定词的字符区间内，才属于被否定。
+    yes_pos = -1
+    bare = _strip_filler(n)
+    if n in YES_EXACT:
+        yes_pos = max(t.find(n), 0)
+        flags["yes"] = True
+        strong.append(("yes", CONF_EXACT))
+    # "好的嗯""对呀嗯"这类：语气词只是语气，去掉之后就是一句标准答案。
+    # 以前这种整句在 YES_EXACT 里查不到、在 WEAK_YES 里也查不到，
+    # 于是被判成 unknown —— 用户明明答应了，客服却问"您同意还是不需要"。
+    # 置信度给 CONTAINS（不是 EXACT）：语气词的存在说明这句话不算干脆。
+    elif bare and bare != n and bare in YES_EXACT:
+        yes_pos = max(t.find(bare), 0)
+        flags["yes"] = True
+        strong.append(("yes", CONF_CONTAINS))
+    elif _find_free(t, WEAK_YES, no_spans) >= 0:
+        yes_pos = _find_free(t, WEAK_YES, no_spans)
+        flags["yes"] = True
+        strong.append(("yes", CONF_WEAK))
+    elif _find_free(t, YES_CONTAINS, no_spans) >= 0:
+        yes_pos = _find_free(t, YES_CONTAINS, no_spans)
+        flags["yes"] = True
+        strong.append(("yes", CONF_CONTAINS))
 
-    if any(m in t for m in ASK_MARKS):
-        flags["ask"] = True
-        strong.append(("ask", CONF_CONTAINS))
+    # 同一句里既否定又肯定：**后说的那个赢**。
+    # 依据是改口的自然语序——"算了还是办吧""不要了…那还是办吧"，
+    # 更正永远在后面。以前两条都置 True，再由 _intent_name 的固定优先级
+    # 判成"拒绝"，于是 AD07（先拒后要）最后落库的是拒绝，与用户最后一次表态相反。
+    if flags["no"] and flags["yes"]:
+        if yes_pos > no_pos:
+            flags["no"] = False
+            strong = [e for e in strong if e[0] != "no"]
+        else:
+            flags["yes"] = False
+            strong = [e for e in strong if e[0] != "yes"]
+
+    # 提问判定。这里有一个刻意的收窄：**用户已经给了明确决定时，光一个问号不算提问**。
+    # 反例是 AD03「啊？不要钱啊，那办上吧」——开头的"啊？"是惊讶不是提问，
+    # 以前它让整句判成 ask，于是客服去念订单金额，用户刚说"办上吧"又被晾在一边。
+    _ask_hits = [m for m in ASK_MARKS if m in t]
+    if _ask_hits:
+        _punct_only = all(m in ("？", "?") for m in _ask_hits)
+        if not (_punct_only and (flags["yes"] or flags["no"])):
+            flags["ask"] = True
+            strong.append(("ask", CONF_CONTAINS))
     # 同理："我不需要转人工"里的"转人工"是拒绝，不是要求
     if not flags["no"] and any(w in t for w in HANDOFF_WORDS):
         flags["handoff"] = True
         strong.append(("handoff", CONF_EXACT))
 
-    # 手机尾号：取**最后一个**孤立的 4 位数字段。
-    #
-    # 为什么是最后一个：改口几乎总是"不对，是XXXX"这个语序，先说的那个是错的。
+# 手机尾号：取**最后一个**孤立的 4 位数字段。
+#    # 为什么是最后一个：改口几乎总是"不对，是XXXX"这个语序，先说的那个是错的。
     # 旧代码取第一个，于是"尾号1234，不对是4321"会把错的 1234 记下来，
     # C04 那条用例骂的就是这个。
     #
@@ -291,6 +397,21 @@ def classify(text):
         next_ok = (i + 4 >= len(t)) or not t[i + 4].isdigit()
         if prev_ok and next_ok:
             digits = seg
+    # 中文数字报尾号："尾号是八八六六"。外呼里这比阿拉伯数字更常见，
+    # 旧规则一个都认不出来，于是尾号收不进槽位、被反复追问。
+    # 只在"正好连续 4 个中文数字"时成立：8 位连报（一二三四五六七八）不当尾号，
+    # 那是完整号码，截后四位就是拿别人的号去核验。
+    if not digits:
+        run = ""
+        for ch in t:
+            if ch in _CN_DIGIT_CHARS:
+                run += _CN_DIGIT_CHARS[ch]
+            else:
+                if len(run) == 4:
+                    break
+                run = ""
+        if len(run) == 4:
+            digits = run
     flags["digits"] = digits
     if digits:
         strong.append(("info", CONF_DIGIT))
@@ -321,6 +442,46 @@ def _norm(text):
     return (text or "").strip().strip(" \t\r\n。，、！？!?,.~～…—-；;：:")
 
 
+def _find_free(text, words, spans):
+    """在 words 里找第一个**不在否定区间内**的出现位置，找不到返回 -1。
+
+    spans 是 [(起, 止)] 的字符区间，来自这一句里命中的否定词。
+    用途就一个：区分"不要了"（要埋在"不要"里）和"算了还是办吧"（办吧在后面）。
+    """
+    best = -1
+    for w in words:
+        start = 0
+        while True:
+            i = text.find(w, start)
+            if i < 0:
+                break
+            if not any(a < i + len(w) and i < b for a, b in spans):
+                best = max(best, i)
+                break
+            start = i + 1
+    return best
+
+
+# 句尾语气词。用户答"好的呀""行啊""可以啦"时，去掉这几个字才是真正的表态。
+#
+# 这里**故意不含"吧"**："好吧"是弱肯定（WEAK_YES，故意低于同意阈值），
+# 去掉"吧"就变成"好"，而"好"在 YES_EXACT 里——一条把弱肯定抬成明确同意的规则，
+# 正是这个文件开头反复强调要避免的错。同理不含"嘛/呗/咯"。
+_FILLER_TAIL = "呀啊呢哦嗯啦哟哈"
+
+
+def _strip_filler(text):
+    """去掉语气词之后的"实质内容"。
+
+    只用来判"这句话去掉语气词是不是一个标准答案"，不用于别的判断：
+    "好的嗯"→"好的"是同意；但"嗯"去掉之后是空串，仍然是含糊，不能变成同意。
+    """
+    t = text or ""
+    for w in PURE_FILLER:
+        t = t.replace(w, "")
+    return _norm(t.strip().strip(_FILLER_TAIL))
+
+
 def _classify(text):
     """classify 的旧名字。其余模块与历史测试仍按这个名字调用，保留以免打断它们。"""
     return classify(text)
@@ -329,13 +490,13 @@ def _classify(text):
 def _intent_name(flags):
     """把标记压成一个便于统计的意图名（写进事件的 intent 字段）。
 
-    优先级顺序是**刻意**的：否认 > 挂断 > 转人工 > 带情绪 > 拒绝 > 肯定 > 提问。
+    优先级顺序是**刻意**的：否认 > 挂断 > 转人工 > 带情绪 > 抱怨 > 拒绝 > 肯定 > 提问。
     越靠前的越"改变流程走向"，一句话同时命中多种时必须听最硬的那个
     （"不需要，别打了"是拒绝不是挂断，因为拒绝要回写留痕）。
     新增的 vague 排在最后：它只在没有别的信号时成立，理论上不会和上面冲突，
     放在这里是防止将来加词表时把含糊误盖掉一个明确意图。
     """
-    for k in ("deny", "hangup", "handoff", "angry", "no", "yes", "ask"):
+    for k in ("deny", "hangup", "handoff", "angry", "complain", "no", "yes", "ask"):
         if flags.get(k):
             return k
     if flags.get("digits"):
@@ -398,10 +559,54 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
 
 
 def _soothe(text, flags):
-    """用户带情绪时，在话术前加一句安抚。文案来自配置，不写死。"""
-    if flags.get("angry"):
+    """用户带情绪时，在话术前加一句安抚。文案来自配置，不写死。
+
+    complain 也算：抱怨同样是"情绪没人接住"，只是强度低一档。
+    区别在**接住之后怎么做**——angry 走 _angry_hold 暂停推进（下面），
+    complain 只加一句致歉，后面照常回答或推进。
+    """
+    if flags.get("angry") or flags.get("complain"):
         return config_loader.apology_prefix() + text
     return text
+
+
+# ---------------------------------------------------------------------------
+# 带情绪时"暂停推进"（T8）
+#
+# 旧行为：ANGRY_WORDS 只在 _soothe 里被读，而 _soothe 只接在 GREETING/IDENTITY/
+# NEED 的少数几个出口上。于是一路走到 OFFER/CONFIRM 之后，用户骂一句
+# "你们这是骗子服务"，客服照样问"您同意领取这份权益吗"——这不是服务态度问题，
+# 是**在用户已经明确表达不信任时继续要一个同意**，合规上也站不住。
+#
+# 现在的规则：NEED/OFFER/CONFIRM 命中情绪 → 致歉 + 承接，**阶段不动**。
+# 不动阶段的理由和含糊追问一致：这一环的结论还没拿到，假装过了就是替用户表态。
+#
+# 不设"骂两次就转人工"：转人工是收尾动作，用户骂两句往往只是发泄，
+# 一句"帮您转人工"就结束，等于把本来还能谈的一通电话关掉。
+# 真正的兜底是 config.budget 的轮次/时长上限，那条对所有路径都生效。
+# 话术取值：`fallback.<键>` → 内置默认，4 号补配置即可改口吻。
+# ---------------------------------------------------------------------------
+ANGRY_HOLD = {
+    "IDENTITY": ("reply_soothe_identity",
+                 "非常抱歉让您有这样的感受。您先消消气，我这边还在听着，您方便的时候再告诉我。"),
+    "NEED": ("reply_soothe_need",
+             "非常抱歉让您有这样的感受。您慢慢说，我这边听着，不着急。"),
+    "OFFER": ("reply_soothe_offer",
+              "非常抱歉让您有这样的感受。您先别急着定，有什么顾虑您跟我说，我再解释清楚。"),
+    "CONFIRM": ("reply_soothe_confirm",
+                "非常抱歉让您有这样的感受。您先不用急着答复，我把情况再说清楚，您听着不舒服随时打断我。"),
+}
+
+
+def _angry_hold(session, stage):
+    """带情绪时的统一出口：致歉承接 + **不推进阶段**。
+
+    与 _clarify 的区别：_clarify 是"没听懂"，_angry_hold 是"听懂了但用户在气头上"。
+    两者都不推进，但话术完全不同——对生气的人说"我没听清"是火上浇油。
+    """
+    session["angry_holds"] = int(session.get("angry_holds", 0)) + 1
+    key, default = ANGRY_HOLD.get(stage, ANGRY_HOLD["OFFER"])
+    return _reply(session, config_loader.fallback_text(key) or default, intent="angry")
 
 
 def _finish(session, text, reason):
@@ -558,6 +763,19 @@ IDENTITY_ASKS = {
     ),
 }
 
+# 核验环节连续含糊的退出（T12）。
+# 旧行为：用户连说"嗯/哦"，客服在尾号/姓名/姓氏之间轮换问法，问满 4 次才
+# identity_failed，中间一句致歉都没有。用户体感是"机器在绕圈子"，
+# 而真人坐席这时候一定会说"不好意思，信号是不是不太好"。
+# 现在第二次含糊就收尾，end_reason 用 unclear（与"核对不上"区分归因）。
+IDENTITY_VAGUE_MAX = 2
+IDENTITY_VAGUE_ASKS = (
+    ("reply_identity_unclear",
+     "不好意思，我这边没太听清。您方便再说一次吗？不着急。"),
+    ("reply_identity_unclear_final",
+     "非常抱歉，可能信号不太好。我这边先记下来，稍后让专员与您联系，感谢您的接听。"),
+)
+
 # 从一句话里抽姓名时，这些字出现就说明它不是名字。
 # 不这么滤，"真不记得"这种四个汉字会被当成一个姓名去查库。
 _NAME_BLOCK = "不没忘知道是我你他她您们吗呢吧啊的对先那这"
@@ -605,6 +823,32 @@ def _extract_name(text):
             if not any(ch in _NAME_BLOCK for ch in seg):
                 return seg
     return ""
+
+
+def _name_from_answer(session, text):
+    """上一句问的是姓名时，把"裸答"的名字收进来（T7）。
+
+    真实通话里没人会说"我叫刘雨儿"，只会说"刘雨儿"，或者"刘雨儿啊""是刘雨儿"。
+    `_extract_name` 只认带引导词的写法（我姓/我叫/我是/X先生），这类裸答
+    一个字都收不到，槽位永远是空的，于是两轮问满 → identity_failed 挂断。
+    这不是边界情况：11-06 的真实通话就是这么把一位客户挂掉的。
+
+    只在"上一句确实在问姓名"时启用。不加这个前提，用户随便回一句四字短语
+    （"真不记得""我用着挺好"）都会被当成名字去查库——`_NAME_BLOCK` 挡得住一部分，
+    挡不住"屏幕碎了"这种。
+    """
+    if (session.get("last_asked_slot") or "") != "name":
+        return ""
+    t = _strip_filler(_norm(text))
+    if not (2 <= len(t) <= 4):
+        return ""
+    if any(ch.isdigit() for ch in t):
+        return ""
+    if not all("\u4e00" <= ch <= "\u9fa5" for ch in t):
+        return ""
+    if any(ch in _NAME_BLOCK for ch in t):
+        return ""
+    return t
 
 
 def _record_correction(session, slot, old, new):
@@ -658,6 +902,9 @@ def _take_identity_slots(session, text, flags):
         _submit_identity_slot(session, "tail", flags["digits"])
         took.append("tail")
     name = _extract_name(text)
+    if not name:
+        # 带引导词的写法抽不到时，再看这是不是"上一句问了姓名、这一句裸答"（T7）
+        name = _name_from_answer(session, text)
     if name:
         _submit_identity_slot(session, "name", name)
         took.append("name")
@@ -726,8 +973,51 @@ def _ask_identity(session, slot, next_stage=None):
 # 不追求理解"那个"具体指什么——那需要上下文推理，规则层做不准，
 # 做不准的结果就是把一个含糊输入强行解释成一个具体诉求，比不解释更糟。
 REFER_WORDS = ("这个", "那个", "它", "刚才", "刚说", "上面说", "你说的", "之前说")
+# 动作词：出现在一句"带指代"的话里，说明用户在**要求做什么**，
+# 不是在**指什么**。见 _looks_like_reference。
+_REFER_VERBS = ("说", "讲", "介绍", "办", "同意", "要", "给", "弄", "看", "查", "改", "帮")
+# 属性词：指代目标 + 属性词 = 在**问属性**，不是在指什么。
+# "这个权益收费不""那个权益是免费的吧"都是真问题，用户想知道收不收费。
+# 当成指代会回一句"您说的还是这份权益，我再讲一遍"——问题没答，
+# 而且 OFFER 阶段不动，等于白白浪费一轮（D06/D10 就是栽在这里：
+# 用户问完收费，下一句"办吧"只能推到 CONFIRM，进不了 DONE）。
+# 注意不能用 CONCRETE_WORDS 代替：那里面有"权益""订单"，
+# 而"那个权益"本身正是要算指代的。
+_REFER_ATTR_WORDS = ("收费", "费用", "钱", "免费", "价格", "有效期", "多久",
+                     "怎么用", "条件", "限制", "范围", "多少钱", "贵")
 CONCRETE_WORDS = ("订单", "保修", "快递", "包装", "物流", "发货", "退款", "售后",
                   "质量", "权益", "费用", "收费", "钱", "有效期", "多久", "怎么用")
+
+
+def _looks_like_reference(text, flags):
+    """这句是不是"在指刚才那件事"，而不是在问一个新问题（T6）。
+
+    比 `_is_reference_only` 宽一点，但宽得有边界：
+        算：  "就是那个""那个权益""那个订单呢"   —— 指代 + 至多一个指代目标本身
+        不算："这个权益多少钱""这个订单到哪了"   —— 有真问题，归提问分支
+        不算："你刚说的那个权益挺好啊"          —— 太长，是评论不是指代
+    判据是"有没有提问信号"而不是"有没有名词"：只按"有没有名词"判，
+    "那个权益"会被推去确认（等于把一次指代当成同意）。
+    """
+    t = _norm(text)
+    if not t or len(t) > 10:
+        return False
+    if flags.get("ask"):
+        return False
+    # 带动作词的不是指代，是**要求**。
+    # "行，你说这个权益吧"里虽然有"这个权益"，但那是"你讲讲"，该推进到确认；
+    # 把它当指代会卡在 OFFER 反复讲同一段，用户会觉得客服听不懂人话。
+    # （这条是被 test_intent 的 _to_confirm 抓出来的：它一直是 CONFIRM 的入口句。）
+    if any(w in t for w in _REFER_VERBS):
+        return False
+    # 带属性词的是**问属性**，不是指代。
+    # 这里不能指望 flags["ask"]：口语里"收费不""要钱不""免费吧"是正反问句，
+    # 没有"吗/呢/？"，ASK_MARKS 抓不到，于是这条检查是唯一的一道拦。
+    if any(w in t for w in _REFER_ATTR_WORDS):
+        return False
+    if not any(w in t for w in REFER_WORDS):
+        return False
+    return True
 
 
 def _is_reference_only(text):
@@ -738,6 +1028,63 @@ def _is_reference_only(text):
     if any(w in n for w in CONCRETE_WORDS):
         return False
     return any(w in n for w in REFER_WORDS)
+
+
+# ---------------------------------------------------------------------------
+# 通内指代解析（T6）
+#
+# 上一版只会"识别指代然后追问"，不会解析。于是"就那个""那个权益"在 OFFER
+# 阶段没有任何分支接它，直接落进默认路径推 CONFIRM——用户指了一下某样东西，
+# 客服把这当成"同意"，比追问更糟。
+#
+# 这里只做**同一通电话内**的指代：解析目标是这通电话里刚提过的对象。
+# 跨通话的"上次那个订单"一律不解析——那要去查客户档案，查不到还硬答就是编造。
+# 也不做"三轮之前那个"这种复杂回指：规则层做不准，做不准时给一个 100% 错的
+# 解析，比诚实地问一句"您是指哪件事"更伤人。
+# ---------------------------------------------------------------------------
+REFER_ORDER_WORDS = ("订单", "单号", "这单", "那单", "快递", "物流", "发货")
+REFER_BENEFIT_WORDS = ("权益", "方案", "保障", "延保", "这个服务")
+
+
+def _note_referent(session, kind, label):
+    """记下这通电话里提过的对象，供后面的指代解析用。"""
+    session.setdefault("referents", {})[kind] = label
+    session["last_referent"] = kind
+
+
+def _resolve_reference(session, text):
+    """把一句指代落到具体对象上，返回 (kind, label)；解析不了返回 ("", "")。
+
+    带名词的（"那个订单""刚才说的权益"）按名词选；
+    光说"就是那个"的，用最近一次提到的对象——这正是"连续三轮指代"的场景。
+    """
+    t = text or ""
+    kind = ""
+    if any(w in t for w in REFER_ORDER_WORDS):
+        kind = "order"
+    elif any(w in t for w in REFER_BENEFIT_WORDS):
+        kind = "benefit"
+    referents = session.get("referents") or {}
+    if kind and referents.get(kind):
+        return kind, referents[kind]
+    last = session.get("last_referent") or ""
+    if last and referents.get(last):
+        return last, referents[last]
+    return "", ""
+
+
+def _answer_reference(session, kind, label):
+    """回答一个已解析的指代。阶段不动——用户只是在问"你说的那个是什么"。"""
+    if kind == "order":
+        order = session["slots"].get("order")
+        tpl = config_loader.stage_config("NEED").get("reply_order_detail", "")
+        if order and tpl:
+            return _reply(session, tpl.format(amount=order.get("amount"),
+                                              status=order.get("status")),
+                          intent="reference")
+    offer = config_loader.stage_config("OFFER").get("reply", "")
+    return _reply(session, "您说的还是%s，我再讲一遍。%s" % (label or "这个", offer),
+                  intent="reference")
 
 
 # ---------------------------------------------------------------------------
@@ -944,6 +1291,21 @@ def _stage_identity(session, text, flags):
     if flags["no"] or flags["hangup"]:
         return _finish(session, config_loader.stage_config("GREETING").get("reply_hangup", ""), "refused_identity")
 
+    # 带情绪（T8）：核验环节挨骂，最不该做的就是"您手机号后四位是多少"接着问。
+    # 用户会把这句话听成"我的不满你根本没接"。
+    if flags.get("angry"):
+        return _angry_hold(session, "IDENTITY")
+
+    # 连续含糊 → 退出机制（T12）。见 IDENTITY_VAGUE_MAX 上的说明。
+    if flags.get("vague"):
+        session["identity_vague"] = int(session.get("identity_vague", 0)) + 1
+        key, default = IDENTITY_VAGUE_ASKS[
+            1 if session["identity_vague"] >= IDENTITY_VAGUE_MAX else 0]
+        text_ = _identity_text(key, default)
+        if session["identity_vague"] >= IDENTITY_VAGUE_MAX:
+            return _finish(session, text_, "unclear")
+        return _reply(session, text_, intent="unclear")
+
     # ① 收槽位（后说的覆盖先说的，并记一条改口轨迹）
     _take_identity_slots(session, text, flags)
 
@@ -962,6 +1324,51 @@ def _stage_identity(session, text, flags):
     return _ask_identity(session, slot)
 
 
+# 改口句里要剥掉的前缀。"等等我改一下其实是屏幕碎了" → "屏幕碎了"。
+# 只剥前缀不剥中间：中间那些字往往就是新诉求本身的内容。
+_CORRECTION_LEAD = ("等一下", "等等", "我改一下", "改一下", "改口", "更正", "重新说",
+                    "说错了", "我说错", "其实", "不是", "是", "那个")
+
+
+def _is_correction(text):
+    """这句是不是"回头改诉求"（T9）。"""
+    return any(w in (text or "") for w in CORRECTION_MARKS)
+
+
+def _strip_correction_prefix(text):
+    """把改口句的引导语剥掉，只留新的诉求内容。剥完是空的就返回空串。"""
+    t = _norm(text)
+    moved = True
+    while moved and t:
+        moved = False
+        for w in _CORRECTION_LEAD:
+            if t.startswith(w) and len(t) > len(w):
+                t = t[len(w):].strip(" \t，,、。！？!?")
+                moved = True
+                break
+    return t
+
+
+def _apply_need_correction(session, text):
+    """把边界改口落进 need 槽位，并重讲一遍方案（T9）。
+
+    为什么必须重新讲方案：诉求从"包装压坏"改成"屏幕碎了"，针对的权益可能不同。
+    继续按旧诉求往下推，等于用户说了新问题、客服还在答旧问题——
+    对抗模拟 D4 的原话是"等等我改一下其实是屏幕碎了"，客服回的是"您同意领取吗"。
+    """
+    old = session["slots"].get("need") or ""
+    new = _strip_correction_prefix(text)
+    if not new or new == old:
+        return None
+    session["slots"]["need"] = new
+    # 只记轨迹，不改 memory.facts["need"]——facts 记的是"用户最初说的什么"，
+    # 那是回溯问句的答案来源，被改口覆盖掉就答不出"您一开始提到的是什么"。
+    _record_correction(session, "need", old, new)
+    offer = config_loader.stage_config("OFFER")
+    return _reply(session, offer.get("reply", ""), next_stage="OFFER",
+                  intent="corrected_need")
+
+
 def _stage_need(session, text, flags):
     """NEED：先查业务数据，再问诉求。绝不能"没查就问"。
 
@@ -978,6 +1385,8 @@ def _stage_need(session, text, flags):
             res = tools.query_order(cid)
             if res.get("found"):
                 session["slots"]["order"] = res["order"]
+                # 记成可指代对象：后面用户说"就那个订单"，能落到这一单上
+                _note_referent(session, "order", "您的订单")
 
     # 用户一上来就明确拒绝 → 直接去回写（拒绝也要留痕）
     if flags["no"]:
@@ -987,6 +1396,12 @@ def _stage_need(session, text, flags):
     # 含糊/敷衍 → 追问，不把"说了等于没说"记成诉求
     if flags.get("vague"):
         return _clarify(session, "NEED")
+
+    # 带情绪（T8）→ 先接住，不推进。注意排在"提问"之前，但只在**不是在提问**时拦：
+    # "你们这是骗子服务，那到底收不收费"这句里既有情绪又有真问题，
+    # 把问题吞掉换成一句致歉，用户会认为客服在装听不见。
+    if flags.get("angry") and not flags["ask"]:
+        return _angry_hold(session, "NEED")
 
     # 只有指代没有内容（"就是那个""你刚说的那个"）→ 同样不能记成诉求。
     # 记下去的结果是工单的 need 字段写着一个"那个"，回写出去等于没写。
@@ -998,9 +1413,11 @@ def _stage_need(session, text, flags):
         order = session["slots"].get("order")
         if order:
             tpl = cfg.get("reply_order_detail", "")
-            return _reply(session, tpl.format(amount=order.get("amount"), status=order.get("status")),
+            return _reply(session, _soothe(tpl.format(amount=order.get("amount"),
+                                                     status=order.get("status")), flags),
                           intent="ask")
-        return _reply(session, cfg.get("reply_no_order", cfg.get("reply", "")), intent="ask")
+        return _reply(session, _soothe(cfg.get("reply_no_order", cfg.get("reply", "")), flags),
+                      intent="ask")
 
     # 正常表达诉求 → 记录并进入方案沟通
     session["slots"]["need"] = text
@@ -1021,6 +1438,8 @@ def _stage_offer(session, text, flags):
     替换完把 placeholder 改成 false。内容是否替换过，`scripts/kb_check.py` 会提示。
     """
     cfg = config_loader.stage_config("OFFER")
+    # 进了 OFFER 就说明"这份权益"已经被提过一次，后面所有"那个""这个"都能落到它身上
+    _note_referent(session, "benefit", "这份权益")
 
     # 含糊/敷衍先判。这里尤其危险：用户"嗯……"一声就被推进 CONFIRM，
     # 下一轮客服问"您同意吗"，用户会觉得刚说过的话没被听见。
@@ -1028,6 +1447,28 @@ def _stage_offer(session, text, flags):
     # 但语义是"我没听清"，不是"我要问一个具体问题"。
     if flags.get("vague"):
         return _clarify(session, "OFFER")
+
+    # 改口（T9）：用户听过方案之后回头改诉求。
+    # 必须先更新 need 再重讲方案，否则客服会一直按旧诉求推销——
+    # "等等我改一下其实是屏幕碎了"以前被判 unknown，然后问"您同意领取吗"。
+    if _is_correction(text):
+        corrected = _apply_need_correction(session, text)
+        if corrected:
+            return corrected
+
+    # 带情绪（T8）→ 致歉承接、不推 CONFIRM。
+    # 这里以前是直接问"您同意领取这份权益吗"，用户刚骂完就收到一句要同意的话。
+    if flags.get("angry") and not flags["ask"]:
+        return _angry_hold(session, "OFFER")
+
+    # 指代 → 落到具体对象上回答（T6），而不是推进确认。
+    # 解析不了才退回追问。
+    if _looks_like_reference(text, flags):
+        kind, label = _resolve_reference(session, text)
+        if kind:
+            return _answer_reference(session, kind, label)
+        if _is_reference_only(text):
+            return _clarify(session, "OFFER")
 
     # 提问：先查知识库（带出处），查不到再退回配置里的固定话术
     if flags["ask"]:
@@ -1038,10 +1479,10 @@ def _stage_offer(session, text, flags):
         # 保留它不是为了兼容，是因为「答不上来的问题」和「库里没写的问题」
         # 必须落到同一句 reply_unknown，不能让两种原因产生两种说法。
         if any(w in text for w in config_loader.answer_keywords("fee")):
-            return _reply(session, cfg.get("reply_ask_fee", ""), intent="ask")
+            return _reply(session, _soothe(cfg.get("reply_ask_fee", ""), flags), intent="ask")
         if any(w in text for w in config_loader.answer_keywords("validity")):
-            return _reply(session, cfg.get("reply_ask_validity", ""), intent="ask")
-        return _reply(session, cfg.get("reply_unknown", ""), intent="ask")
+            return _reply(session, _soothe(cfg.get("reply_ask_validity", ""), flags), intent="ask")
+        return _reply(session, _soothe(cfg.get("reply_unknown", ""), flags), intent="ask")
 
     # 明确拒绝 → 回写（拒绝也留痕）
     if flags["no"]:
@@ -1049,7 +1490,8 @@ def _stage_offer(session, text, flags):
 
     # 说了方案之后必须走确认，不能默认同意
     confirm = config_loader.stage_config("CONFIRM")
-    return _reply(session, confirm.get("reply", ""), next_stage="CONFIRM", intent=_intent_name(flags))
+    return _reply(session, _soothe(confirm.get("reply", ""), flags),
+                  next_stage="CONFIRM", intent=_intent_name(flags))
 
 
 def _stage_confirm(session, text, flags):
@@ -1077,9 +1519,16 @@ def _stage_confirm(session, text, flags):
     if flags["no"]:
         return _do_writeback(session, False)
 
+    # 带情绪（T8）：不回"您可以简单回我一句同意或者不需要"。
+    # 那句话在用户刚骂完之后读起来像"别废话，表态"——对抗模拟 N4 的原话。
+    # 也不计 ambiguous：这一轮用户没有表态，是被情绪打断了，不该算"问过一次仍含糊"。
+    if flags.get("angry"):
+        return _angry_hold(session, "CONFIRM")
+
     session["confirm_asks"] += 1
     if session["confirm_asks"] < 2:
-        return _reply(session, cfg.get("reply_again", cfg.get("reply", "")), intent="ambiguous")
+        return _reply(session, _soothe(cfg.get("reply_again", cfg.get("reply", "")), flags),
+                      intent="ambiguous")
     return _do_writeback(session, "unknown")
 
 
@@ -1266,10 +1715,19 @@ def respond(session, user_text):
         return out
     session["empty_count"] = 0
 
-    flags = _classify(text)
+    # 意图识别走 modules.intent（T5）：默认 provider=template，直接返回这里的
+    # classify() 结果，行为逐字节不变；开了 dashscope 才让模型在六个可改标签上裁决，
+    # deny/hangup/handoff/digits 永远以规则为准（见 intent.py 顶部说明）。
+    flags = intent.classify(text)
     # 识别置信度落到 session，_reply 会把它带进每个事件。
     # 放在这里而不是让每个 handler 传参：出口有十几个，漏一处就是一个假数据点。
     session["last_intent_conf"] = flags.get("conf", 0.0)
+    # 措辞层（nlg）要用的两个上下文：这一轮的原话与情绪。
+    # 以前 nlg 的 prompt 里"客户刚说"永远读不到值（它读顶层字段，dialogue 写在 slots 里），
+    # 于是每句话都像没听见用户——T3 修的就是这个。
+    session["last_user_text"] = text
+    session["last_flags"] = flags
+    session["last_user_angry"] = bool(flags.get("angry"))
 
     # 全局：要求转人工。放在挂断判断之前——"我要真人"和"别打了"是两种相反的诉求，
     # 前者要承诺有人接手，后者要立刻结束；同时出现时以转人工为准（用户还在听）。

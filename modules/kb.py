@@ -69,6 +69,41 @@ def _repo_root():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+# 官方话术里的占位符：【】、【XX】、【XXX】、【XXXX】。
+# 资料包说明里明确提到"占位符有两套体系，说明来自不同编写批次"，
+# 所以括号里是什么都接受（含空括号），一律按"括号内的名字"去找槽位值。
+_PLACEHOLDER = re.compile(r"【([^】]*)】")
+
+
+def render(answer, slots=None):
+    """把话术里的【】占位符按槽位填充，返回 (文本, 没填上的占位符列表)。（C2）
+
+    策略沿用赛题资料包给的顺序：**先原样念，后槽位填充**。
+    填不上的占位符原样保留在句子里，而不是删掉或替换成"某某"——
+        - 删掉会改变句子语法（"申请【XX】品牌的资质" → "申请品牌的资质"）；
+        - 换成"某某"等于编一个具体对象出来，评委一问就穿。
+    原样保留读起来别扭，但信息是诚实的；`missing` 会把它暴露出来，
+    运营补一条槽位就能修好，不需要改代码。
+
+    参数：
+        answer  话术原文
+        slots   可用槽位，例如 {"brand": "米家"}；None 或空 dict 等价于"全部没填"
+    返回：
+        (渲染后的文本, 没填上的占位符名字列表)
+    """
+    slots = slots or {}
+    missing = []
+
+    def _sub(m):
+        name = (m.group(1) or "").strip()
+        if name and str(slots.get(name, "")).strip():
+            return str(slots[name])
+        missing.append(name or "（空占位符）")
+        return m.group(0)
+
+    return _PLACEHOLDER.sub(_sub, answer or ""), missing
+
+
 def _norm(text):
     """归一化：全角转半角、去标点、去空白、转小写。
 
@@ -224,16 +259,20 @@ class KB(object):
             return False
         return True
 
-    def match(self, text, today=None):
+    def match(self, text, today=None, slots=None):
         """命中就返回一条结果，命中不了返回 None。
 
-        返回 dict：id / answer / source_id / score / matched / category。
+        返回 dict：id / answer / source_id / score / matched / category / missing。
         调用方**只看有没有返回值**，不要自己再判阈值——阈值逻辑收在这里，
         否则每个调用点都要重复一遍判断，早晚会不一致。
+
+        missing 是"这句答案里还有哪几个占位符没填上"（C2）。
+        正常的知识条目没有占位符，它是空列表。
         """
         for c in self._candidates(text, today):
             if not c["reason"]:
                 c.pop("_priority", None)
+                c["answer"], c["missing"] = render(c["answer"], slots)
                 return c
         return None
 
@@ -394,15 +433,18 @@ def enabled():
     return not load().is_empty()
 
 
-def match(text, today=None):
+def match(text, today=None, slots=None):
     """便捷入口：命中返回 dict，否则 None。
 
     关掉知识库时直接返回 None，调用方自动退回旧的关键词话术——
     这样"关开关"和"删文件"两条路行为一致，运维不用记两种操作。
+
+    slots 用于填充话术里的【】占位符（C2）。不传时占位符原样保留，
+    与接入前逐字节一致——现有 kb.json 的答案里没有【】，所以默认路径不变。
     """
     if not enabled():
         return None
-    return load().match(text, today=today)
+    return load().match(text, today=today, slots=slots)
 
 
 def explain(text, top=3, today=None):
