@@ -6,7 +6,94 @@
   "placeholder": false,
   "scene": "京东POP商家资质审核驳回外呼",
   "updated_at": "2026-11-06",
-  "note": "条目构成：场景汇总 68 + 高频QA 11 + 特殊场景追问 17。官方数据已知问题（噪声/占位符不统一）见 competition/官方资料包/整合方案.md。；S01-S17 追问剧本触发词已按5类追问补齐（官方残缺，见噪声清单C6-07）"
+  "note": "条目构成：场景汇总 68 + 高频QA 11 + 特殊场景追问 17。官方数据已知问题（噪声/占位符不统一）见 competition/官方资料包/整合方案.md。；S01-S17 追问剧本触发词已按5类追问补齐（官方残缺，见噪声清单C6-07）",
+  "noise": {
+   "version": "1.0",
+   "annotated_by": "scripts/gen_c6_annotations.py",
+   "source": "competition/官方资料包/资料包提取.md 六、数据特点与使用提示",
+   "policy": "原文一字不改；逐条标注 + 检索层隔离 + 答辩展示，不静默清洗",
+   "counts": {
+    "C6-01": 64,
+    "C6-05": 68,
+    "C6-04": 2,
+    "C6-03": 2,
+    "C6-07": 17
+   },
+   "classes": [
+    {
+     "code": "C6-01",
+     "name": "占位符两套体系",
+     "official": "空的【】与【XX】【XXX】【XXXX】并存，来自不同编写批次",
+     "risk": "把具名占位符当成运行时变量替换，会把话术结构念坏；删掉则语法残缺",
+     "handling": "条目标注 placeholder_style；kb.render 只填空【】，具名占位符原样保留并进 missing，绝不删除或编造",
+     "status": "已处理（C2 已实现，C6 逐条标注）"
+    },
+    {
+     "code": "C6-02",
+     "name": "关单标记混入追问列",
+     "official": "特殊场景表『商家后续咨询什么问题』列混入 5 处『京麦驳回』标记",
+     "risk": "把『京麦驳回』当商家问题会生成一条荒谬的追问剧本，电话里念站内指引",
+     "handling": "提取阶段已剔除（证据：资料包提取.md 行 186-198）；14 条京麦类目在 kb 层打 no_call 检索隔离（C3）",
+     "status": "已处理（提取过滤 + 检索隔离）"
+    },
+    {
+     "code": "C6-03",
+     "name": "话术结尾残缺 / 空话术",
+     "official": "2 处话术结尾残缺，个别场景只有分类没有话术",
+     "risk": "命中后播出空回复或半句话，是演示现场最刺耳的一类失败",
+     "handling": "KB-POP-016 / KB-POP-047 的 answer 为空 → 打 no_call，检索层跳过、转专员；原文保留不补写",
+     "status": "已处理（检索层隔离）"
+    },
+    {
+     "code": "C6-04",
+     "name": "话术与分类错配 / 主体品牌混淆",
+     "official": "1 处话术与分类错配、1 处主体与品牌混淆",
+     "risk": "按 category 路由时答非所问（无品牌话术挂在『授权书-文审』下）",
+     "handling": "候选条目逐条标注，不强行改官方分类；路由以 patterns + 档案 reject_category 为准",
+     "status": "已标注（保留原分类）"
+    },
+    {
+     "code": "C6-05",
+     "name": "三级分类只在组内首行（需向下填充）",
+     "official": "68 条场景里只有 5 条能直接拿到一级菜单",
+     "risk": "不做向下填充时 63 条场景失去业务域，五域路由全空",
+     "handling": "场景汇总_结构化.json 已向下填充；条目 source_id 保留官方行号可溯源",
+     "status": "已处理"
+    },
+    {
+     "code": "C6-06",
+     "name": "关单总数口径差 1",
+     "official": "官方文字写电话 55 / 京麦 13，结构化数据实际 54 / 14",
+     "risk": "答辩报数字与评委手里的官方说明对不上",
+     "handling": "以结构化数据为准（54/14），并在 C6 清单里写出差异；C3 打标 14 条",
+     "status": "已标注（口径以数据为准）"
+    },
+    {
+     "code": "C6-07",
+     "name": "追问剧本只有答案没有问句",
+     "official": "特殊场景追问 17 条只有标准答案，缺触发词",
+     "risk": "知识检索永远命中不了，商家一追问就落兜底话术",
+     "handling": "S01-S17 按 5 类追问补触发词（10 条原有 + 7 条补），标注在 _meta.note",
+     "status": "已处理"
+    },
+    {
+     "code": "C6-08",
+     "name": "版本未收敛（工号 / 批注未闭环）",
+     "official": "『是否保留工号』被多次要求删除，外呼话术仍保留；1 条评审批注是未闭环反问",
+     "risk": "把评审批注当话术播出去，或念出未定稿的工号",
+     "handling": "本库 96 条逐条扫描，answer 中 0 条含『工号』（提取阶段已剔除）；官方特殊场景 QA 表仍保留『工号XXX号』，证据：资料包提取.md 行 186-198；批注列一律不入库",
+     "status": "已核验（本库无残留，官方原文仍有，答辩时主动讲）"
+    },
+    {
+     "code": "C6-09",
+     "name": "ASR 噪声（我们实测发现，非官方自曝）",
+     "official": "—",
+     "risk": "咳嗽/旁人声被 ASR 识别成英文词或乱码，落进核身失败计数把在线用户挂断（11-06 真实事故 s_666ed5548f9c）",
+     "handling": "纯英文/无中文无数字输入归入 evidence=noise；噪声与含糊分桶（不烧核身·含糊·追问次数）；无可核身信息的轮次不消耗追问机会；弱形式姓名抽取消要求首字为姓氏；NOISE_MAX=5 防死等；3 位尾号引导、挂断前完整重问。技术分析与三层防线见 docs/25_噪声与降噪.md",
+     "status": "已处理 + 连续噪声实测 7/7 + 变异自测 2/2（scripts/test_noise_robustness.py）"
+    }
+   ]
+  }
  },
  "items": [
   {
@@ -22,7 +109,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-002",
@@ -39,7 +131,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-003",
@@ -60,7 +157,12 @@
     "京麦驳回场景：无需外呼"
    ],
    "priority": 10,
-   "no_call": true
+   "no_call": true,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-004",
@@ -81,7 +183,12 @@
     "京麦驳回场景：无需外呼"
    ],
    "priority": 10,
-   "no_call": true
+   "no_call": true,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-005",
@@ -98,7 +205,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-006",
@@ -113,7 +225,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-007",
@@ -130,7 +247,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-008",
@@ -147,7 +269,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-009",
@@ -162,7 +289,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-010",
@@ -177,7 +309,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-011",
@@ -192,7 +329,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "named",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-012",
@@ -210,7 +352,13 @@
     "京麦驳回场景：无需外呼"
    ],
    "priority": 10,
-   "no_call": true
+   "no_call": true,
+   "placeholder_style": "named",
+   "noise": [
+    "C6-01",
+    "C6-04",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-013",
@@ -232,7 +380,12 @@
     "京麦驳回场景：无需外呼"
    ],
    "priority": 10,
-   "no_call": true
+   "no_call": true,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-014",
@@ -247,7 +400,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-015",
@@ -265,7 +423,12 @@
     "京麦驳回场景：无需外呼"
    ],
    "priority": 10,
-   "no_call": true
+   "no_call": true,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-016",
@@ -283,7 +446,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "no_call": true,
+   "noise": [
+    "C6-03",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-017",
@@ -298,7 +466,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-018",
@@ -313,7 +486,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-019",
@@ -331,7 +509,12 @@
     "京麦驳回场景：无需外呼"
    ],
    "priority": 10,
-   "no_call": true
+   "no_call": true,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-020",
@@ -346,7 +529,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-021",
@@ -361,7 +549,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-022",
@@ -376,7 +569,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-023",
@@ -391,7 +589,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-024",
@@ -406,7 +609,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-025",
@@ -424,7 +632,12 @@
     "京麦驳回场景：无需外呼"
    ],
    "priority": 10,
-   "no_call": true
+   "no_call": true,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-026",
@@ -439,7 +652,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-027",
@@ -460,7 +678,10 @@
     "京麦驳回场景：无需外呼"
    ],
    "priority": 10,
-   "no_call": true
+   "no_call": true,
+   "noise": [
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-028",
@@ -475,7 +696,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-029",
@@ -490,7 +716,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-030",
@@ -508,7 +739,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-031",
@@ -523,7 +759,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-032",
@@ -541,7 +782,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "named",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-033",
@@ -562,7 +808,12 @@
     "京麦驳回场景：无需外呼"
    ],
    "priority": 10,
-   "no_call": true
+   "no_call": true,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-034",
@@ -577,7 +828,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-035",
@@ -592,7 +848,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-036",
@@ -607,7 +868,10 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "noise": [
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-037",
@@ -622,7 +886,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "named",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-038",
@@ -638,7 +907,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-039",
@@ -653,7 +927,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-040",
@@ -668,7 +947,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-041",
@@ -683,7 +967,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-042",
@@ -698,7 +987,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-043",
@@ -716,7 +1010,13 @@
     "京麦驳回场景：无需外呼"
    ],
    "priority": 10,
-   "no_call": true
+   "no_call": true,
+   "placeholder_style": "named",
+   "noise": [
+    "C6-01",
+    "C6-04",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-044",
@@ -731,7 +1031,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-045",
@@ -748,7 +1053,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-046",
@@ -766,7 +1076,12 @@
     "京麦驳回场景：无需外呼"
    ],
    "priority": 10,
-   "no_call": true
+   "no_call": true,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-047",
@@ -784,7 +1099,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "no_call": true,
+   "noise": [
+    "C6-03",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-048",
@@ -799,7 +1119,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-049",
@@ -814,7 +1139,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-050",
@@ -829,7 +1159,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-051",
@@ -846,7 +1181,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-052",
@@ -861,7 +1201,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-053",
@@ -876,7 +1221,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "named",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-054",
@@ -894,7 +1244,12 @@
     "京麦驳回场景：无需外呼"
    ],
    "priority": 10,
-   "no_call": true
+   "no_call": true,
+   "placeholder_style": "mixed",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-055",
@@ -911,7 +1266,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-056",
@@ -926,7 +1286,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-057",
@@ -941,7 +1306,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-058",
@@ -959,7 +1329,12 @@
     "京麦驳回场景：无需外呼"
    ],
    "priority": 10,
-   "no_call": true
+   "no_call": true,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-059",
@@ -975,7 +1350,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-060",
@@ -989,7 +1369,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-061",
@@ -1003,7 +1388,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-062",
@@ -1020,7 +1410,12 @@
     "京麦驳回场景：无需外呼"
    ],
    "priority": 10,
-   "no_call": true
+   "no_call": true,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-063",
@@ -1035,7 +1430,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "named",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-064",
@@ -1050,7 +1450,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "named",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-065",
@@ -1065,7 +1470,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "named",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-066",
@@ -1080,7 +1490,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "named",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-067",
@@ -1097,7 +1512,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-068",
@@ -1114,7 +1534,12 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 10
+   "priority": 10,
+   "placeholder_style": "blank",
+   "noise": [
+    "C6-01",
+    "C6-05"
+   ]
   },
   {
    "id": "KB-POP-Q01",
@@ -1283,7 +1708,10 @@
    "valid_to": null,
    "forbidden": [],
    "priority": 20,
-   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）"
+   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）",
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S02",
@@ -1297,7 +1725,10 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S03",
@@ -1316,7 +1747,10 @@
    "valid_to": null,
    "forbidden": [],
    "priority": 20,
-   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）"
+   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）",
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S04",
@@ -1329,7 +1763,10 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S05",
@@ -1347,7 +1784,10 @@
    "valid_to": null,
    "forbidden": [],
    "priority": 20,
-   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）"
+   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）",
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S06",
@@ -1364,7 +1804,10 @@
    "valid_to": null,
    "forbidden": [],
    "priority": 20,
-   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）"
+   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）",
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S07",
@@ -1382,7 +1825,10 @@
    "valid_to": null,
    "forbidden": [],
    "priority": 20,
-   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）"
+   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）",
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S08",
@@ -1395,7 +1841,10 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S09",
@@ -1412,7 +1861,10 @@
    "valid_to": null,
    "forbidden": [],
    "priority": 20,
-   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）"
+   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）",
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S10",
@@ -1425,7 +1877,10 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S11",
@@ -1438,7 +1893,10 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S12",
@@ -1451,7 +1909,10 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S13",
@@ -1468,7 +1929,10 @@
    "valid_to": null,
    "forbidden": [],
    "priority": 20,
-   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）"
+   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）",
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S14",
@@ -1481,7 +1945,10 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S15",
@@ -1495,7 +1962,10 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S16",
@@ -1508,7 +1978,10 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "noise": [
+    "C6-07"
+   ]
   },
   {
    "id": "KB-POP-S17",
@@ -1521,7 +1994,10 @@
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "noise": [
+    "C6-07"
+   ]
   }
  ]
 }

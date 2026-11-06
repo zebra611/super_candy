@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import time
 
 from .base import BaseAdapter
@@ -28,6 +30,26 @@ _FAKE_ORDERS = {
     "C1001": {"order_id": "O20261101001", "amount": 2680.0, "status": "已签收"},
     "C1002": {"order_id": "O20261101002", "amount": 399.0, "status": "运输中"},
 }
+
+# C5：POP 资质驳回申请单档案（120 份虚构模拟数据，见 config/mock/SCHEMA.md）。
+# 懒加载 + 模块级缓存：读一次 282KB，之后每轮核身都是内存四路径匹配，
+# 不会把首字时延拖进 tools.timeout_ms 的 300ms 预算。
+_APPLICATIONS = None
+_APPLICATIONS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "config", "mock", "applications.json")
+
+
+def _load_applications():
+    global _APPLICATIONS
+    if _APPLICATIONS is None:
+        try:
+            with open(_APPLICATIONS_PATH, encoding="utf-8") as f:
+                _APPLICATIONS = json.load(f).get("items") or []
+        except (OSError, ValueError):
+            # 档案缺失/损坏时降级成"查无申请"，不能让核身链路直接崩掉
+            _APPLICATIONS = []
+    return _APPLICATIONS
 
 
 def _ms(t0):
@@ -63,6 +85,32 @@ class MockAdapter(BaseAdapter):
         t0 = time.time()
         order = _FAKE_ORDERS.get(customer_id)
         return {"found": bool(order), "order": order, "_ms": _ms(t0)}
+
+    def query_application(self, keyword):
+        """C5：四路径定位 POP 资质驳回申请单，返回 dict(found, application)。
+
+        四条路径与档案的 verify_by_* 字段一一对应；公司名允许「简称/全称子串」
+        （真实语音里商家常只报字号 + 有限公司，不会逐字念全称）。
+        精确匹配优先，长子串次之——避免短字号把多条档案同时捞出来。
+        """
+        t0 = time.time()
+        kw = (keyword or "").strip()
+        items = _load_applications()
+        if kw:
+            exact = ("verify_by_name", "verify_by_tail",
+                     "verify_by_company", "verify_by_application")
+            for key in exact:
+                for rec in items:
+                    if kw == rec.get(key):
+                        return {"found": True, "application": rec,
+                                "matched_by": key, "_ms": _ms(t0)}
+            if len(kw) >= 4:
+                for key in ("verify_by_company", "company_short_name", "shop_name"):
+                    hits = [r for r in items if kw in str(r.get(key) or "")]
+                    if len(hits) == 1:
+                        return {"found": True, "application": hits[0],
+                                "matched_by": key + ":contains", "_ms": _ms(t0)}
+        return {"found": False, "application": None, "_ms": _ms(t0)}
 
     # ---- 写 -----------------------------------------------------------------
     def create_ticket(self, session_id, content, idempotency_key, version=1):

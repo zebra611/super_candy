@@ -69,6 +69,9 @@ def dispatch(tool_call):
     if name == "query_order":
         return ad.call("query_order", args.get("customer_id"))
 
+    if name == "query_application":
+        return ad.call("query_application", args.get("keyword"))
+
     if name == "create_ticket":
         # 先截断再校验：超长诉求不该整单被拒（P3，行为倒退）
         content, notes = prepare_writeback(args.get("content") or {})
@@ -218,6 +221,15 @@ def query_customer(keyword):
 def query_order(customer_id):
     """查客户最近一笔订单。返回 dict(found, order)。"""
     return _adapter().call("query_order", customer_id)
+
+
+def query_application(keyword):
+    """C5：按姓名/后四位/公司名/申请单号定位 POP 资质驳回申请单。
+
+    返回 dict(found, application)；查不到不算异常（found=False），
+    由编排层决定走"查无申请"话术还是旧的售后客户核身。
+    """
+    return _adapter().call("query_application", keyword)
 
 
 def create_ticket(session_id, content, idempotency_key, version=1):

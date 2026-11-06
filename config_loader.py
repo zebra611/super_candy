@@ -428,10 +428,17 @@ def asr_provider():
 # schema 校验（M8）：把"跑到第三个环节才 KeyError"提前到启动那一眼
 # ---------------------------------------------------------------------------
 
-# 话术里允许的占位符。dialogue.py 只用 str.format(amount=..., status=...) 这两项，
-# 多写一个 {foo} 不会在加载时报错，而是在那句话说出口的一刻抛 KeyError——
+# 话术里允许的占位符。两类：
+#   amount/status —— NEED.reply_order_detail 用 str.format 填（售后订单金额/状态）；
+#   application_desc/brand/category/reason/materials/code —— C5 新增，
+#     由 dialogue._fill_application 用 str.replace 填申请单档案真值，
+#     档案为空时换中性说法，绝不会把花括号念给客户听。
+# 多写一个 {foo} 不会在加载时报错，而是在那句话说出口的一刻抛 KeyError/原样播出，
 # 这种错在演示时最致命，所以在这里就拦下来。
-_ALLOWED_PLACEHOLDERS = {"amount", "status"}
+_ALLOWED_PLACEHOLDERS = {
+    "amount", "status", "application_desc", "brand", "category",
+    "reason", "materials", "code",
+}
 
 _REQUIRED_TOP = ("scene_name", "stages", "slots", "answers", "compliance", "budget")
 

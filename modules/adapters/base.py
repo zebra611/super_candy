@@ -42,6 +42,7 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8100"
 TOOL_METHODS = {
     "query_customer": "query_customer",
     "query_order": "query_order",
+    "query_application": "query_application",  # C5：POP 资质申请单定位
     "create_ticket": "create_ticket",
 }
 

@@ -105,6 +105,14 @@ TOOL_SCHEMAS = {
         "returns": {"found": "bool", "order": "dict|null"},
         "idempotent": True,
     },
+    # C5 新增（只增不改）：POP 资质驳回申请单定位。keyword 可为联系人姓名、
+    # 手机后四位、公司全称、申请单号四路径之一；返回整条申请单档案。
+    "query_application": {
+        "desc": "按姓名/手机后四位/公司名/申请单号查 POP 资质驳回申请单",
+        "params": {"keyword": "str"},
+        "returns": {"found": "bool", "application": "dict|null"},
+        "idempotent": True,
+    },
     "create_ticket": {
         "desc": "登记工单，完成结构化回写",
         "params": {
