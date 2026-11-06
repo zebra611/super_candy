@@ -110,6 +110,62 @@ def _payload(rate=1.0, adv=1.0, errors=0):
     }
 
 
+class ClusterTest(unittest.TestCase):
+    """L8：聚类只认 judge 的 problem 前缀，不引入第二套判定。"""
+
+    def _row(self, cid, ok, problems):
+        return {"id": cid, "ok": ok, "problems": problems}
+
+    def test_groups_by_reason(self):
+        rows = [self._row("A", False, ["意向不符：期望同意，实际 False"]),
+                self._row("B", False, ["闭环不符：期望 True 实际 False"]),
+                self._row("C", True, [])]
+        got = {c["reason"]: c["cases"] for c in ES.cluster_failures(rows)}
+        self.assertEqual(got["没听懂"], ["A"])
+        self.assertEqual(got["漏闭环"], ["B"])
+        self.assertNotIn("C", [i for v in got.values() for i in v])
+
+    def test_multi_reason_case_counted_once_per_reason(self):
+        rows = [self._row("X", False, ["说了不该说的：保证有效", "意向不符：期望同意，实际 False"])]
+        got = {c["reason"]: c["count"] for c in ES.cluster_failures(rows)}
+        self.assertEqual(got["说错了"], 1)
+        self.assertEqual(got["没听懂"], 1)
+
+    def test_no_failure(self):
+        self.assertEqual(ES.cluster_failures([self._row("A", True, [])]), [])
+
+
+class VersionCompareTest(unittest.TestCase):
+    """L8：过拟合判据只有一条——留出集下降。"""
+
+    def _ver(self, name, passed, total, hold, hold_total, cases=None):
+        return {"name": name, "passed": passed, "total": total, "closed": 0,
+                "should": 0, "should_ok": 0, "wrongly": 0,
+                "holdout_passed": hold, "holdout_total": hold_total,
+                "cases": cases or []}
+
+    def test_regression_when_holdout_drops(self):
+        base = self._ver("v1", 9, 10, 4, 4)
+        cur = self._ver("v2", 9, 10, 2, 4)
+        self.assertTrue(ES.compare_versions(base, cur)["regression"])
+
+    def test_no_regression_when_holdout_flat(self):
+        base = self._ver("v1", 9, 10, 4, 4)
+        cur = self._ver("v2", 10, 10, 4, 4)
+        res = ES.compare_versions(base, cur)
+        self.assertFalse(res["regression"])
+        self.assertGreater(res["rate_delta"], 0)
+
+    def test_better_and_worse_lists(self):
+        base = self._ver("v1", 1, 2, 1, 2, cases=[{"id": "A", "ok": True, "closed": True},
+                                                  {"id": "B", "ok": False, "closed": False}])
+        cur = self._ver("v2", 1, 2, 1, 2, cases=[{"id": "A", "ok": False, "closed": False},
+                                                 {"id": "B", "ok": True, "closed": True}])
+        res = ES.compare_versions(base, cur)
+        self.assertEqual(res["better"], ["B"])
+        self.assertEqual(res["worse"], ["A"])
+
+
 class SuiteCliTest(unittest.TestCase):
     def _run(self, argv, payload):
         import contextlib

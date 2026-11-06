@@ -38,3 +38,6 @@ Thumbs.db
 
 # 评测报告是生成物（本地另存或走 CI 产物），不进仓库
 /eval/reports/
+
+# 版本快照是回滚点（本地留存），不进仓库
+/eval/history/
