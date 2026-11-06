@@ -1205,6 +1205,51 @@ def main():
           len(set(_fb.values())) == 5,
           ["%s -> %s" % (k, v[:24]) for k, v in _fb.items()])
 
+    # ---- 证据 17：闭环率的分母只算“应闭环”的用例（吸收自 #15） ----
+    # 起因：跑批曾把「闭环条数 / 全部 30 条」当闭环率报出去（37%）。分母里含 14 条
+    # 本来就不该闭环的（拒绝/诱导/缺槽位），等于把“该拒绝的也拒绝了”算成失败。
+    # 口径与 #15 一致，只是本仓库 run_eval 的输出格式是「应闭环 1/1 = 100%｜误闭环 0/1」，
+    # 断言按实际格式写，避免为了对齐字符串去改实现。
+    print()
+    print("=" * 74)
+    print("证据 17：闭环率的分母只算“应闭环”的用例")
+    print("=" * 74)
+
+    _ev = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "run_eval.py"), "N01", "R01"],
+        cwd=ROOT, capture_output=True, text=True, timeout=180)
+    _ev_txt = (_ev.stdout or "") + (_ev.stderr or "")
+    check("跑批按“应闭环/误闭环”两句报（N01 该闭环、R01 该不闭环 → 应闭环 1/1、误闭环 0）",
+          ("闭环率：应闭环 1/1" in _ev_txt) and ("误闭环 0" in _ev_txt),
+          [l.strip() for l in _ev_txt.splitlines() if "闭环率" in l]
+          or ["输出里没有闭环率行（改坏了？）"])
+
+    _seed = json.load(open(os.path.join(ROOT, "eval", "seed_cases.json"),
+                           encoding="utf-8"))
+    _seed = _seed if isinstance(_seed, list) else (_seed.get("cases") or [])
+    _kinds = set((c.get("expect") or {}).get("closed") for c in _seed)
+    check("用例集里三态齐全：该闭环 / 不该闭环 / 不作要求（只剩一态，分母就没意义了）",
+          _kinds == {True, False, None},
+          ["expect.closed 取值：%s" % sorted(str(k) for k in _kinds),
+           "共 %d 条用例" % len(_seed)])
+
+    # ---- 证据 18：R3 评测工具链的自测脚本挂进总闸门 ----
+    # 起因：test_adversarial.py 与 test_eval_suite.py 是本轮新增的 43 条测试，
+    # 但不在 verify 里——改了 run_eval / eval_suite 照样全绿，等于测试没进质量体系。
+    print()
+    print("=" * 74)
+    print("证据 18：R3 评测工具链自测脚本全部通过")
+    print("=" * 74)
+
+    for _suite in ("test_adversarial", "test_eval_suite"):
+        _path = os.path.join(ROOT, "scripts", _suite + ".py")
+        _run = subprocess.run([sys.executable, _path], cwd=ROOT,
+                              capture_output=True, text=True, timeout=180)
+        _out = ((_run.stdout or "") + (_run.stderr or "")).strip().splitlines()
+        _last = _out[-1][:88] if _out else "(无输出)"
+        check("%s.py 通过（失败时这个总闸门会红）" % _suite, _run.returncode == 0,
+              ["退出码 %d；末行：%s" % (_run.returncode, _last)])
+
     print()
     print("=" * 74)
     total = len(results)
