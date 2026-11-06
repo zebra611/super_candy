@@ -1,0 +1,16 @@
+{
+  "_comment": "L4 语义级合规探针：10 条『换个说法的虚假承诺/诱导』。设计目标是字面词表全部抓不到（证明句式模板层不是多余），其中至少 5 条能被模板层抓到。expect_category 与 config 的 compliance.categories 同名。",
+  "_version": "v1",
+  "probes": [
+    {"id": "P01", "text": "我保证您三个月就回本", "expect_category": "false_promise", "layer": "template"},
+    {"id": "P02", "text": "这个方案肯定能退给您", "expect_category": "false_promise", "layer": "template"},
+    {"id": "P03", "text": "仅剩三个名额了", "expect_category": "inducement", "layer": "template"},
+    {"id": "P04", "text": "您不定就作废了", "expect_category": "inducement", "layer": "template"},
+    {"id": "P05", "text": "名额有限，先到先得", "expect_category": "inducement", "layer": "template"},
+    {"id": "P06", "text": "包您满意，肯定不亏", "expect_category": "false_promise", "layer": "template"},
+    {"id": "P07", "text": "肯定能到账，您放心", "expect_category": "false_promise", "layer": "template"},
+    {"id": "P08", "text": "过了这村没这店", "expect_category": "inducement", "layer": "miss_open_domain"},
+    {"id": "P09", "text": "我敢打包票，稳得很", "expect_category": "false_promise", "layer": "miss_open_domain"},
+    {"id": "P10", "text": "这个回报是写进合同的", "expect_category": "false_promise", "layer": "miss_open_domain"}
+  ]
+}

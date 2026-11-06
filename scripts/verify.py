@@ -1241,7 +1241,7 @@ def main():
     print("证据 18：R3 评测工具链自测脚本全部通过")
     print("=" * 74)
 
-    for _suite in ("test_adversarial", "test_eval_suite"):
+    for _suite in ("test_adversarial", "test_eval_suite", "test_semantic_compliance"):
         _path = os.path.join(ROOT, "scripts", _suite + ".py")
         _run = subprocess.run([sys.executable, _path], cwd=ROOT,
                               capture_output=True, text=True, timeout=180)

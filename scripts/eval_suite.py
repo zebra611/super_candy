@@ -36,6 +36,7 @@ import config_loader                   # noqa: E402
 import run_eval as R                   # noqa: E402  基线跑批、判定、闭环双指标
 
 REPORT_DIR = os.path.join(R._ROOT, "eval", "reports")
+HISTORY_DIR = os.path.join(R._ROOT, "eval", "history")
 VALID_CONSENT = {True, False, "unknown"}
 FAILURE_STAGES = {"GREETING", "IDENTITY", "NEED", "OFFER", "CONFIRM", "WRITEBACK", "DONE"}
 
@@ -125,6 +126,7 @@ def collect_baseline(cases):
             ok, problems, closed, consent = R.judge(case, last, evs)
             rows.append({"id": case["id"], "category": case["category"],
                          "tag": case.get("tag", "-"), "ok": ok, "closed": closed,
+                         "holdout": bool(case.get("holdout")),
                          "consent": consent, "problems": problems,
                          "turns": len(case.get("turns") or []),
                          "evs": evs, "error": ""})
@@ -258,6 +260,93 @@ def render(p):
     return "\n".join(out) + "\n"
 
 
+
+# ---------------------------------------------------------------------------
+# L8：失败聚类 + 版本对比
+#
+# 聚类只按 judge 给出的 problems 归类，不引入第二套判定——
+# 多一套语义就多一个数，评审一问"以哪个为准"就答不上来。
+# ---------------------------------------------------------------------------
+
+def cluster_failures(rows):
+    """把未通过用例聚成 5 类，返回 [{reason, count, cases[]}]。
+
+    分类依据全部来自 judge 的 problem 前缀，机械可判：
+        说错了   说了不该说的（must_not 命中）
+        越界     越界进入阶段（must_not_stage 命中）
+        没听懂   意向不符（consent 判错）
+        漏闭环   闭环不符（该闭没闭 / 不该闭却闭了）
+        终态错   终态不符
+    """
+    buckets = {}
+    for r in rows:
+        if r["ok"]:
+            continue
+        reasons = set()
+        for p in r["problems"]:
+            head = p.split("：")[0]
+            reasons.add({"说了不该说的": "说错了", "越界进入阶段": "越界",
+                         "意向不符": "没听懂", "闭环不符": "漏闭环",
+                         "终态不符": "终态错"}.get(head, "其他"))
+        for reason in reasons or {"其他"}:
+            buckets.setdefault(reason, []).append(r["id"])
+    order = ["说错了", "越界", "没听懂", "漏闭环", "终态错", "其他"]
+    return [{"reason": k, "count": len(buckets[k]), "cases": buckets[k]}
+            for k in order if k in buckets]
+
+
+def build_version(payload, name):
+    """把一次跑批压成可比较的快照。字符串只用于展示，比较一律用数字。"""
+    b = payload["baseline"]
+    return {
+        "name": name,
+        "saved_at": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "commit": payload["meta"]["commit"],
+        "total": b["total"], "passed": b["passed"], "closed": b["closed"],
+        "should": b["closure"]["should"], "should_ok": b["closure"]["should_ok"],
+        "wrongly": b["closure"]["wrongly"],
+        "holdout_total": sum(1 for r in payload["baseline_rows"] if r.get("holdout")),
+        "holdout_passed": sum(1 for r in payload["baseline_rows"]
+                              if r.get("holdout") and r["ok"]),
+        "cases": [{"id": r["id"], "ok": r["ok"], "closed": r["closed"]}
+                  for r in payload["baseline_rows"]],
+    }
+
+
+def compare_versions(base, cur):
+    """对比两次快照。过拟合判据只有一条：留出集通过率下降。"""
+    def rate(d):
+        return d["passed"] / float(d["total"]) if d["total"] else 0.0
+
+    def hrate(d):
+        return (d["holdout_passed"] / float(d["holdout_total"])
+                if d["holdout_total"] else None)
+
+    b_cases = {c["id"]: c for c in base["cases"]}
+    c_cases = {c["id"]: c for c in cur["cases"]}
+    better = [i for i in c_cases if c_cases[i]["ok"] and not b_cases.get(i, {}).get("ok")]
+    worse = [i for i in c_cases if not c_cases[i]["ok"] and b_cases.get(i, {}).get("ok")]
+    regression = (hrate(base) is not None and hrate(cur) is not None
+                  and hrate(cur) < hrate(base))
+
+    table = "\n".join([
+        "| 版本 | 通过率 | 应闭环 | 误闭环 | 留出集 |",
+        "|---|---|---|---|---|",
+        "| %s | %d/%d（%.0f%%） | %d/%d | %d | %d/%d |"
+        % (base["name"], base["passed"], base["total"], rate(base) * 100,
+           base["should_ok"], base["should"], base["wrongly"],
+           base["holdout_passed"], base["holdout_total"]),
+        "| %s | %d/%d（%.0f%%） | %d/%d | %d | %d/%d |"
+        % (cur["name"], cur["passed"], cur["total"], rate(cur) * 100,
+           cur["should_ok"], cur["should"], cur["wrongly"],
+           cur["holdout_passed"], cur["holdout_total"]),
+    ])
+    return {"table": table, "regression": regression,
+            "better": better, "worse": worse,
+            "rate_delta": rate(cur) - rate(base),
+            "holdout_delta": (None if hrate(base) is None or hrate(cur) is None
+                              else hrate(cur) - hrate(base))}
+
 def _unique(path):
     n = 2
     while os.path.exists(path):
@@ -288,6 +377,9 @@ def build_parser():
     p.add_argument("--fail-under", type=float, default=None,
                    help="通过率下限（0~1），同时约束基线与对抗，低于返回 1")
     p.add_argument("--no-report", action="store_true")
+    p.add_argument("--cluster", action="store_true", help="打印失败聚类")
+    p.add_argument("--save-version", default=None, help="把本次结果存成版本快照")
+    p.add_argument("--compare", default=None, help="与已存版本对比")
     p.add_argument("--quiet", action="store_true")
     return p
 
@@ -321,6 +413,48 @@ def main(argv=None):
              b["writeback"]["ok_calls"], b["writeback"]["calls"],
              a["avg_rate"] * 100, a["stable"], a["total"],
              b["errors"] + a["errors"]))
+
+    if args.cluster:
+        clusters = cluster_failures(payload["baseline_rows"])
+        print("\n===== 失败聚类 =====")
+        if not clusters:
+            print("无失败用例。")
+        for c in clusters:
+            print("  %-6s %2d 条：%s" % (c["reason"], c["count"], "、".join(c["cases"])))
+
+    if args.save_version:
+        os.makedirs(HISTORY_DIR, exist_ok=True)
+        path = os.path.join(HISTORY_DIR, args.save_version + ".json")
+        if os.path.exists(path):
+            print("拒绝覆盖：%s 已存在（旧版本是回滚点，不能被覆盖）"
+                  % os.path.relpath(path, R._ROOT))
+            return 2
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(build_version(payload, args.save_version), f,
+                      ensure_ascii=False, indent=2)
+        print("已存版本：%s" % os.path.relpath(path, R._ROOT))
+
+    if args.compare:
+        base_path = os.path.join(HISTORY_DIR, args.compare + ".json")
+        if not os.path.exists(base_path):
+            print("找不到基线版本：%s" % os.path.relpath(base_path, R._ROOT))
+            return 2
+        with open(base_path, "r", encoding="utf-8") as f:
+            base = json.load(f)
+        cur = build_version(payload, "本次（%s）" % payload["meta"]["commit"])
+        res = compare_versions(base, cur)
+        print("\n===== 版本对比 =====")
+        print(res["table"])
+        print("通过率 Δ %+.1f 个百分点｜留出集 Δ %s"
+              % (res["rate_delta"] * 100,
+                 "-" if res["holdout_delta"] is None
+                 else "%+.1f 个百分点" % (res["holdout_delta"] * 100)))
+        if res["better"]:
+            print("变好：%s" % "、".join(res["better"]))
+        if res["worse"]:
+            print("变差：%s" % "、".join(res["worse"]))
+        if res["regression"]:
+            print("!!! 留出集下降，疑似过拟合，建议回滚到 %s !!!" % args.compare)
 
     if b["errors"] + a["errors"]:
         return 3

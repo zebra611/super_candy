@@ -28,21 +28,102 @@ from contracts import COMPLIANCE_CHECKS
 # "换种说法透露"要靠语义检测，那还没做。
 _PII_PATTERN = re.compile(r"(?<!\d)(?:\d{11}|\d{17}[\dXx])(?!\d)")
 
+# ---------------------------------------------------------------------------
+# L4 语义级合规：句式模板层
+#
+# 为什么要有这一层：config 里的分类词表只做 `w in text` 的字面包含，
+# 客服换一种说法（"这个名额今天给您留着，明天就没了"）就抓不到。
+# 把"换个说法"归纳成句式，比穷举词表更能覆盖改写，而且零成本、可解释。
+#
+# 这些模板是占位内容，和词表同源问题；真实话术规范由企业提供后替换本表即可。
+# ---------------------------------------------------------------------------
+_TEMPLATE_RULES = (
+    {"rule": "template:guarantee_profit", "category": "false_promise",
+     "regex": re.compile(r"(?:保证|绝对|肯定|百分百|包您|包你)[^，。！？;；]{0,10}"
+                         r"(?:赚|赚到|回本|有效|没问题|不亏)")},
+    {"rule": "template:conditional_threat", "category": "inducement",
+     "regex": re.compile(r"不[^，。！？;；]{0,6}就[^，。！？;；]{0,10}"
+                         r"(?:没了|取消|涨价|收回|停掉|作废)")},
+    {"rule": "template:scarcity", "category": "inducement",
+     "regex": re.compile(r"最后一天|仅剩|名额有限|错过就没|今天不留就没了")},
+    {"rule": "template:absolute_promise", "category": "false_promise",
+     "regex": re.compile(r"(?:一定|肯定|百分百)[^，。！？;；]{0,8}(?:能|会)(?:退|赔|赔钱|到账)")},
+)
+
+# 否定语境豁免。命中位置往前看几个字，出现这些词就说明是在"否认"而不是"承诺"。
+# 这是误报的主要来源：把"不能给您保证"当成承诺抓出来，比漏报更伤。
+_NEGATION_WORDS = ("不", "无法", "没法", "不能", "不会", "不要", "别", "并非", "没有")
+_NEGATION_WINDOW = 6
+
+
+def _is_negated(text, start):
+    """命中位置前面一小段里有没有否定词。"""
+    window = text[max(0, start - _NEGATION_WINDOW):start]
+    return any(w in window for w in _NEGATION_WORDS)
+
+
+def _check_templates(replies):
+    """按句式模板找"换个说法"的违规。
+
+    返回 {类别: [{"rule": 规则名, "word": 命中原文, "source": "template"}]}
+    只给命中原文和规则名，不写自然语言理由——理由要能被程序分析。
+    """
+    hits = {}
+    for r in replies:
+        text = r["text"] or ""
+        if not text:
+            continue
+        for rule in _TEMPLATE_RULES:
+            for m in rule["regex"].finditer(text):
+                if _is_negated(text, m.start()):
+                    continue
+                hits.setdefault(rule["category"], []).append(
+                    {"rule": rule["rule"], "word": m.group(0), "source": "template"})
+    return hits
+
 
 def transcribe_session(session_id):
     """把一通电话的事件流还原成"谁在什么时候说了什么"。
 
-    哑链路实现：只挑 asr_result / agent_reply 两类事件拼成列表。
-    TODO 真实实现要处理：打断造成的半句、ASR 中间结果去重、时间对齐。
+    L6 的三件事都在这里处理：
+        1. 打断造成的半句——被打断的那句标 interrupted 并补省略号，不当作完整发言；
+        2. ASR 中间结果去重——连续两次识别文本完全相同（流式 partial 与 final），只留一条；
+        3. 时间对齐——ts 强制单调不减，并给出相邻轮的 dt_ms，不允许出现负数时延。
 
-    返回：list[dict(role, text, ts)]
+    返回：list[dict(role, text, ts, turn, dt_ms, interrupted?)]
     """
-    turns = []
-    for ev in events.list_events(session_id):
+    evs = events.list_events(session_id)
+    barge_turns = {e["turn_id"] for e in evs if e["type"] == "barge_in"}
+
+    turns, last_user = [], None
+    for ev in evs:
         if ev["type"] == "asr_result":
-            turns.append({"role": "user", "text": ev["payload"].get("text", ""), "ts": ev["ts"]})
+            text = (ev["payload"].get("text") or "").strip()
+            if not text:
+                continue
+            if last_user is not None and last_user["text"] == text:
+                # partial 与 final 同文：合并成一条，时间取最后一次（更接近说完的时刻）
+                last_user["ts"] = ev["ts"]
+                continue
+            last_user = {"role": "user", "text": text, "ts": ev["ts"],
+                         "turn": ev["turn_id"]}
+            turns.append(last_user)
         elif ev["type"] == "agent_reply":
-            turns.append({"role": "agent", "text": ev["payload"].get("text", ""), "ts": ev["ts"]})
+            text = ev["payload"].get("text", "") or ""
+            item = {"role": "agent", "text": text, "ts": ev["ts"], "turn": ev["turn_id"]}
+            if ev["turn_id"] in barge_turns:
+                item["interrupted"] = True
+                if text and not text.endswith(("。", "！", "？", "…")):
+                    item["text"] = text + "…（被打断）"
+            turns.append(item)
+            last_user = None      # 客服说话即视为这一轮用户表达结束
+
+    prev = None
+    for i, t in enumerate(turns):
+        if prev is not None and t["ts"] < prev:
+            t["ts"] = prev        # 时钟回拨或乱序：钳到上一轮，保证单调
+        t["dt_ms"] = 0 if i == 0 else t["ts"] - turns[i - 1]["ts"]
+        prev = t["ts"]
     return turns
 
 
@@ -128,14 +209,20 @@ def compliance_report(session_id):
     blocked = [e["payload"] for e in evs
                if e["type"] == "agent_reply" and e["payload"].get("blocked")]
     categories = _check_categories(replies)
+    templates = _check_templates(replies)
     privacy_hits = _check_privacy(replies)
     must_say = _check_must_say(replies)
 
     def category_check(name):
-        hits = categories.get(name) or []
-        return {"status": "fail" if hits else "pass",
-                "hits": hits,
-                "note": "字面词表匹配" if hits else ""}
+        """命中明细统一成结构化字段。
+
+        加了模板层之后必须能区分"词表抓到的"还是"句式抓到的"——
+        两者要修的地方不一样：词表要补词，模板要补句式。
+        """
+        literal = categories.get(name) or []
+        hits = [{"rule": "literal:%s" % name, "word": w, "source": "wordlist"} for w in literal]
+        hits.extend(templates.get(name) or [])
+        return {"status": "fail" if hits else "pass", "hits": hits, "note": ""}
 
     checks = {
         "no_insult": category_check("insult"),
@@ -174,10 +261,12 @@ def compliance_report(session_id):
         "failed": failed,
         "checked": checked,
         "score": score,
-        # 仍然标占位：语义级检测没做，词表也是占位内容。
-        # 宁可让看板显示"未完成"，也不要让人以为这就是最终质检能力。
+        # L4 落地后，语义级合规的判断依据从"没有"变成"句式模板 + 否定豁免"，
+        # 因此不再把"语义级合规检测"列为未实现项。仍然标占位，是因为：
+        # 模板表是占位内容（真实话术规范待企业提供），开放域改写仍需 LLM-Judge。
         "is_placeholder": True,
-        "placeholder_reason": "语义级合规检测与模拟用户跑批未实现（角色 3 的开工项）",
+        "semantic_layer": "template",
+        "placeholder_reason": "句式模板为占位内容（真实话术规范待企业提供）；开放域语义改写与模拟用户跑批仍待实现",
     }
 
 
