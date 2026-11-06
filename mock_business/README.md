@@ -47,6 +47,20 @@ python mock_business/service.py 8101     # 换端口
    "product": "智能按摩椅 X3", "warranty_days": 365}]}
 ```
 
+### `GET /mock/application?keyword=QZ202611060001`（C5 新增）
+
+`keyword` 可以是联系人姓名、手机后四位、公司名（支持唯一子串）、申请单号——四路径定位
+POP 资质驳回申请单。数据源是仓库根 `config/mock/applications.json`（120 份虚构档案，
+见 `config/mock/SCHEMA.md`）。查不到同样返回 `200` + `found:false`。
+
+```json
+{"found": true, "matched_by": "verify_by_application",
+ "application": {"application_id": "QZ202611060001", "reject_category": "品牌-授权",
+                 "close_mode": "电话", "...": "共 51 字段"}}
+```
+
+`/mock/health` 的响应里带 `applications` 计数，可用来确认档案是否载入成功。
+
 ### `POST /mock/ticket`
 
 **必须带 `idempotency_key`**，否则 400。

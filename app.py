@@ -583,6 +583,12 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
                                    turn_id=turn_id)
                 sess["closed"] = True
 
+    # 收尾一致性：京麦自动判定 / 挂断 / 拒绝 / 含糊退出都进 DONE，
+    # 但都没有回写工单——上面那个 create_ticket 分支置不到 closed。
+    # 不补这一句，前端会一直显示"这通电话还在进行中"。
+    if agent_out.get("next_stage") == "DONE":
+        sess["closed"] = True
+
     # ⑦ 合规护栏：播出去之前先过滤。
     # 回写失败时不能播"已为您登记"——那是虚假承诺，必须换成兜底话术。
     # 注意：这里要用 tool_call 判断，不能用 agent_out["stage"]，
@@ -647,6 +653,7 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
         "stage": agent_out["stage"],
         "next_stage": agent_out["next_stage"],
         "intent": agent_out.get("intent", "unknown"),
+        "end_reason": agent_out.get("end_reason", ""),
         "intent_conf": agent_out.get("intent_conf", 0.0),
         "tool_result": tool_result,
         "closed": sess["closed"],

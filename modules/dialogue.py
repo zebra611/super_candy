@@ -549,7 +549,11 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     #                         不能引入"模型换个说法"的不确定性；
     #   end_reason 有值     —— 挂断/拒绝话术，"再见"不能被改写成"拜拜下次聊"。
     if not end_reason and intent not in ("error", "empty"):
-        text = nlg.say(session, text, stage_now)
+        text = nlg.say(session, _fill_application(text, session["slots"].get("application")),
+                       stage_now)
+    else:
+        # 挂断/拒绝/出错话术不走改写，但占位符仍要填（C5 统一兜底）。
+        text = _fill_application(text, session["slots"].get("application"))
 
     if next_stage:
         session["stage"] = next_stage
@@ -706,6 +710,19 @@ def _do_writeback(session, consent, changed=False):
             content["reject_category"] = _reject_cat
         if "reject_summary" in content:
             content["reject_summary"] = _need_text[:200]
+    # C5：核上申请单后，回写字段优先取档案真值——need 文本只是用户口述，
+    # 用它推五域是兜底；档案里已有 reject_category / reject_reason / close_mode。
+    _app = session["slots"].get("application") or {}
+    if _app:
+        if "reject_category" in content and _app.get("reject_category"):
+            content["reject_category"] = _app["reject_category"]
+        if "reject_summary" in content and _app.get("reject_reason"):
+            content["reject_summary"] = str(_app["reject_reason"])[:200]
+        if "close_mode" in content and _app.get("close_mode") in ("电话", "京麦"):
+            content["close_mode"] = _app["close_mode"]
+        if "call_result" in content and _app.get("call_result") in (
+                "connected", "no_answer", "refused", "invalid"):
+            content["call_result"] = _app["call_result"]
     if session["slots"].get("order"):
         content["order_id"] = session["slots"]["order"].get("order_id")
     # 改口轨迹跟着工单走：一个工单号从 v1 到 vN，改动过程留在同一个对象里。
@@ -822,6 +839,14 @@ IDENTITY_ASKS = {
     ),
 }
 
+# C6：ASR 噪声 / 环境人声的独立容忍度。
+# 与 IDENTITY_VAGUE_MAX 分开是必须的：含糊是**人在回答但答得不明确**，
+# 噪声是**根本没人在说话**（咳嗽被识别成 "Cough."、旁人聊天、TTS 回声）。
+# 把两者混进一个计数器，连续两声咳嗽就会按 unclear 挂断——人还在线，
+# 电话已经断了，这正是 11-06 真实事故的形状（当时只暴露了第 1 声）。
+# 连续 NOISE_MAX 轮纯噪声才收尾，是防死等的兜底；期间任何有效输入立即清零。
+NOISE_MAX = 5
+
 # 核验环节连续含糊的退出（T12）。
 # 旧行为：用户连说"嗯/哦"，客服在尾号/姓名/姓氏之间轮换问法，问满 4 次才
 # identity_failed，中间一句致歉都没有。用户体感是"机器在绕圈子"，
@@ -838,6 +863,27 @@ IDENTITY_VAGUE_ASKS = (
 # 从一句话里抽姓名时，这些字出现就说明它不是名字。
 # 不这么滤，"真不记得"这种四个汉字会被当成一个姓名去查库。
 _NAME_BLOCK = "不没忘知道是我你他她您们吗呢吧啊的对先那这"
+
+# 中文姓名首字必须是姓氏。用于「整句就是一个 2~4 字中文词」这条弱形式：
+# 带引导词（我姓/我叫/X先生）的强形式不需要它，引导词本身就是证据。
+# 收《百家姓》常见单姓与复姓首字，并补齐 mock 档案用到的生僻姓
+# （晏/祁/殷/郗/竺/容/扈/澹/甄/牧/阙/闻/裴/虞/岑/钟/柏/陆/童/沈）。
+# 漏掉极生僻姓的代价只是多问一句"没听清"，不会挂断人——在安全侧。
+_SURNAMES = set(
+    "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜"
+    "戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳鲍史唐"
+    "费廉岑薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄"
+    "和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董梁"
+    "杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡凌霍"
+    "虞万支柯管卢莫经房裘缪干解应宗丁宣邓郁单杭洪包诸左石崔吉钮龚"
+    "程嵇邢滑裴陆荣翁荀羊惠甄曲家封芮储靳汲邴糜松井段富巫乌焦巴弓"
+    "牧隗山谷车侯宓蓬全郗班仰秋仲伊宫宁仇栾暴甘厉戎祖武符刘景詹束龙"
+    "叶幸司韶郜黎蓟薄印宿白怀蒲邰从鄂索咸籍赖卓蔺屠蒙池乔阴胥能苍双"
+    "闻莘党翟谭贡劳逄姬申扶堵冉宰郦雍郤璩桑桂濮牛寿通边扈燕冀郏浦尚农"
+    "温别庄晏柴瞿阎充慕连茹习宦艾鱼容向古易慎戈廖庾终暨居衡步都耿满弘"
+    "匡国文寇广禄阙东欧殳沃利蔚越夔隆师巩厍聂晁勾敖融冷訾辛阚简饶空"
+    "曾毋沙乜养鞠须丰巢关蒯相查后荆红游竺权逯盖益桓公澹台钟离"
+)
 
 _NAME_PATTERNS = (
     re.compile(r"我姓([\u4e00-\u9fa5])"),
@@ -864,6 +910,11 @@ def _extract_name(text):
     只认明确的表达方式（我姓X / 我叫XX / 我是XX / X先生），以及
     "整句就是一个 2~4 字中文词"这一种弱形式——后者是为了接住
     "对，张伟"这种补充回答。宁可抽不到，也不能把"真不记得"当名字。
+
+    弱形式额外要求**首字是姓氏**：ASR 把咳嗽/环境音识别成"咕噜"这类
+    两字乱码时，没有这条就会被当成姓名提交，白烧一次核身机会
+    （C6 N04 实测）。这是中文姓名的语言事实，不是对样例过拟合；
+    极生僻姓漏了只会走"没听清请再说一次"，在安全侧。
     """
     t = (text or "").strip()
     if not t:
@@ -878,7 +929,8 @@ def _extract_name(text):
         return cand
     for seg in re.split(r"[，,。、！？!?\s]+", t):
         seg = seg.strip()
-        if 2 <= len(seg) <= 4 and all("\u4e00" <= ch <= "\u9fa5" for ch in seg):
+        if (2 <= len(seg) <= 4 and seg[0] in _SURNAMES
+                and all("\u4e00" <= ch <= "\u9fa5" for ch in seg)):
             if not any(ch in _NAME_BLOCK for ch in seg):
                 return seg
     return ""
@@ -904,6 +956,8 @@ def _name_from_answer(session, text):
     if any(ch.isdigit() for ch in t):
         return ""
     if not all("\u4e00" <= ch <= "\u9fa5" for ch in t):
+        return ""
+    if t[0] not in _SURNAMES:
         return ""
     if any(ch in _NAME_BLOCK for ch in t):
         return ""
@@ -967,6 +1021,62 @@ def _short_digit_run(text):
     return 2 <= best < 4
 
 
+def _fill_application(text, app):
+    """C5：把申请单档案的真值填进话术占位符（不写死业务内容）。
+
+    场景包用 {application_desc}/{reason}/{materials}/{code} 声明需要哪些事实；
+    主场景话术没有这些占位符时原样返回，行为逐字节不变。
+    用 str.replace 而不是 str.format：话术里可能有别的大括号，format 会崩。
+    **app 为空时也必须把占位符换掉**：没定位到申请单（主场景/查无申请）时
+    绝不能把「{brand}」这种花括号原样念给客户听——用中性说法兜底。
+    """
+    if not text:
+        return text
+    app = app or {}
+    brand = str(app.get("brand_name") or "")
+    category = str(app.get("category_l1") or "")
+    repl = {
+        "{application_desc}": ("%s品牌、%s类目" % (brand, category))
+                              if brand and category else "您提交的资质申请",
+        "{brand}": brand or "该品牌",
+        "{category}": category or "对应类目",
+        "{reason}": str(app.get("reject_reason") or "材料问题"),
+        "{materials}": "、".join(app.get("required_materials") or []) or "对应材料",
+        "{code}": str(app.get("reject_code") or ""),
+    }
+    for k, v in repl.items():
+        text = text.replace(k, v)
+    return text
+
+
+def _extract_application_id(text):
+    """C5：抽申请单编号（QZ + 12 位数字），四路径核身的第四条。
+
+    号码里含连续数字，但不能当手机尾号收：classify 只认孤立 4 位段，
+    而申请单号末尾是长数字串，硬截出来是拿别人的尾号去核验。
+    """
+    m = re.search(r"\b[A-Z]{2}\d{12}\b", _norm(text or ""))
+    return m.group(0) if m else ""
+
+
+def _extract_company(text):
+    """C1/C5：抽裸报的公司名（T7 赛题版——pop 场景核身问的是公司/店铺信息）。
+
+    只认带主体后缀的说法，且长度 ≥6：否则「我们公司」「这个品牌」这类口语
+    会被当成公司名收进槽位，拿去查一遍接口又查不到，白烧一次核身机会。
+    """
+    t = _norm(text or "")
+    marks = ("有限公司", "股份公司", "经营部", "分公司", "合伙企业", "商行", "商贸", "科技")
+    if len(t) < 6 or not any(m in t for m in marks):
+        return ""
+    # 剥掉开头的应答词/引导语，剩下的当作公司名候选
+    for lead in ("我是", "这里是", "我们公司是", "公司是", "我这边是", "对，", "好的，"):
+        if t.startswith(lead):
+            t = t[len(lead):].strip("，,。. ")
+            break
+    return t if len(t) >= 4 else ""
+
+
 def _take_identity_slots(session, text, flags):
     """从这一句里收身份槽位，返回这一轮提交了哪些槽位（列表）。
 
@@ -977,6 +1087,14 @@ def _take_identity_slots(session, text, flags):
     if flags.get("digits"):
         _submit_identity_slot(session, "tail", flags["digits"])
         took.append("tail")
+    app_id = _extract_application_id(text)
+    if app_id:
+        _submit_identity_slot(session, "application_id", app_id)
+        took.append("application_id")
+    company = _extract_company(text)
+    if company:
+        _submit_identity_slot(session, "company", company)
+        took.append("company")
     name = _extract_name(text)
     if not name:
         # 带引导词的写法抽不到时，再看这是不是"上一句问了姓名、这一句裸答"（T7）
@@ -988,21 +1106,40 @@ def _take_identity_slots(session, text, flags):
 
 
 def _verify_identity(session):
-    """用当前槽位值查客户档案。核上返回 customer，核不上返回 None。
+    """用当前槽位值查客户/申请单档案。核上返回档案，核不上返回 None。
 
-    查不到就**清掉这个值**：不清的话下一轮会拿同一个错值再查一遍，
-    表现就是"用户明明改口了，系统还按旧号核验"。
+    C5：pop 场景先走 query_application 四路径（姓名/后四位/公司名/申请单号），
+    查不到再退回售后客户档案——主场景的「张伟/8866」不在申请单库里，
+    行为与改造前完全一致。查不到就**清掉这个值**：不清的话下一轮会拿
+    同一个错值再查一遍，表现就是"用户明明改口了，系统还按旧号核验"。
     """
-    for slot in ("tail", "name"):
+    # 场景隔离：只有声明了 application_mode 的赛题场景才查申请单库。
+    # 售后主场景仍走 query_customer，两个业务域共用 4 位尾号键空间，
+    # 无条件查申请单会让主场景的「错误尾号 1234」意外命中归档数据。
+    use_app = bool(config_loader.load().get("application_mode"))
+    for slot in ("tail", "name", "company", "application_id"):
         val = session["identity_slots"].get(slot)
         if not val:
             continue
-        hit = tools.query_customer(val)
+        hit = tools.query_application(val) if use_app else {"found": False}
         if hit.get("found"):
+            rec = hit.get("application") or {}
             session["slots"]["identity_confirmed"] = True
-            session["slots"]["customer"] = hit.get("customer")
+            session["slots"]["application"] = rec
+            # 兼容形状：NEED 阶段的老调用点按 customer.customer_id 取主键
+            session["slots"]["customer"] = {
+                "customer_id": rec.get("merchant_id"),
+                "name": rec.get("contact_name"),
+                "phone_tail": rec.get("phone_tail"),
+            }
             session["slots"]["identity_via"] = slot
-            return hit.get("customer")
+            return rec
+        hit_customer = tools.query_customer(val)
+        if hit_customer.get("found"):
+            session["slots"]["identity_confirmed"] = True
+            session["slots"]["customer"] = hit_customer.get("customer")
+            session["slots"]["identity_via"] = slot
+            return hit_customer.get("customer")
         session["identity_slots"][slot] = ""
     return None
 
@@ -1372,6 +1509,25 @@ def _stage_identity(session, text, flags):
     if flags.get("angry"):
         return _angry_hold(session, "IDENTITY")
 
+    # C6：噪声与环境人声单独走一条通道，绝不落进含糊/核身失败的桶里。
+    # classify 已把「无中文且无数字」的 ASR 输出标成 evidence=noise——
+    # 咳嗽 Sneeze./Cough.、纯英文环境音、旁人说话被误当成用户发言，都属此类。
+    # 这些不是用户态度，是链路噪声：不烧 identity_attempts、不累加
+    # identity_vague、不轮换槽位、不推进阶段、不回写，只礼貌请对方重说。
+    # noise_turns 只在「用户真的给出了可核身信息」时清零（见下方 ② 之后），
+    # 否则连续几声咳嗽会被每轮清零掩掉，永远触发不了兜底。
+    if flags.get("evidence") == "noise":
+        session["noise_turns"] = int(session.get("noise_turns", 0)) + 1
+        if session["noise_turns"] >= NOISE_MAX:
+            return _finish(session,
+                           _identity_text("reply_noise_final",
+                                          "可能这边信号不太好，我先不打扰您了，稍后会有专员与您联系，再见。"),
+                           "no_voice")
+        return _reply(session,
+                      _identity_text("reply_noise",
+                                     "不好意思，刚才有点杂音没听清，您方便再说一次吗？"),
+                      intent="noise")
+
     # 连续含糊 → 退出机制（T12）。见 IDENTITY_VAGUE_MAX 上的说明。
     if flags.get("vague"):
         session["identity_vague"] = int(session.get("identity_vague", 0)) + 1
@@ -1393,13 +1549,47 @@ def _stage_identity(session, text, flags):
                       intent="identity_retry")
 
     # ① 收槽位（后说的覆盖先说的，并记一条改口轨迹）
-    _take_identity_slots(session, text, flags)
+    # 返回「这一轮提交了哪些」，C6 靠它区分「人在回答」和「只是有声音」。
+    took = _take_identity_slots(session, text, flags)
 
     # ② 查。尾号优先：它唯一性比姓名高（同名太常见）
     if _verify_identity(session):
-        return _reply(session, _soothe(cfg.get("reply_ok", ""), flags),
+        session["noise_turns"] = 0
+        app = session["slots"].get("application")
+        # C3 余项：关单方式按申请单真值自动判定。京麦驳回/无需外呼的档案
+        # 不该在电话里念站内指引，也不该继续推进六阶段——核上即礼貌收尾。
+        if app and (app.get("close_mode") == "京麦"
+                    or app.get("call_status") == "无需外呼"):
+            return _finish(session,
+                           _fill_application(cfg.get("reply_jingmai_no_call",
+                                                     "您这笔申请走站内指引处理即可，就不占用您时间了，稍后会有站内消息同步，再见。"), app),
+                           "jingmai_no_call")
+        # C5：核上的那一刻就把「哪笔申请、哪个原因、补什么」说清楚，
+        # 不再让用户再口述一遍业务域——这是申请单定位的真实落点。
+        return _reply(session,
+                      _fill_application(_soothe(cfg.get("reply_ok", ""), flags), app),
                       next_stage="NEED", intent="identity_ok")
 
+    # C6：这一轮没给出任何可核身信息 —— 旁人说话、答非所问、中文环境
+    # 人声被 ASR 当成用户发言。纯文本层**区分不了**「谁在说话」，但可以
+    # 做到不误伤：它不是一次核身失败，不该消耗 asks 追问次数、不该轮换
+    # 槽位、更不该把人挂断。真实嘈杂环境里三五句环境人声就会把追问机会
+    # 耗光，用户一句话没说就被礼貌送走——与 11-06 咳嗽事故同构。
+    # 真正的分离要在音频前端做（说话人分离/波束成形），见
+    # competition/官方资料包/嘈杂人声降噪_C6.md；这里是文本层兜底。
+    if not took:
+        session["noise_turns"] = int(session.get("noise_turns", 0)) + 1
+        if session["noise_turns"] >= NOISE_MAX:
+            return _finish(session,
+                           _identity_text("reply_noise_final",
+                                          "可能这边信号不太好，我先不打扰您了，稍后会有专员与您联系，再见。"),
+                           "no_voice")
+        return _reply(session,
+                      _identity_text("reply_noise",
+                                     "不好意思，刚才有点杂音没听清，您方便再说一次吗？"),
+                      intent="noise")
+
+    session["noise_turns"] = 0              # 人在回答了，噪声累计归零
     session["identity_attempts"] += 1
 
     # ③ 问最缺的那一个；两个都问满了就收尾
@@ -1471,9 +1661,12 @@ def _stage_need(session, text, flags):
     有订单就说订单细节（可溯源），没订单就走通用回访话术。
     """
     cfg = config_loader.stage_config("NEED")
+    app0 = session["slots"].get("application")
 
-    # 只在第一次进入时查，避免每轮都打接口
-    if session["slots"].get("order") is None and not session["slots"].get("order_queried"):
+    # 只在第一次进入时查，避免每轮都打接口。
+    # C5：已经定位到资质申请单时不再查售后订单——否则明明核上了申请单，
+    # 却会因为订单库里没有这个商家 ID 而回一句"查不到订单"，自相矛盾。
+    if not app0 and session["slots"].get("order") is None and not session["slots"].get("order_queried"):
         session["slots"]["order_queried"] = True
         cid = (session["slots"].get("customer") or {}).get("customer_id")
         if cid:
@@ -1509,6 +1702,12 @@ def _stage_need(session, text, flags):
         blocked = _promise_block(session, text, flags)
         if blocked:
             return blocked
+        app = session["slots"].get("application")
+        if app:
+            return _reply(session,
+                          _fill_application(_soothe(cfg.get("reply_application_detail",
+                                                           "您这笔申请的驳回原因和需补材料我这边都有记录，我再说一遍：{reason}，需要补充{materials}。"), flags), app),
+                          intent="ask")
         order = session["slots"].get("order")
         if order:
             tpl = cfg.get("reply_order_detail", "")
@@ -1521,7 +1720,9 @@ def _stage_need(session, text, flags):
     # 正常表达诉求 → 记录并进入方案沟通
     session["slots"]["need"] = text
     offer = config_loader.stage_config("OFFER")
-    return _reply(session, _soothe(offer.get("reply", ""), flags),
+    return _reply(session,
+                  _fill_application(_soothe(offer.get("reply", ""), flags),
+                                    session["slots"].get("application")),
                   next_stage="OFFER", intent="need")
 
 

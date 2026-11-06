@@ -96,6 +96,16 @@ class RealAdapter(BaseAdapter):
         # 契约是"最近一笔"，对端返回的是列表，取第一笔
         return {"found": True, "order": orders[0]}
 
+    def query_application(self, keyword):
+        """C5：定位 POP 资质驳回申请单（对端 mock_business /mock/application）。"""
+        kw = (keyword or "").strip()
+        if not kw:
+            raise ToolError(ERROR_INVALID_ARG, "query_application 缺 keyword")
+        _, data = self._request("GET", "/mock/application", {"keyword": kw})
+        if not data.get("found"):
+            return {"found": False, "application": None}
+        return {"found": True, "application": data.get("application") or None}
+
     # ---- 写 -----------------------------------------------------------------
     def create_ticket(self, session_id, content, idempotency_key, version=1):
         sid = (session_id or "").strip()

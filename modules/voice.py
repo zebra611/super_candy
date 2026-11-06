@@ -369,8 +369,8 @@ def _extract_text(payload):
     return ""
 
 
-def _split_for_tts(text, single_max=16, head_max=12):
-    """把一句回复切成 1–2 段，让第一段尽量短。
+def _split_for_tts(text, single_max=16, head_max=12, seg_max=48):
+    """把回复切段，让第一段尽量短、且**每一段都在云端超时预算内**。
 
     为什么要切（实测数据）：
         合成耗时随字数近似线性——3 字 344ms、14 字 694ms、24 字 1056ms、
@@ -385,10 +385,18 @@ def _split_for_tts(text, single_max=16, head_max=12):
         切出来反而把一句话拆得更碎）。真实客服说话本来就在这些地方停顿，
         所以分段后的节奏不会显得生硬。
 
-    为什么最多两段：
-        接口有 QPS 配额。切 3 段时一轮要 3 个请求，并发直接 429 限流；
-        就算串行，后台也要合成两次，前端播完首段还得干等 2 秒才有后续。
-        只切一刀，剩余部分一次合成完，正好接上首段的播放。
+    段数：短话术仍只切一刀，超长话术才继续切
+        售后演示话术 ≤30 字时只切两段，因为接口按请求数限流（QPS）：
+        切 3 段一轮要 3 个请求，并发直接 429；就算串行，前端播完首段
+        还得干等后续合成，中间有空档。
+        但 C7 官方话术实测把这个前提打破了——kb_pop 里最长 160 字
+        （KB-POP-Q10），一刀切完尾段仍有 150 字，云端 `timeout_sec=4`
+        两次重试全部超时，整句回落成浏览器机械音（11-06 实测 8.8s）。
+        所以尾段超过 `seg_max` 时按标点继续切：请求数变多，但每段都在
+        超时预算内，且 app 层用 `wait_first_only=True` 只等首段，
+        首字延迟不受影响。回落成机械音比多两个串行请求难看得多。
+
+    拼接无损：`"".join(parts) == text`，verify.py 有断言盯着这一条。
     """
     text = (text or "").strip()
     if len(text) <= single_max:
@@ -411,10 +419,23 @@ def _split_for_tts(text, single_max=16, head_max=12):
     head, tail = text[:head_end], text[head_end:]
     if not tail:
         return [head]
-    # 只切两段，不再往下切。原因是实测：切 3 段时后台要串行合成两次，
-    # 前端播完首段（约 1.2 秒音频）还得再等 2.1 秒才拿到剩余两段，中间有明显空档。
-    # 只切一刀，剩余部分一次合成完（约 1.2 秒），正好接上首段的播放。
-    return [head, tail]
+
+    # C7：售后短话术（尾段 ≤ seg_max）保持原来的"只切一刀"，
+    # 不增加请求数。官方超长话术才把尾段继续切到安全长度——
+    # 每段尽量停在标点上，找不到就按字数硬切；拼接必须无损。
+    parts = [head]
+    while len(tail) > seg_max:
+        cut = 0
+        for i, ch in enumerate(tail[:seg_max], 1):
+            if ch in punct:
+                cut = i
+        if cut < 3:                       # 没标点，或标点太靠前，硬切
+            cut = seg_max
+        parts.append(tail[:cut])
+        tail = tail[cut:]
+    if tail:
+        parts.append(tail)
+    return parts
 
 
 def _tts_dashscope_multi(text, wait_first_only=False):

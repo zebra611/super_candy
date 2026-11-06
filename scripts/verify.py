@@ -1452,6 +1452,162 @@ def main():
           ["具名渲染：%r missing=%s" % (_r1[:34], _m1),
            "空渲染：%r missing=%s" % (_r2[:34], _m2)])
 
+    # ---- 证据 21：C5 申请单接线 / C3 关单自动判定 / C1 裸报公司名收槽 ----
+    # 起因：C5 之前核身只有 2 条售后假客户，赛题场景报姓名/公司名/申请单号
+    # 一律核不上；场景话术也不带任何申请单真值。这里用 120 份虚构档案做
+    # 进程内全链路，把四路径、精准告知、京麦收尾、回写真值一次钉死。
+    print()
+    print("=" * 74)
+    print("证据 21：C5 申请单接线（四路径核身/精准告知/回写真值）与 C3 关单自动判定")
+    print("=" * 74)
+
+    _apps21 = json.load(open(os.path.join(ROOT, "config", "mock", "applications.json"),
+                             encoding="utf-8")).get("items") or []
+    _tel = next(r for r in _apps21
+                if r["reject_category"] == "品牌-授权" and r["close_mode"] == "电话"
+                and r["call_status"] not in ("无需外呼", "无效号码"))
+    _jm = next(r for r in _apps21 if r["close_mode"] == "京麦")
+    _pop21 = json.load(open(os.path.join(ROOT, "config", "scenes", "pop_reject.json"),
+                            encoding="utf-8"))
+    _orig21 = config_loader._cache
+    config_loader._cache = _pop21
+    try:
+        for _field, _label in (("verify_by_name", "姓名"), ("verify_by_tail", "后四位"),
+                               ("verify_by_company", "公司名"),
+                               ("verify_by_application", "申请单号")):
+            _s21 = _dlg.new_session("verify-c5-" + _field)
+            _dlg.respond(_s21, "我是负责人")
+            _o21 = _dlg.respond(_s21, _tel[_field])
+            check("C5 四路径核身·%s → identity_ok 且播报品牌/驳回原因" % _label,
+                  _o21["intent"] == "identity_ok"
+                  and _tel["brand_name"] in _o21["reply_text"]
+                  and str(_tel["reject_reason"])[:8] in _o21["reply_text"],
+                  ["intent=%s 回复=%s" % (_o21["intent"], _o21["reply_text"][:52])])
+
+        _s21c = _dlg.new_session("verify-c5-company-slot")
+        _dlg.respond(_s21c, "我是负责人")
+        _o21c = _dlg.respond(_s21c, _tel["verify_by_company"])
+        check("C1/T7 赛题版：裸报公司名收进 company 槽位且不重复追问",
+              bool(_s21c["identity_slots"].get("company"))
+              and _o21c["intent"] == "identity_ok",
+              ["company=%r intent=%s" % (_s21c["identity_slots"].get("company"),
+                                         _o21c["intent"])])
+
+        _s21j = _dlg.new_session("verify-c3-jingmai")
+        _dlg.respond(_s21j, "我是负责人")
+        _o21j = _dlg.respond(_s21j, _jm["verify_by_name"])
+        check("C3 close_mode=京麦自动判定：核上即收尾，不进 NEED、不回写",
+              _o21j.get("end_reason") == "jingmai_no_call"
+              and _o21j["next_stage"] == "DONE" and not _o21j.get("tool_call"),
+              ["end_reason=%r next=%s" % (_o21j.get("end_reason"),
+                                          _o21j["next_stage"])])
+
+        _s21w = _dlg.new_session("verify-c5-writeback")
+        _dlg.respond(_s21w, "我是负责人")
+        _dlg.respond(_s21w, _tel["verify_by_tail"])
+        _dlg.respond(_s21w, "我申请的品牌授权没过")
+        _dlg.respond(_s21w, "行，清楚了")
+        _o21w = _dlg.respond(_s21w, "对，清楚了")
+        _w21 = ((_o21w.get("tool_call") or {}).get("args") or {}).get("content") or {}
+        check("C5 回写取档案真值（reject_category/close_mode/reject_summary）",
+              bool(_w21) and _w21.get("reject_category") == _tel["reject_category"]
+              and _w21.get("close_mode") == _tel["close_mode"]
+              and str(_w21.get("reject_summary") or "")[:8] == str(_tel["reject_reason"])[:8],
+              ["reject_category=%r close_mode=%r summary=%r"
+               % (_w21.get("reject_category"), _w21.get("close_mode"),
+                  (_w21.get("reject_summary") or "")[:20])])
+
+        check("占位符不原样播出：档案为空时 _fill_application 换中性说法",
+              "{" not in _dlg._fill_application("您提交的{application_desc}因{reason}被驳回，需补{materials}", None),
+              ["neutral=%r" % _dlg._fill_application(
+                  "您提交的{application_desc}因{reason}被驳回，需补{materials}", None)])
+    finally:
+        config_loader._cache = _orig21
+
+    # 场景隔离：主场景不得查申请单库（两个业务域共用 4 位尾号键空间，
+    # 无条件查会让售后场景的"错误尾号 1234"意外命中归档数据）。
+    _orig_qa = _dlg.tools.query_application
+    _qa_calls = []
+    _dlg.tools.query_application = lambda kw: (_qa_calls.append(kw), {"found": False})[1]
+    try:
+        _s21i = _dlg.new_session("verify-c5-isolate")
+        _dlg.respond(_s21i, "是我")
+        _dlg.respond(_s21i, "1234")
+    finally:
+        _dlg.tools.query_application = _orig_qa
+    check("C5 场景隔离：售后主场景完全不调 query_application",
+          not _qa_calls and not config_loader.load().get("application_mode"),
+          ["调用次数=%d 主场景 application_mode=%r"
+           % (len(_qa_calls), config_loader.load().get("application_mode"))])
+
+    # 数据包校验脚本挂进总闸门：改坏任何一份档案，总闸门必须红。
+    _ck = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                       "check_mock_applications.py")],
+                         cwd=ROOT, capture_output=True, text=True, timeout=180)
+    check("120 份虚构档案七项校验通过（挂进总闸门）", _ck.returncode == 0,
+          ["退出码 %d；末行：%s" % (_ck.returncode,
+                                    ((_ck.stdout or "").strip().splitlines() or ["无输出"])[-1][:80])])
+
+    # C4：340 条对抗用例的结构自检 + 变异验证（防「全绿是假绿」）。
+    import glob as _glob
+    _c4_files = sorted(_glob.glob(os.path.join(ROOT, "eval",
+                                               "adversarial_c4_batch*.json")))
+    _c4_all = []
+    for _p in _c4_files:
+        _c4_all.extend(json.load(open(_p, encoding="utf-8")))
+    _c4_ids = [c["id"] for c in _c4_all]
+    _c4_batch_ok = all(len(json.load(open(_p, encoding="utf-8"))) <= 40
+                       for _p in _c4_files)
+    check("C4 用例集：68 场景 × 5 追问 = 340 条，9 批每批 ≤40，ID 不重复",
+          len(_c4_files) == 9 and len(_c4_all) == 340
+          and len(set(_c4_ids)) == 340 and _c4_batch_ok,
+          ["批次 %d，用例 %d，唯一 ID %d，最大批次 %d"
+           % (len(_c4_files), len(_c4_all), len(set(_c4_ids)),
+              max([len(json.load(open(_p, encoding="utf-8"))) for _p in _c4_files] or [0]))])
+
+    _c4m = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                        "test_c4_mutation.py")],
+                          cwd=ROOT, capture_output=True, text=True, timeout=300)
+    _c4m_out = ((_c4m.stdout or "") + (_c4m.stderr or "")).strip().splitlines()
+    check("C4 变异验证：双层合规失效时结果预期类用例必须报红（全绿不是假绿）",
+          _c4m.returncode == 0 and any("变异验证：PASS" in l for l in _c4m_out),
+          ["退出码 %d；末行：%s" % (_c4m.returncode,
+                                    (_c4m_out or ["无输出"])[-1][:80])])
+
+    # ---- 证据 22：C6 官方数据噪声标注 + 嘈杂人声文本层防护 ----
+    print()
+    print("=" * 74)
+    print("证据 22：C6 噪声清单逐条标注与嘈杂人声鲁棒性")
+    print("=" * 74)
+
+    _c6a = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                        "check_c6_annotations.py")],
+                          cwd=ROOT, capture_output=True, text=True, timeout=180)
+    _c6a_out = ((_c6a.stdout or "") + (_c6a.stderr or "")).strip().splitlines()
+    check("C6 官方噪声逐条标注：覆盖/原文完整性/京麦隔离/可复算 + 反向自测",
+          _c6a.returncode == 0 and any("全部通过" in l for l in _c6a_out),
+          ["退出码 %d；末行：%s" % (_c6a.returncode,
+                                    (_c6a_out or ["无输出"])[-1][:80])])
+
+    _c6n = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                        "test_noise_robustness.py")],
+                          cwd=ROOT, capture_output=True, text=True, timeout=300)
+    _c6n_out = ((_c6n.stdout or "") + (_c6n.stderr or "")).strip().splitlines()
+    check("C6 连续 3 轮噪声不挂断/不烧核身/不误回写/可恢复（7 组 + 静音边界）",
+          _c6n.returncode == 0 and any("噪声鲁棒性：7/7 通过" in l for l in _c6n_out),
+          ["退出码 %d；末行：%s" % (_c6n.returncode,
+                                    (_c6n_out or ["无输出"])[-1][:80])])
+
+    _c6m = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                        "test_noise_robustness.py"),
+                           "--self-test"],
+                          cwd=ROOT, capture_output=True, text=True, timeout=300)
+    _c6m_out = ((_c6m.stdout or "") + (_c6m.stderr or "")).strip().splitlines()
+    check("C6 噪声探针变异自测：防护失效时必须报红（全绿不是假绿）",
+          _c6m.returncode == 0 and any("C6 变异自测：2/2 通过" in l for l in _c6m_out),
+          ["退出码 %d；末行：%s" % (_c6m.returncode,
+                                    (_c6m_out or ["无输出"])[-1][:80])])
+
     print()
     print("=" * 74)
     total = len(results)
@@ -1467,7 +1623,8 @@ def main():
     print("            三段式打断（疑似压低音量→探针识别→认出文字才停）、LLM 改写接缝、")
     print("            S2 WebSocket 双向通道（音频帧上行 + TTS 分段主动下发 + barge_in 协议事件）、")
     print("            任务2 七项（知识库检索/兜底细分/置信度分级/槽位追问/改口/记忆/T17 指标）。")
-    print("  仍然是占位的：语义级合规、模拟用户跑批、说话人分离（环境人声会被当用户）、")
+    print("  仍然是占位的：语义级合规、说话人分离（音频层分不清旁人声与用户声；")
+    print("            文本层 C6 已做到不误伤——噪声不烧核身次数、不挂断，但做不到\"听清\"）、")
     print("            nlg 改写默认关闭（provider=template；开启后受账号配额与\"期限表述\"规则影响）、")
     print("            流式识别默认关闭（asr.realtime=true 才启用，需真密钥验证连通）。")
     return 0

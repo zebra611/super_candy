@@ -66,6 +66,23 @@ def _load(name):
 _CUSTOMERS = _load("customers.json")
 _ORDERS = _load("orders.json")
 
+# C5：POP 资质驳回申请单档案在仓库根的 config/mock/（120 份虚构数据）。
+# 沙箱服务与默认 mock adapter 共用同一份数据，切换 provider 不会换一套业务事实。
+_APPLICATIONS_FILE = os.path.join(
+    os.path.dirname(_ROOT), "config", "mock", "applications.json")
+
+
+def _load_applications():
+    try:
+        with open(_APPLICATIONS_FILE, encoding="utf-8") as f:
+            return (json.load(f) or {}).get("items") or []
+    except (OSError, ValueError) as e:
+        print("[mock] 申请单档案读取失败：%s" % e)
+        return []
+
+
+_APPLICATIONS = _load_applications()
+
 
 def _persist_tickets():
     """把工单写回磁盘。写完才算建单成功——否则重启就"丢单"，演示会很尴尬。"""
@@ -105,6 +122,24 @@ def find_customer(keyword):
         if kw and kw in (c.get("name") or ""):
             return c
     return None
+
+
+def find_application(keyword):
+    """C5：按姓名/后四位/公司名/申请单号四路径定位资质驳回申请单。"""
+    kw = (keyword or "").strip()
+    if not kw:
+        return None, ""
+    for key in ("verify_by_name", "verify_by_tail",
+                "verify_by_company", "verify_by_application"):
+        for rec in _APPLICATIONS:
+            if kw == rec.get(key):
+                return rec, key
+    if len(kw) >= 4:
+        for key in ("verify_by_company", "company_short_name", "shop_name"):
+            hits = [r for r in _APPLICATIONS if kw in str(r.get(key) or "")]
+            if len(hits) == 1:
+                return hits[0], key + ":contains"
+    return None, ""
 
 
 def orders_of(customer_id=None, keyword=None):
@@ -147,6 +182,7 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": True,
                 "customers": len(_CUSTOMERS),
                 "orders": len(_ORDERS),
+                "applications": len(_APPLICATIONS),
                 "tickets": len(_TICKETS),
                 "uptime_sec": round(time.time() - _STARTED_AT, 1),
             })
@@ -172,6 +208,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             rows = orders_of(cid, kw)
             self._json({"found": bool(rows), "count": len(rows), "orders": rows})
+            return
+
+        if path == "/mock/application":
+            _STATS["application"] = _STATS.get("application", 0) + 1
+            kw = (qs.get("keyword") or [""])[0]
+            if not kw.strip():
+                self._err(400, "BAD_REQUEST", "缺少 keyword（姓名 / 后四位 / 公司名 / 申请单号）")
+                return
+            rec, by = find_application(kw)
+            self._json({"found": bool(rec), "application": rec, "matched_by": by})
             return
 
         if path == "/mock/tickets":

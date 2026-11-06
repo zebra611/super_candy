@@ -61,6 +61,15 @@ _assert_isolated()
 
 import config_loader              # noqa: E402
 
+# C4/Q5：跑批场景可切换。EVAL_SCENE=pop_reject 时先重读配置再 import app，
+# 否则 app 里那些「启动时读一次」的缓存会留在售后主场景，赛题用例会被
+# 用售后话术与售后假客户跑一遍，分数看着绿其实测的不是赛题链路。
+# 不设就保持默认（售后），老命令逐字节不变。
+_EVAL_SCENE = os.environ.get("EVAL_SCENE", "").strip()
+if _EVAL_SCENE:
+    os.environ["APP_SCENE"] = _EVAL_SCENE
+    config_loader.load(force=True)
+
 # 跑批只验"业务流程对不对"，不真的合成音频。
 # 不隔离的话 30 条用例 × 约 1.2 秒 = 白等 36 秒，还要花钱，
 # 并且没有密钥的队友会在这里卡住——评测不该依赖外部服务。
