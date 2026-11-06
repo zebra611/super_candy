@@ -29,7 +29,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import run_eval as R                       # noqa: E402  复用跑批与临时库隔离
 
-CASES_PATH = os.path.join(R._ROOT, "eval", "adversarial_cases.json")
+CASES_DIR = os.path.join(R._ROOT, "eval")
+CASES_PATH = os.path.join(CASES_DIR, "adversarial_cases.json")   # 兼容旧用法
 REPORT_DIR = os.path.join(R._ROOT, "eval", "reports")
 
 # 用例 schema：与 eval/seed_cases.json 保持同源，只多一个 adversarial 说明字段。
@@ -302,7 +303,8 @@ def build_parser():
         description="对抗测试跑批：多轮执行、稳定性统计、失败聚类。",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--rounds", type=int, default=3, help="轮次，默认 3")
-    p.add_argument("--cases", default=CASES_PATH, help="对抗集路径")
+    p.add_argument("--cases", default=None,
+                   help="对抗集路径；不给则合并 eval/adversarial*.json 全部")
     p.add_argument("--out", default=REPORT_DIR, help="报告目录，默认 eval/reports/")
     p.add_argument("--fail-under", type=float, default=None,
                    help="平均通过率下限（0~1）；低于则退出码 1，用于 CI 卡口")
@@ -322,7 +324,17 @@ def main(argv=None):
         return 2
 
     try:
-        cases = load_cases(args.cases)
+        if args.cases:
+            cases = load_cases(args.cases)
+        else:
+            # 默认合并 eval/adversarial*.json：10 条基础集 + 12 条 1106 缺陷集。
+            # 分开存是为了"哪一批是回归防线"一眼可辨，跑的时候合在一起才不漏。
+            import glob
+            files = sorted(glob.glob(os.path.join(CASES_DIR, "adversarial*.json")))
+            cases = []
+            for path in files:
+                cases.extend(load_cases(path))
+            validate_cases(cases)
     except CaseError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -342,7 +354,7 @@ def main(argv=None):
     meta = {
         "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "commit": _git_rev(),
-        "cases_path": os.path.relpath(args.cases, R._ROOT),
+        "cases_path": os.path.relpath(args.cases, R._ROOT) if args.cases else "eval/adversarial*.json（合并）",
     }
     text = render(case_map, per_round, stats, meta)
 
