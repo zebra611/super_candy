@@ -67,6 +67,12 @@ import config_loader              # noqa: E402
 config_loader.tts_config = lambda: {
     "provider": "browser", "voice": "zh-CN-XiaoxiaoNeural", "rate": 1.05}
 
+# nlg 同理必须强制 template（与 verify.py #26 同理）：评测断言的是规则层的确定性
+# 行为，qwen-flash 改写会改措辞；且本机开着 dashscope 时每轮真调模型——
+# 实测把整场评测拖到逐条 60s 超时（2026-11-06，演示机场景）。评测不该依赖
+# 外部服务，也不该随本机话术开关波动。adversarial_run.py 复用本模块，一并生效。
+config_loader.nlg_config = lambda: {**config_loader.load().get("nlg", {}), "provider": "template"}
+
 from app import end_call, handle_turn, start_call   # noqa: E402
 
 CASES_PATH = os.path.join(_ROOT, "eval", "seed_cases.json")
