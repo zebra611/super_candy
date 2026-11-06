@@ -44,6 +44,7 @@ import dashboard as dashboard_mod
 import events
 import ws_channel
 from modules import dialogue, eval as eval_mod, tools, voice
+from modules import semantic_judge
 from modules import wsproto
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -596,7 +597,14 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
     tc = agent_out.get("tool_call") or {}
     if tc.get("name") == "create_ticket" and not (tool_result or {}).get("ticket_id"):
         agent_out["reply_text"] = dialogue.fallback_text("reply_writeback")
-    guard = dialogue.compliance_guard(agent_out["reply_text"])
+    # S3：模板层先行（零网络、默认路径逐字节不变）；只有显式开启
+    # compliance_judge.provider=dashscope 且有密钥时，才会在模板层没拦住时
+    # 多问一次模型，补「换个说法说同样的话」。任何异常都退回模板层结论。
+    guard = semantic_judge.judge(agent_out["reply_text"])
+    if guard.get("audit"):
+        # 只有模型真的判了违规才写这条事件；默认配置下事件流与改造前一致。
+        events.write_event(session_id, "compliance_judge", guard["audit"],
+                           turn_id=turn_id)
     reply_text = guard["text"]
 
     events.write_event(session_id, "agent_reply",

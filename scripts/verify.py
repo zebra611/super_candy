@@ -1741,6 +1741,101 @@ def main():
           and "25 条" in _d21 and "86/88" not in _d21,
           ["docs/21 长度 %d 字" % len(_d21)])
 
+    # ---- 证据 26：质检进化线 Q1/Q2/Q3/Q4/Q5/S3 ----
+    print()
+    print("=" * 74)
+    print("证据 26：质检进化线（分诊转正/课程进化/严格模式/双场景/语义合规）")
+    print("=" * 74)
+
+    _qc1 = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                        "adversarial_run.py"),
+                           "--cases", os.path.join(ROOT, "eval",
+                                                   "adversarial_q1_regression.json"),
+                           "--rounds", "1", "--no-report"],
+                          cwd=ROOT, capture_output=True, text=True, timeout=300,
+                          env=_ENV)
+    _qc1_out = ((_qc1.stdout or "") + (_qc1.stderr or "")).strip().splitlines()
+    check("Q1 分诊转正 6 条回归用例全过（拒绝核身给替代路径/收费非拒绝/确认词闭环）",
+          _qc1.returncode == 0 and any("通过 6/6" in l for l in _qc1_out),
+          ["退出码 %d；末行：%s" % (_qc1.returncode,
+                                    (_qc1_out or ["无输出"])[-1][:80])])
+
+    _qc2 = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                        "course_evolution.py"),
+                           "--self-test",
+                           "--report", os.path.join(ROOT, "eval", "reports",
+                                                    "_verify_course.md"),
+                           "--json", os.path.join(ROOT, "eval", "reports",
+                                                  "_verify_course.json")],
+                          cwd=ROOT, capture_output=True, text=True, timeout=600,
+                          env=_ENV)
+    _qc2_out = ((_qc2.stdout or "") + (_qc2.stderr or "")).strip().splitlines()
+    check("Q2 三代课程可复算，且变异能抓到注入缺陷（课程不是摆设）",
+          _qc2.returncode == 0
+          and any("Gen1 全矩阵" in l for l in _qc2_out)
+          and any("已抓到" in l for l in _qc2_out),
+          ["退出码 %d；末行：%s" % (_qc2.returncode,
+                                    (_qc2_out or ["无输出"])[-1][:80])])
+
+    _qc3 = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                        "run_eval.py"),
+                           "--cases", os.path.join(ROOT, "eval", "fault_cases",
+                                                   "p4_tool_error.json"),
+                           "--strict"],
+                          cwd=ROOT, capture_output=True, text=True, timeout=300,
+                          env=_ENV)
+    check("Q3 --strict：有用例失败时 exit 1（接 CI 不会静默绿）",
+          _qc3.returncode == 1,
+          ["退出码 %d（期望 1）" % _qc3.returncode])
+
+    _qc3b = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                         "run_eval.py"),
+                            "--cases", os.path.join(ROOT, "eval",
+                                                    "adversarial_q1_regression.json"),
+                            "--strict"],
+                           cwd=ROOT, capture_output=True, text=True, timeout=300,
+                           env=_ENV)
+    check("Q3 --strict：全通过时 exit 0（现有调用方不传参行为不变）",
+          _qc3b.returncode == 0,
+          ["退出码 %d（期望 0）" % _qc3b.returncode])
+
+    # Q4：不调 git（PowerShell/CI 环境里 git 未必在 PATH，调了会 FileNotFoundError
+    # 把整个 verify 崩掉，而不是报一条红）。用 .gitignore + 本地可复算来判。
+    _personas = os.path.join(ROOT, "eval", "personas_generated.json")
+    try:
+        with open(os.path.join(ROOT, ".gitignore"), encoding="utf-8") as _gf:
+            _ignored = "/eval/personas_generated.json" in _gf.read()
+    except Exception:
+        _ignored = False
+    check("Q4 画像生成物已出仓库（.gitignore 命中、本地保留可复算）",
+          _ignored and os.path.exists(_personas),
+          ["ignored=%s 本地存在=%s" % (_ignored, os.path.exists(_personas))])
+
+    _rep_main = os.path.join(ROOT, "docs", "eval_reports", "eval_main_1106.md")
+    _rep_pop = os.path.join(ROOT, "docs", "eval_reports", "eval_pop_reject_1106.md")
+    _ok_rep = False
+    if os.path.exists(_rep_main) and os.path.exists(_rep_pop):
+        with open(_rep_main, encoding="utf-8") as f:
+            _m = f.read()
+        with open(_rep_pop, encoding="utf-8") as f:
+            _p = f.read()
+        _ok_rep = "88/88" in _m and "340/340" in _p
+    check("Q5 双场景两份报告分开存档（售后 88/88、pop 340/340）", _ok_rep,
+          ["main=%s pop=%s" % (os.path.exists(_rep_main), os.path.exists(_rep_pop))])
+
+    _s3 = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                       "test_semantic_judge.py"),
+                          "--offline"],
+                         cwd=ROOT, capture_output=True, text=True, timeout=300,
+                         env=_ENV)
+    _s3_out = ((_s3.stdout or "") + (_s3.stderr or "")).strip().splitlines()
+    check("S3 语义合规离线降级 6/6 + 变异 2/2（默认走模板层）",
+          _s3.returncode == 0
+          and any("6/6 通过" in l for l in _s3_out)
+          and any("2/2" in l for l in _s3_out),
+          ["退出码 %d；末行：%s" % (_s3.returncode,
+                                    (_s3_out or ["无输出"])[-1][:80])])
+
     print()
     print("=" * 74)
     total = len(results)

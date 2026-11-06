@@ -1,0 +1,78 @@
+[
+  {
+    "id": "Q1-R1",
+    "category": "regression",
+    "tag": "q1_identity_refusal",
+    "goal": "愤怒客户拒绝报尾号（「我凭什么告诉你」）：必须给替代路径，不能只重复要后四位、更不能当成没听清",
+    "turns": ["喂，你们还有完没完", "我凭什么告诉你", "行行行，8866，你快点说"],
+    "expect": {
+      "closed": false,
+      "must_say": ["订单号"],
+      "must_not": ["杂音", "没听清"]
+    },
+    "source": "Q1-D1/D2：Q1 分诊 EV05-EV08；原实现把拒绝当噪声连回 4 遍「有杂音没听清」。"
+  },
+  {
+    "id": "Q1-R2",
+    "category": "regression",
+    "tag": "q1_identity_refusal",
+    "goal": "蛮横客户要「先证明你是官方的」：必须先解释+给替代路径，不能一句流程打发",
+    "turns": ["你谁啊，谁让你打的", "我凭什么报号码，你先证明你是官方的", "行，8866，赶紧的"],
+    "expect": {
+      "closed": false,
+      "must_say": ["订单号"],
+      "must_not": ["杂音", "没听清"]
+    },
+    "source": "Q1-D1：Q1 分诊 EV09-EV12。"
+  },
+  {
+    "id": "Q1-R3",
+    "category": "regression",
+    "tag": "q1_privacy_question",
+    "goal": "合规试探者先问号码来源：先正面回答来源（知识库），再请他报信息；不能回「没听清」",
+    "turns": ["我先不报，你先说号码哪来的", "行吧，8866，你先说清楚信息来源"],
+    "expect": {
+      "closed": false,
+      "must_say": ["信息"],
+      "must_not": ["杂音", "没听清"]
+    },
+    "source": "Q1-D1：Q1 分诊 EV25-EV28；原实现 4 轮全「有杂音没听清」。"
+  },
+  {
+    "id": "Q1-R4",
+    "category": "regression",
+    "tag": "q1_fee_not_refusal",
+    "goal": "「要钱不？要钱我可不要」是问收费、不是拒绝核身：必须答免费并继续，不能直接挂断",
+    "turns": ["喂？谁呀，我这耳朵背", "尾号？啥尾号啊，我记不住", "要钱不？要钱我可不要"],
+    "expect": {
+      "closed": false,
+      "must_say": ["免费"],
+      "must_not": ["再见"]
+    },
+    "source": "Q1-D2：Q1 分诊 EV01；原实现 flags['no'] 一刀切 refused_identity 挂断。"
+  },
+  {
+    "id": "Q1-R5",
+    "category": "regression",
+    "tag": "q1_hearing",
+    "goal": "听不清人设连问两轮「啥意思」：不能连续两次回「有杂音没听清」（把提问当噪声）",
+    "turns": ["喂？喂？听得见吗，信号不好", "尾号？什么尾号？我没听明白", "是让我报手机号吗，多少位"],
+    "expect": {
+      "closed": false,
+      "must_not": ["杂音", "没听清"]
+    },
+    "source": "Q1-D1：Q1 分诊 EV17-EV20，原实现 5 轮全噪声。"
+  },
+  {
+    "id": "Q1-R6",
+    "category": "regression",
+    "tag": "q1_confirm_words",
+    "goal": "CONFIRM 复述后答「我确认，就这么办」：必须闭环回写，不能判含糊再追问一遍",
+    "turns": ["是我", "尾号8866", "用着挺好", "要钱吗", "行，那就办吧", "对，我确认，就这么办"],
+    "expect": {
+      "closed": true,
+      "consent": true
+    },
+    "source": "Q1-D5：Q1 分诊 EV13-EV16；原实现 conf 0.45 判 ambiguous。"
+  }
+]
