@@ -55,6 +55,10 @@ DEFAULTS = {
     "valid_to": None,
     "forbidden": [],
     "priority": 0,
+    # no_call=True 的条目不进电话检索（如京麦驳回域：官方口径该场景无需外呼）。
+    # 条目仍在库里（explain/统计可见），只是 match 永远不返回它——
+    # 否则商家在电话里问"品牌"会被念一段"请在京麦后台操作"的站内指引。
+    "no_call": False,
 }
 
 # 全项目共用的禁用语：这些词一旦出现在答案里就构成"承诺"，合规上不能播。
@@ -226,6 +230,18 @@ class KB(object):
         mn = _min_len()
         mm = _min_matches()
         for item in self.items:
+            if item.get("no_call"):
+                # 检索层过滤（京麦等无需外呼的条目）：带原因入候选，
+                # explain 能看到"为什么不答"，match 只取 reason 为空的候选。
+                out.append({
+                    "id": item.get("id", ""),
+                    "category": item.get("category", ""),
+                    "answer": item["_answer"],
+                    "source_id": item.get("source_id", ""),
+                    "score": 0, "matched": [], "reason": "no_call",
+                    "_priority": item.get("priority", 0),
+                })
+                continue
             matched = [p for p in item["_patterns"] if p in t]
             longest = max((len(p) for p in matched), default=0)
             score = longest * 100 + sum(len(p) for p in matched)
