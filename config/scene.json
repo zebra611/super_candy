@@ -53,6 +53,7 @@
     "max_chars": 45,
     "temperature": 0.3,
     "_why": "provider=template 表示不改写，直接用 config 里的骨架话术。默认必须关着：队友 clone 下来没密钥也要能跑，自检和跑批也不能每跑一次调 30 次模型。",
+    "_how_to_enable": "要打开改写：把 provider 改成 dashscope（注意这里填厂商名，不是模型名——写成 qwen-flash 会被静默跳过、等于没开），重启生效；跑批与自检请保持 template。打开后模型超时/返回空/跑题长篇/编造数字金额日期等异常都会自动降级回骨架话术，不会把话说错。",
     "_budget": "400ms 是硬上限不是参考值：服务端 P50 现在 974ms，加上 P50<=1300ms 才留得住余量。超了就降级回骨架话术，别等。",
     "_doc": "完整契约（prompt 结构、降级顺序、验收标准）见 docs/17_任务2接口契约.md"
   },
@@ -60,10 +61,7 @@
     "provider": "mock",
     "timeout_ms": 300,
     "base_url": "http://127.0.0.1:8100",
-    "idempotency_store": "memory",
-    "idempotency_path": "",
     "_why": "mock = modules/tools.py 里写死的假数据；real = 走 modules/adapters/ 下的真实适配器。默认 mock，理由同上：clone 下来就能跑。",
-    "_idempotency": "幂等存储开关。memory（默认）：进程内 dict，重启后同一通电话会再开一张单，但零依赖、clone 即跑；sqlite：落库到 idempotency_path（留空 = data/tickets.db），重启后同一 idempotency_key 仍返回同一张单。注意：切到 sqlite 后自检不再清库，跑批/评测前务必临时换成别的路径，别往生产工单表里写测试单。",
     "_doc": "见 docs/17 第 4 节"
   },
   "fallback": {
