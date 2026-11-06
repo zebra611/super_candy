@@ -98,8 +98,12 @@ HANDOFF_WORDS = ("转人工", "找人工", "人工客服", "转客服", "转接�
                  # 口语说法：客户不会说"转人工"，说的是"转个人""找管事的"。
                  # 漏掉这两种，一句明确的转人工请求会被判成提问（含"能不能"），
                  # 于是客服继续按原流程问下去——这是最不该出错的漏判。
-                 "转个人", "转接人工", "管事的", "找你们负责", "负责人",
+                 "转个人", "找你们负责", "找负责人", "叫负责人",
                  "叫你们领导", "上级")
+# 注意：这里不能放裸词"负责人"——pop 场景开场问"您是贵公司的负责人吗"，
+# 用户正常回答"是的，我是负责人"会 substring 命中被当成转人工直接挂机
+# （11-06 17:18 pop 场景实测第一轮即中招）。转人工请求必须带动作词
+# （找/叫/转/要），"负责人"单独出现是身份陈述不是请求。
 
 # 弱肯定：嘴上答应了，但明显没拿定主意。
 # "好吧""应该可以""差不多"这类回答如果直接当同意回写，业务侧会拿着一份
@@ -130,7 +134,10 @@ VAGUE_MARKS = ("不太清楚", "不清楚", "不知道", "不晓得", "不记得
                # 连说两遍的"行吧行吧""行了行了"是不耐烦，不是同意。
                # 注意不能把单个"行吧"加进来——它在 YES_EXACT 里，是明确同意；
                # 也不能把"行吧"加进 YES_CONTAINS，否则"不行吧"会被判成同意。
-               "行吧行吧", "行了行了", "知道了", "好知道了")
+               "行吧行吧", "行了行了", "知道了", "好知道了",
+               # "没明白"家族：是"没听懂"不是确认。pop 场景确认词里有"明白"，
+               # 不挡住它们的话，"我没明白"会被场景确认词误判成已清楚。
+               "不明白", "没明白", "不太明白", "没听明白")
 
 # 证据强度（0~1）。数字不是拍脑袋来的，是按"这句话能不能单独支撑一次回写"定的：
 #   EXACT     整句就是一个标准答案，"同意"两个字不会再有别的解释
@@ -291,7 +298,14 @@ def classify(text):
     if any(w in t for w in HANGUP_WORDS):
         flags["hangup"] = True
         strong.append(("hangup", CONF_CONTAINS))
-    if any(w in t for w in ANGRY_WORDS):
+    # 情绪词 = 通用骂人词 + 场景包 compliance.categories.insult。
+    # pop 场景的"爱审不审"这类行业特有攻击话不在通用表里，漏掉的话
+    # 用户骂一句"爱审不审"会被当成正常推进——输入侧情绪分类和输出侧
+    # 合规检查必须用同一份场景词表，不能各管各的。
+    _insult_extra = tuple(w for w in (config_loader.compliance_categories()
+                                      .get("insult") or [])
+                          if w and w not in ANGRY_WORDS)
+    if any(w in t for w in ANGRY_WORDS + _insult_extra):
         flags["angry"] = True
         strong.append(("angry", CONF_CONTAINS))
     # 抱怨单独一个标记，不并进 angry：angry 的处理是"暂停推进+致歉"，
@@ -609,6 +623,21 @@ def _angry_hold(session, stage):
     return _reply(session, config_loader.fallback_text(key) or default, intent="angry")
 
 
+def _promise_block(session, text, flags):
+    """求结果保证的统一拦截出口（合规红线），命中返回回复，未命中返回 None。
+
+    商家/用户问"能不能保证通过"时，任何具体回答都容易被理解成变相承诺，
+    必须先于知识库与 fee/validity 兜底拦截，统一走 reply_blocked 口径。
+    词表来自场景包 compliance.categories.false_promise，代码不写死业务词。
+    """
+    _promise_words = (config_loader.compliance_categories()
+                      .get("false_promise") or [])
+    if any(w and w in text for w in _promise_words):
+        return _reply(session, _soothe(config_loader.blocked_reply(), flags),
+                      intent="compliance_block")
+    return None
+
+
 def _finish(session, text, reason):
     """收尾：进入 DONE，不再推进，也不再发起新话题。"""
     return _reply(session, text, next_stage="DONE", intent=reason, end_reason=reason)
@@ -647,6 +676,29 @@ def _do_writeback(session, consent, changed=False):
     content["need"] = session["slots"].get("need") or "未获取"
     content["consent"] = consent
     content["writeback_version"] = version
+    # 商家理解度：CONFIRM 闭环成功（consent=True）时必须同步为 true——
+    # 以前只有 consent 一个字段，赛题回写要求的 merchant_understood
+    # 永远停在默认 unknown，业务侧拿到的"商家是否清楚整改要求"全是猜的。
+    # 三态同构：True→True / False→False / "unknown"→"unknown"。
+    # 只在场景模板声明了这个键时才写（主场景模板没有它，payload 不添多余字段）。
+    _need_text = content["need"]
+    if not isinstance(_need_text, str):
+        _need_text = str(_need_text)
+    if "merchant_understood" in content:
+        content["merchant_understood"] = consent
+    if "reject_category" in content or "reject_summary" in content:
+        # 驳回域分类（C1 框架 2.2 五域）：申请单级定位依赖 C5（mock 换业务），
+        # 但"这通电话谈的是哪个域"从 need 文本就能判。规则来自场景包
+        # reject_rules（关键词→域），代码不写死业务词；都匹配不上才是"未定位"。
+        _reject_cat = "未定位"
+        for _rule in (config_loader.load().get("reject_rules") or []):
+            if any(k and k in _need_text for k in (_rule.get("keywords") or [])):
+                _reject_cat = _rule.get("category") or "未定位"
+                break
+        if "reject_category" in content:
+            content["reject_category"] = _reject_cat
+        if "reject_summary" in content:
+            content["reject_summary"] = _need_text[:200]
     if session["slots"].get("order"):
         content["order_id"] = session["slots"]["order"].get("order_id")
     # 改口轨迹跟着工单走：一个工单号从 v1 到 vN，改动过程留在同一个对象里。
@@ -1410,6 +1462,10 @@ def _stage_need(session, text, flags):
 
     # 用户在提问 → 用查到的订单信息回答，仍停在本阶段
     if flags["ask"]:
+        # 求结果保证（合规红线）在 NEED 阶段同样先拦，见 _promise_block。
+        blocked = _promise_block(session, text, flags)
+        if blocked:
+            return blocked
         order = session["slots"].get("order")
         if order:
             tpl = cfg.get("reply_order_detail", "")
@@ -1472,6 +1528,10 @@ def _stage_offer(session, text, flags):
 
     # 提问：先查知识库（带出处），查不到再退回配置里的固定话术
     if flags["ask"]:
+        # 求结果保证（框架合规红线）必须先于知识库拦截，见 _promise_block。
+        blocked = _promise_block(session, text, flags)
+        if blocked:
+            return blocked
         hit = kb.match(text)
         if hit:
             return _reply(session, hit["answer"], intent="ask", kb_hit=hit)
@@ -1512,6 +1572,18 @@ def _stage_confirm(session, text, flags):
     后面退订和投诉就是从这里来的。
     """
     cfg = config_loader.stage_config("CONFIRM")
+
+    # 场景确认词（pop："清楚了""明白了"）。CONFIRM 问的是什么由场景话术决定：
+    # 主场景问"同意吗"，pop 问"清楚了吗"——通用 YES 词表覆盖不了所有场景问法
+    # （"清楚了"不在任何肯定表里，"知道了"在通用含糊表里），于是商家明明说
+    # 清楚了却被追问"您可以简单回我一句"。场景包用 confirm_yes_words 显式
+    # 声明本场景的确认说法，命中即视同明确肯定；主场景不配这个键，行为不变。
+    # 子串匹配要防否定变体："没明白"同样包含"明白"，必须先拦。
+    _yes_marks = [w for w in (cfg.get("confirm_yes_words") or []) if w and w in text]
+    if _yes_marks and not flags["no"] and not any(w in text for w in NO_CONTAINS) \
+            and not any(text.find(_neg + w) >= 0
+                        for w in _yes_marks for _neg in ("没", "不", "别")):
+        return _do_writeback(session, True)
 
     if flags["yes"] and flags.get("conf", 1.0) >= YES_MIN_CONF:
         return _do_writeback(session, True)

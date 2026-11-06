@@ -6,7 +6,7 @@
   "placeholder": false,
   "scene": "京东POP商家资质审核驳回外呼",
   "updated_at": "2026-11-06",
-  "note": "条目构成：场景汇总 68 + 高频QA 11 + 特殊场景追问 17。官方数据已知问题（噪声/占位符不统一）见 competition/官方资料包/整合方案.md。"
+  "note": "条目构成：场景汇总 68 + 高频QA 11 + 特殊场景追问 17。官方数据已知问题（噪声/占位符不统一）见 competition/官方资料包/整合方案.md。；S01-S17 追问剧本触发词已按5类追问补齐（官方残缺，见噪声清单C6-07）"
  },
  "items": [
   {
@@ -59,7 +59,8 @@
    "forbidden": [
     "京麦驳回场景：无需外呼"
    ],
-   "priority": 10
+   "priority": 10,
+   "no_call": true
   },
   {
    "id": "KB-POP-004",
@@ -79,7 +80,8 @@
    "forbidden": [
     "京麦驳回场景：无需外呼"
    ],
-   "priority": 10
+   "priority": 10,
+   "no_call": true
   },
   {
    "id": "KB-POP-005",
@@ -207,7 +209,8 @@
    "forbidden": [
     "京麦驳回场景：无需外呼"
    ],
-   "priority": 10
+   "priority": 10,
+   "no_call": true
   },
   {
    "id": "KB-POP-013",
@@ -228,7 +231,8 @@
    "forbidden": [
     "京麦驳回场景：无需外呼"
    ],
-   "priority": 10
+   "priority": 10,
+   "no_call": true
   },
   {
    "id": "KB-POP-014",
@@ -260,7 +264,8 @@
    "forbidden": [
     "京麦驳回场景：无需外呼"
    ],
-   "priority": 10
+   "priority": 10,
+   "no_call": true
   },
   {
    "id": "KB-POP-016",
@@ -325,7 +330,8 @@
    "forbidden": [
     "京麦驳回场景：无需外呼"
    ],
-   "priority": 10
+   "priority": 10,
+   "no_call": true
   },
   {
    "id": "KB-POP-020",
@@ -417,7 +423,8 @@
    "forbidden": [
     "京麦驳回场景：无需外呼"
    ],
-   "priority": 10
+   "priority": 10,
+   "no_call": true
   },
   {
    "id": "KB-POP-026",
@@ -452,7 +459,8 @@
    "forbidden": [
     "京麦驳回场景：无需外呼"
    ],
-   "priority": 10
+   "priority": 10,
+   "no_call": true
   },
   {
    "id": "KB-POP-028",
@@ -553,7 +561,8 @@
    "forbidden": [
     "京麦驳回场景：无需外呼"
    ],
-   "priority": 10
+   "priority": 10,
+   "no_call": true
   },
   {
    "id": "KB-POP-034",
@@ -706,7 +715,8 @@
    "forbidden": [
     "京麦驳回场景：无需外呼"
    ],
-   "priority": 10
+   "priority": 10,
+   "no_call": true
   },
   {
    "id": "KB-POP-044",
@@ -755,7 +765,8 @@
    "forbidden": [
     "京麦驳回场景：无需外呼"
    ],
-   "priority": 10
+   "priority": 10,
+   "no_call": true
   },
   {
    "id": "KB-POP-047",
@@ -882,7 +893,8 @@
    "forbidden": [
     "京麦驳回场景：无需外呼"
    ],
-   "priority": 10
+   "priority": 10,
+   "no_call": true
   },
   {
    "id": "KB-POP-055",
@@ -946,7 +958,8 @@
    "forbidden": [
     "京麦驳回场景：无需外呼"
    ],
-   "priority": 10
+   "priority": 10,
+   "no_call": true
   },
   {
    "id": "KB-POP-059",
@@ -1006,7 +1019,8 @@
    "forbidden": [
     "京麦驳回场景：无需外呼"
    ],
-   "priority": 10
+   "priority": 10,
+   "no_call": true
   },
   {
    "id": "KB-POP-063",
@@ -1255,13 +1269,21 @@
   {
    "id": "KB-POP-S01",
    "category": "追问剧本",
-   "patterns": [],
+   "patterns": [
+    "发票要求",
+    "多少件",
+    "门槛",
+    "标准",
+    "数量要求",
+    "吨"
+   ],
    "answer": "B类资质：每级未冲红发票单品牌的二级类目分类数量累计≥10件或≥1吨\n京喜C店特批：发票中包含该类目产品",
    "source_id": "官方资料包/驳回外呼QA.xlsx#特殊场景",
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）"
   },
   {
    "id": "KB-POP-S02",
@@ -1280,13 +1302,21 @@
   {
    "id": "KB-POP-S03",
    "category": "追问剧本",
-   "patterns": [],
+   "patterns": [
+    "哪里查",
+    "怎么查",
+    "在哪查",
+    "商标网",
+    "怎么确认",
+    "商标状态"
+   ],
    "answer": "您可以在国家商标网中查询商标状态，在商标状态变为XX后重新提交申请，或提供其他的XX状态的XX类有效商标",
    "source_id": "官方资料包/驳回外呼QA.xlsx#特殊场景",
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）"
   },
   {
    "id": "KB-POP-S04",
@@ -1304,35 +1334,55 @@
   {
    "id": "KB-POP-S05",
    "category": "追问剧本",
-   "patterns": [],
+   "patterns": [
+    "实质审查",
+    "多久能过",
+    "多长时间",
+    "时间要求",
+    "初审公告"
+   ],
    "answer": "您商标目前等待实质审查状态，如果在满足XX时间前，商标状态变更为初审公告/已注册状态，可以直接申请，不用等待XX时间",
    "source_id": "官方资料包/驳回外呼QA.xlsx#特殊场景",
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）"
   },
   {
    "id": "KB-POP-S06",
    "category": "追问剧本",
-   "patterns": [],
+   "patterns": [
+    "权大师",
+    "图形商标",
+    "怎么查名字",
+    "商标注册号"
+   ],
    "answer": "您可以在权大师中，搜索商标注册号，如果是文字商标，会显示对应的名称，如果是图形商标，会直接显示图形",
    "source_id": "官方资料包/驳回外呼QA.xlsx#特殊场景",
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）"
   },
   {
    "id": "KB-POP-S07",
    "category": "追问剧本",
-   "patterns": [],
+   "patterns": [
+    "能不能过",
+    "多久知道",
+    "会不会通过",
+    "几天出结果",
+    "结果多久"
+   ],
    "answer": "您材料上传后，具体是否通过，我们会在审核您完整的材料后才可以确订，如果有问题也会再次联系您的",
    "source_id": "官方资料包/驳回外呼QA.xlsx#特殊场景",
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）"
   },
   {
    "id": "KB-POP-S08",
@@ -1350,13 +1400,19 @@
   {
    "id": "KB-POP-S09",
    "category": "追问剧本",
-   "patterns": [],
+   "patterns": [
+    "授权链路",
+    "链路不完整",
+    "完整授权",
+    "品牌方到公司"
+   ],
    "answer": "授权书是需要您提供从品牌方到您公司的完整链路的授权书的，链路不完整的需要您补充完整",
    "source_id": "官方资料包/驳回外呼QA.xlsx#特殊场景",
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）"
   },
   {
    "id": "KB-POP-S10",
@@ -1400,13 +1456,19 @@
   {
    "id": "KB-POP-S13",
    "category": "追问剧本",
-   "patterns": [],
+   "patterns": [
+    "材料上传后",
+    "审核多久",
+    "结果怎么通知",
+    "通过会通知吗"
+   ],
    "answer": "您材料上传后，具体是否通过，我们会在审核您完整的材料后才可以确订，如果有问题也会再次联系您的",
    "source_id": "官方资料包/驳回外呼QA.xlsx#特殊场景",
    "valid_from": null,
    "valid_to": null,
    "forbidden": [],
-   "priority": 20
+   "priority": 20,
+   "_note": "官方数据只有答案无问句，触发词按5类追问归纳补齐（C6-07）"
   },
   {
    "id": "KB-POP-S14",

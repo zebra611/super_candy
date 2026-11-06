@@ -1332,6 +1332,96 @@ def main():
           _intent.classify("同意")["yes"] and _intent.classify("同意")["evidence"] != "model",
           ["默认路径 evidence=%r" % _intent.classify("同意")["evidence"]])
 
+    # ---- 证据 20：pop 场景（C1）——场景词表接入输入侧 / 求保证拦截 / 京麦过滤 / 占位符两套体系 ----
+    # 起因：C1 施工后 pop_reject 场景只在 8802 端口实测过，verify 里一条断言都没有——
+    # 场景包 compliance 词表被改坏、kb no_call 标记丢失、占位符处理回归，总闸门照样全绿。
+    # ①②③ 在 monkeypatch 场景配置下做进程内全链路；④⑤ 直接读 kb_pop 验契约。
+    print()
+    print("=" * 74)
+    print("证据 20：pop 场景 C1——输入侧情绪/求保证拦截/京麦过滤/占位符两套体系")
+    print("=" * 74)
+
+    from modules import kb as _kbmod
+
+    _pop_cfg20 = json.load(open(os.path.join(ROOT, "config", "scenes", "pop_reject.json"),
+                                encoding="utf-8"))
+    _orig_cache20 = config_loader._cache
+    config_loader._cache = _pop_cfg20
+    try:
+        _f20 = _dlg.classify("你们就是故意卡我们商家，爱审不审！")
+        check("pop insult 词表接入输入情绪分类（'爱审不审'→angry，以前只有输出侧用它）",
+              _f20["angry"],
+              ["flags.angry=%r（通用 ANGRY_WORDS 不含'爱审不审'，命中说明场景词表已合并）"
+               % _f20["angry"]])
+
+        _s20 = _dlg.new_session("verify-pop-promise")
+        _dlg.respond(_s20, "我是负责人")
+        _dlg.respond(_s20, "尾号8866")
+        _dlg.respond(_s20, "我申请的品牌授权没过")
+        _out20 = _dlg.respond(_s20, "你能不能保证我这次重新提交一定能通过？")
+        check("求结果保证统一走 reply_blocked 口径（合规红线：不许承诺通过）",
+              "不能给您保证" in _out20["reply_text"],
+              ["回复：" + _out20["reply_text"][:48]])
+
+        _s21 = _dlg.new_session("verify-pop-insult")
+        _dlg.respond(_s21, "我是负责人")
+        _dlg.respond(_s21, "尾号8866")
+        _dlg.respond(_s21, "我申请的品牌授权没过")
+        _out21 = _dlg.respond(_s21, "你们就是故意卡我们商家，爱审不审！")
+        check("pop 情绪词命中时致歉承接且阶段不动（不推 CONFIRM）",
+              _out21["next_stage"] == "OFFER" and "抱歉" in _out21["reply_text"],
+              ["next_stage=%s 回复：%s" % (_out21["next_stage"], _out21["reply_text"][:40])])
+
+        # 场景确认词：pop 问"清楚了吗"，商家答"清楚了"必须闭环（通用 YES 表
+        # 没有"清楚了"，以前被判含糊追问两次然后记 unknown）。
+        _s22 = _dlg.new_session("verify-pop-confirm")
+        _dlg.respond(_s22, "我是负责人")
+        _dlg.respond(_s22, "尾号8866")
+        _dlg.respond(_s22, "我申请的品牌授权没过")
+        _dlg.respond(_s22, "行，清楚了，我这就去重新提交")
+        _out22 = _dlg.respond(_s22, "对，清楚了")
+        check("pop 场景确认词「清楚了」命中即闭环回写（不再追问两次记 unknown）",
+              bool(_out22.get("closed")) or _out22["next_stage"] in ("WRITEBACK", "DONE"),
+              ["closed=%r next=%s intent=%s"
+               % (_out22.get("closed"), _out22["next_stage"], _out22.get("intent"))])
+
+        # 回写字段完备性（赛题要求）：need 文本必须落进五域分类、
+        # merchant_understood 必须跟 CONFIRM 结果同步（以前永远 unknown）。
+        _wbc = ((_out22.get("tool_call") or {}).get("args") or {}).get("content") or {}
+        check("pop 回写带五域分类（品牌授权→品牌-授权）且 merchant_understood 同步为 true",
+              _wbc.get("reject_category") == "品牌-授权"
+              and _wbc.get("merchant_understood") is True
+              and _wbc.get("reject_summary"),
+              ["reject_category=%r merchant_understood=%r summary=%r"
+               % (_wbc.get("reject_category"), _wbc.get("merchant_understood"),
+                  (_wbc.get("reject_summary") or "")[:24])])
+    finally:
+        config_loader._cache = _orig_cache20
+
+    _kb_pop20 = _kbmod.load(os.path.join(ROOT, "config", "kb_pop.json"))
+    _nocall_ids = {it.get("id") for it in (_kb_pop20.raw.get("items") or [])
+                   if it.get("no_call")}
+    _leak = []
+    for _iid in sorted(x for x in _nocall_ids if x):
+        _it20 = next(x for x in _kb_pop20.raw["items"] if x.get("id") == _iid)
+        _probe = " ".join((_it20.get("patterns") or [])[:3])
+        if not _probe:
+            continue
+        _hit20 = _kb_pop20.match(_probe)
+        if _hit20 and _hit20.get("id") == _iid:
+            _leak.append(_iid)
+    check("京麦驳回域条目不进电话检索（no_call %d 条，泄漏 %s）"
+          % (len(_nocall_ids), _leak or "无"),
+          _nocall_ids and not _leak,
+          ["no_call 条目：%s…" % ", ".join(sorted(x for x in _nocall_ids if x)[:6])])
+
+    _r1, _m1 = _kbmod.render("您申请的【XXX类商标】品牌存在资质问题", None)
+    _r2, _m2 = _kbmod.render("您申请的【】品牌存在资质问题", None)
+    check("占位符两套体系：具名填不上原样保留、空【】记 missing（不删也不编造）",
+          "【XXX类商标】" in _r1 and "（空占位符）" in " ".join(_m2),
+          ["具名渲染：%r missing=%s" % (_r1[:34], _m1),
+           "空渲染：%r missing=%s" % (_r2[:34], _m2)])
+
     print()
     print("=" * 74)
     total = len(results)
