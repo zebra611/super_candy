@@ -22,6 +22,9 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from modules import dialogue  # noqa: E402
+import config_loader  # noqa: E402
+# nlg 强制关掉：自测断言确定性文本，不能随本机 LLM 改写波动（同 verify.py）。
+config_loader.nlg_config = lambda: {**config_loader.load().get("nlg", {}), "provider": "template"}
 
 # ---------------------------------------------------------------------------
 # 10 条歧义样本：全部来自真实外呼里"听起来像回应、其实没信息"的话。

@@ -434,7 +434,14 @@ def classify(text):
     # 为什么加这个前提——"我不知道这个保修多久"里带"不知道"，但它同时是提问
     # （"多久"）。按含糊处理会把一个真问题追问掉，用户会以为客服在打太极。
     # 反过来，"你说是就是吧"一条强规则都不命中，才是真正需要追问的那一类。
-    if n in PURE_FILLER or (not strong and any(w in t for w in VAGUE_MARKS)):
+    # ASR 噪声单独归入：咳嗽/背景音被 qwen3-asr-flash 识别成 "Cough." 这类
+    # 纯英文（没有任何中文或数字）的输入，不是用户在表达态度，是"没说出人话"。
+    # 不挡住的话它会落到核身失败计数里——真实通话 11-06 里一声咳嗽就把人挂断。
+    if t and not re.search(r"[\u4e00-\u9fff0-9]", t):
+        flags["vague"] = True
+        flags["conf"] = CONF_VAGUE
+        flags["evidence"] = "noise"
+    elif n in PURE_FILLER or (not strong and any(w in t for w in VAGUE_MARKS)):
         flags["vague"] = True
         flags["conf"] = CONF_VAGUE
         flags["evidence"] = "filler" if n in PURE_FILLER else "vague"
@@ -943,6 +950,23 @@ def _submit_identity_slot(session, slot, value):
     session["identity_slots"][slot] = value
 
 
+def _short_digit_run(text):
+    """这句是不是在报尾号但位数不够（2~3 位连续阿拉伯数字）。
+
+    只认阿拉伯数字：中文数字报尾号的完整 4 位已在 classify 收，
+    "三楼""第3个"这类 1 位数字不是在报尾号，不能拦。
+    """
+    t = _norm(text or "")
+    best = run = 0
+    for ch in t:
+        if ch.isdigit():
+            run += 1
+            best = max(best, run)
+        else:
+            run = 0
+    return 2 <= best < 4
+
+
 def _take_identity_slots(session, text, flags):
     """从这一句里收身份槽位，返回这一轮提交了哪些槽位（列表）。
 
@@ -1358,6 +1382,16 @@ def _stage_identity(session, text, flags):
             return _finish(session, text_, "unclear")
         return _reply(session, text_, intent="unclear")
 
+    # 尾号报了一半（"111"=3 位）：引导补全，不算失败、不轮换槽位。
+    # T17-①：真实通话里用户报 3 位尾号没接住，反而跳问别的——
+    # 用户会觉得"我给了你又不认"，然后系统继续在槽位间横跳。
+    # 用户明确在报数字（≥2 位但不足 4 位），最该做的是请他说完整。
+    if not flags.get("digits") and _short_digit_run(text):
+        return _reply(session,
+                      _identity_text("reply_ask_tail_short",
+                                     "您报的数字好像少了几位。麻烦说一下手机号的后四位，四个数字就行，不着急。"),
+                      intent="identity_retry")
+
     # ① 收槽位（后说的覆盖先说的，并记一条改口轨迹）
     _take_identity_slots(session, text, flags)
 
@@ -1371,6 +1405,15 @@ def _stage_identity(session, text, flags):
     # ③ 问最缺的那一个；两个都问满了就收尾
     slot = _next_identity_slot(session)
     if slot is None:
+        # T17-③：挂断前必须**完整重问一次**。真实事故里用户还在正常说话
+        # 就被挂断（"人还在说话就挂断"），核不上≠不用再问——很多时候
+        # 只是用户没听懂要什么。重问只给一次：这次之后仍核不上才是真的核不上。
+        if not session.get("identity_reask"):
+            session["identity_reask"] = True
+            return _reply(session,
+                          _identity_text("reply_reask",
+                                         "实在不好意思，这边一直核对不上。麻烦您再报一次：手机号后四位，或者您的姓名，任意一个都可以，我这边再核对一次。"),
+                          intent="identity_reask")
         return _finish(session, cfg.get("reply_fail", "这边核对不上，稍后让专员联系您。"),
                        "identity_failed")
     return _ask_identity(session, slot)

@@ -21,6 +21,11 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from modules import dialogue  # noqa: E402
+import config_loader  # noqa: E402
+# nlg 必须强制关掉：这些自测断言的是确定性文本。本机开 dashscope 改写时，
+# LLM 换个说法断言就假红（test_slots 的"尾号"被改写成"后四位"，11-06 实测）。
+# 与 verify.py 的同一做法：自检永远测规则层。
+config_loader.nlg_config = lambda: {**config_loader.load().get("nlg", {}), "provider": "template"}
 
 
 def _run(turns, sid):
@@ -62,10 +67,18 @@ class AskLogicTest(unittest.TestCase):
                                  "槽位 %s 问了 %d 次，超过上限 %d" % (slot, n, dialogue.SLOT_ASK_MAX))
 
     def test_exhaust_then_finish(self):
-        """两个槽位都问满还核不上 → 收尾（end_reason=identity_failed），不是无限追问。"""
-        s, outs = _run(["是我", "1234", "王五", "5678", "赵六"], "slot-exhaust")
+        """两个槽位都问满还核不上 → 完整重问一次（T17-③），仍核不上才收尾。
+
+        11-06 真实语音事故：用户还在正常说话就被 identity_failed 挂断，
+        五轮里只有两轮真的在报身份。修复后挂断前必须完整重问一次，
+        所以收尾从第 5 轮推到第 6 轮。
+        """
+        s, outs = _run(["是我", "1234", "王五", "5678", "赵六", "钱七"], "slot-exhaust")
+        self.assertEqual("identity_reask", outs[4].get("intent"),
+                         "问满后应先完整重问而不是直接挂断：%r" % outs[4].get("intent"))
+        self.assertIn("后四位", outs[4]["reply_text"], "重问要同时给尾号机会")
         self.assertEqual("DONE", s["stage"])
-        self.assertEqual("identity_failed", outs[4].get("end_reason"))
+        self.assertEqual("identity_failed", outs[5].get("end_reason"))
         self.assertEqual(0, s.get("writeback_version", 0), "身份没核上不能回写工单")
 
 

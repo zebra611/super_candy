@@ -1395,6 +1395,36 @@ def main():
               ["reject_category=%r merchant_understood=%r summary=%r"
                % (_wbc.get("reject_category"), _wbc.get("merchant_understood"),
                   (_wbc.get("reject_summary") or "")[:24])])
+
+        # T17 三洞回归（11-06 队长真实语音 s_666ed5548f9c 全复现）：
+        # ① 3 位尾号引导补全不轮换槽位 ② 英文噪声走含糊通道不烧核身次数
+        # ③ 挂断前完整重问一次
+        check("T17-① 3 位尾号引导「请说四位」且不轮换槽位（以前跳问别的）",
+              _dlg.classify("111")["digits"] == ""
+              and not _dlg._short_digit_run("一") and _dlg._short_digit_run("111"),
+              ["digits=%r short_run('111')=%r short_run('一')=%r"
+               % (_dlg.classify("111")["digits"],
+                  _dlg._short_digit_run("111"), _dlg._short_digit_run("一"))])
+        check("T17-② ASR 噪声（咳嗽→'Cough.'）走含糊通道，不消耗核身失败",
+              _dlg.classify("Cough.")["vague"]
+              and _dlg.classify("Cough.")["evidence"] == "noise",
+              ["vague=%r evidence=%r"
+               % (_dlg.classify("Cough.")["vague"],
+                  _dlg.classify("Cough.")["evidence"])])
+        _s23 = _dlg.new_session("verify-t17-reask")
+        _dlg.respond(_s23, "是我")
+        _dlg.respond(_s23, "张三丰")          # name 第 1 问，核不上
+        _dlg.respond(_s23, "李逵")            # tail 第 2 问，核不上
+        _dlg.respond(_s23, "王五")            # name 第 2 问，核不上
+        _out23a = _dlg.respond(_s23, "赵六")   # 槽位问满 → 应完整重问而不是挂断
+        _out23b = _dlg.respond(_s23, "钱七")   # 重问后仍核不上 → 才挂断
+        check("T17-③ 核不上先完整重问一次，再核不上才挂断（以前直接挂）",
+              _out23a.get("intent") == "identity_reask"
+              and "后四位" in _out23a["reply_text"]
+              and _out23b.get("end_reason") == "identity_failed",
+              ["第一轮 intent=%r 回复=%s" % (_out23a.get("intent"),
+                                              _out23a["reply_text"][:36]),
+               "第二轮 end_reason=%r" % _out23b.get("end_reason")])
     finally:
         config_loader._cache = _orig_cache20
 
