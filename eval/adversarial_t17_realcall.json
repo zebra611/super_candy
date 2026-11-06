@@ -1,0 +1,82 @@
+[
+  {
+    "id": "T17-R1",
+    "category": "adversarial",
+    "tag": "t17_rhetorical_displeasure",
+    "goal": "真实通话 ①：反问式「干什么？」不是提问，必须先说明来意（我是谁/为什么来电），不能接着追问姓名；只跑两轮，用 must_say 钉住承接话术",
+    "turns": ["是我", "干什么？"],
+    "expect": {
+      "closed": false,
+      "final_stage": "IDENTITY",
+      "must_say": ["我是京东客服中心"],
+      "must_not": ["方便说一下您的姓名吗"]
+    },
+    "source": "真实语音 s_0af0a5f16695 / events #6576（11-06 15:06 队长实测）。原回复「没事，方便说下您的姓名吗」，火气零承接。"
+  },
+  {
+    "id": "T17-R2",
+    "category": "adversarial",
+    "tag": "t17_short_tail",
+    "goal": "真实通话 ②：报「765」只有 3 位，必须引导补全四位，不能跳问姓氏、不能当噪声打太极；只跑两轮，用 must_say 钉住引导话术",
+    "turns": ["是我", "765。"],
+    "expect": {
+      "closed": false,
+      "final_stage": "IDENTITY",
+      "must_say": ["少了几位"],
+      "must_not": ["杂音没听清"]
+    },
+    "source": "真实语音 s_0af0a5f16695 / events #6592。原回复「您方便说下姓氏吗」——3 位数字没接住，反而跳到另一个槽位。"
+  },
+  {
+    "id": "T17-R3",
+    "category": "adversarial",
+    "tag": "t17_garbled_name",
+    "goal": "真实通话 ③：糊脸输入「张张国，张。」收不进姓名槽，但人还在说话，第一轮不得直接 identity_failed 挂断",
+    "turns": ["是我", "张张国，张。"],
+    "expect": {
+      "closed": false,
+      "final_stage": "IDENTITY",
+      "must_not": ["暂时核对不上", "稍后让专员联系您"]
+    },
+    "source": "真实语音 s_0af0a5f16695 / events #6608。原回复直接「实在抱歉，这边暂时核对不上，我稍后让专员联系您」并进 DONE，用户后面还在说 Thank you."
+  },
+  {
+    "id": "T17-R4",
+    "category": "adversarial",
+    "tag": "t17_full_replay",
+    "goal": "真实通话完整逐轮回放：反问式火气×2、3 位尾号、含糊「嗯」、糊脸姓名、英文噪声 Thank you. 连续出现，之后用户愿意配合时仍能完整闭环，不早挂、不误回写",
+    "turns": ["嗯，是的，是的。", "干什么？", "你需要干什么？", "765。", "嗯。", "张张国，张。", "Thank you.", "尾号8866", "用着还行", "同意", "对，同意"],
+    "expect": {
+      "closed": true,
+      "consent": true,
+      "must_not": ["暂时核对不上"]
+    },
+    "source": "按 s_0af0a5f16695 的 events #6568、#6576、#6584、#6592、#6600、#6608、#6616 用户原话顺序回放，末尾补上真实通话里用户没来得及给的信息，验证整段乱度之后仍可恢复。"
+  },
+  {
+    "id": "T17-R5",
+    "category": "adversarial",
+    "tag": "t17_rhetorical_not_question",
+    "goal": "词表收窄的反向用例：「这个按钮干什么用的」是真提问，不能被当成火气承接、否则答非所问",
+    "turns": ["是我", "这个按钮干什么用的"],
+    "expect": {
+      "closed": false,
+      "final_stage": "IDENTITY",
+      "must_not_intent": ["complain"]
+    },
+    "source": "守词表边界：只收短反问，不收带「用的/这个/功能」的真提问。若哪天把裸词「干什么」放进 COMPLAIN_WORDS，这条会变红。"
+  },
+  {
+    "id": "T17-R6",
+    "category": "adversarial",
+    "tag": "t17_recovery",
+    "goal": "真实通话 ④：连问两句反问式火气之后，用户愿意配合时仍能完整闭环；不许因为前面的乱度把后续信息当空气",
+    "turns": ["是我", "干什么？", "你需要干什么？", "尾号8866", "用着还行", "同意", "对，同意"],
+    "expect": {
+      "closed": true,
+      "consent": true,
+      "must_not": ["没事，方便说下"]
+    },
+    "source": "真实语音 s_0af0a5f16695 / events #6576 #6584 之后的恢复路径。"
+  }
+]

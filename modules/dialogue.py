@@ -48,7 +48,16 @@ YES_EXACT = {"是", "对", "好", "行", "可以", "是的", "对的",
 # 加词比改规则安全：它们是明确表态，不是含糊。
 YES_CONTAINS = ("同意", "没问题", "那就办", "办吧", "可以可以", "就这样", "要了", "需要",
                 "那我要", "就要", "我同意",
-                "那就要", "就要了", "要要", "办上吧", "还是办", "就办", "那我办", "要要要")
+                "那就要", "就要了", "要要", "办上吧", "还是办", "就办", "那我办", "要要要",
+                # T14 意向翻转：「先应一声，再表态」是拒绝后改主意最自然的语序
+                # （"那行，我要""好，我要"）。11-06 L04 九轮长对话里，用户第 2 轮
+                # 明确拒绝、第 8 轮说"那行，我要"，系统却在 DONE 里复读结束语——
+                # 不是改口逻辑没写（_stage_done 早有），是这句压根没被判成肯定。
+                # 刻意**不放裸词「我要」**：E03「我要投诉你们」、自由表达「我要退款」
+                # 都是诉求不是同意，加裸词会把它们误判成同意并提前闭环。
+                # 只收带承接词或带动作补语的确定说法。
+                "那行，我要", "行，我要", "好，我要", "那好，我要",
+                "我要办", "给我办", "办一个", "我要这个", "那我办吧")
 
 NO_EXACT = {"不", "不要", "不用", "不了", "算了", "拒绝", "没兴趣", "不需要", "别打"}
 NO_CONTAINS = ("不要", "不用", "不需要", "没兴趣", "算了", "别打", "拒绝", "不办", "不了")
@@ -68,6 +77,26 @@ ANGRY_WORDS = ("投诉", "骗子", "烦", "垃圾", "滚", "气死", "恶心", "
 # 实测"那你还要我说啥"以前直接换来一句"您同意领取吗"，用户会觉得自己在自说自话。
 COMPLAIN_WORDS = ("说啥", "让我说", "有啥用", "有什么用", "说了有用", "说了也没用",
                   "还要我说", "说了白说", "问这有啥", "白问了")
+
+# T17-② 反问式不满：「干什么？」「你需要干什么？」「搞什么」「干嘛」。
+# 11-06 真实通话 s_0af0a5f16695 里用户连问两句这种话，旧逻辑因为含"什么"
+# 判成 ask 走知识库/继续追问，回复「没事，方便说下您的姓名吗」——火气零承接，
+# 还用了「没事」这种敷衍开头，用户第二次问完就直接不给信息了。
+# 它不是提问（用户并不想知道客服在做什么），是"你到底要干嘛"的不耐烦。
+# 但「这个功能干什么用的」「你干什么工作」是真提问，所以下面按短句 +
+# 排除词收窄，不放裸词进 COMPLAIN_WORDS。
+RHETORICAL_DISPLEASURE = ("干什么", "干嘛", "搞什么", "整什么", "要干嘛", "想干嘛")
+_RHETORICAL_EXCLUDE = ("用的", "工作", "怎么", "为什么", "啥用", "什么意思",
+                       "这个", "那个", "按钮", "功能")
+
+
+def _is_rhetorical_displeasure(text):
+    core = _norm(text)
+    if not core or len(core) > 10:
+        return False
+    if any(x in core for x in _RHETORICAL_EXCLUDE):
+        return False
+    return any(w in core for w in RHETORICAL_DISPLEASURE)
 
 # "不要钱 / 不收钱"里的"不要"修饰的是"钱"，不是"这个服务"（T10 否定作用域）。
 # 不区分的话，"不要钱啊，那办上吧"会被判成拒绝——把一个想办的客户记成"客户拒绝"，
@@ -310,7 +339,9 @@ def classify(text):
         strong.append(("angry", CONF_CONTAINS))
     # 抱怨单独一个标记，不并进 angry：angry 的处理是"暂停推进+致歉"，
     # complain 的处理是"致歉后照常往下走"——用户只是在泄气，不是要中断这通电话。
-    if any(w in t for w in COMPLAIN_WORDS):
+    # 反问式不满并入 complain（不新造标记）：它的处理同样是"先接住情绪"，
+    # 区别在于 IDENTITY 阶段要改用「说明来意」的话术，见 _stage_identity。
+    if any(w in t for w in COMPLAIN_WORDS) or _is_rhetorical_displeasure(t):
         flags["complain"] = True
         strong.append(("complain", CONF_CONTAINS))
 
@@ -1117,11 +1148,20 @@ def _verify_identity(session):
     # 售后主场景仍走 query_customer，两个业务域共用 4 位尾号键空间，
     # 无条件查申请单会让主场景的「错误尾号 1234」意外命中归档数据。
     use_app = bool(config_loader.load().get("application_mode"))
+    session.pop("lookup_error", None)
     for slot in ("tail", "name", "company", "application_id"):
         val = session["identity_slots"].get(slot)
         if not val:
             continue
         hit = tools.query_application(val) if use_app else {"found": False}
+        # P4：查询类工具失败的形状是 {"error": "TIMEOUT", "found": False, ...}
+        # （见 adapters/base.py 的 _fail）。只看 found 会把它当成"查无此人"，
+        # 清掉槽位、换一个槽位再问——真实事故里 4 轮 4147ms 一直在问尾号，
+        # 用户报了也没用，因为根本不是人的问题，是上游掉线。
+        # 掉线时不重问、不回写，走兜底话术转专员。
+        if hit.get("error"):
+            session["lookup_error"] = hit["error"]
+            return None
         if hit.get("found"):
             rec = hit.get("application") or {}
             session["slots"]["identity_confirmed"] = True
@@ -1135,6 +1175,9 @@ def _verify_identity(session):
             session["slots"]["identity_via"] = slot
             return rec
         hit_customer = tools.query_customer(val)
+        if hit_customer.get("error"):
+            session["lookup_error"] = hit_customer["error"]
+            return None
         if hit_customer.get("found"):
             session["slots"]["identity_confirmed"] = True
             session["slots"]["customer"] = hit_customer.get("customer")
@@ -1142,6 +1185,22 @@ def _verify_identity(session):
             return hit_customer.get("customer")
         session["identity_slots"][slot] = ""
     return None
+
+
+def _lookup_failed(session):
+    """P4：把「上游掉线」变成一次明确的收尾，而不是继续追问。
+
+    返回 None 表示没出错，调用方照常往下走；否则返回一句兜底 + DONE。
+    不回写工单——身份都没核上，写出去的业务结论没有意义。
+    """
+    code = session.pop("lookup_error", None)
+    if not code:
+        return None
+    # 统一用 timeout 那句「稍后让专员回电」，不用 error 那句「麻烦再说一遍」：
+    # 上游掉线时用户重复多少遍都查不到，请他再说一遍是纯消耗。
+    # code 留在 slots 里供事件/工单归因（TIMEOUT 与 UPSTREAM 要能分开看）。
+    session["slots"]["lookup_error"] = code
+    return _finish(session, fallback_for("timeout"), "tool_error")
 
 
 def _next_identity_slot(session, prefer=None):
@@ -1467,6 +1526,10 @@ def _stage_greeting(session, text, flags):
         identity_cfg = config_loader.stage_config("IDENTITY")
         return _reply(session, _soothe(identity_cfg.get("reply_ok", ""), flags),
                       next_stage="NEED", intent="identity_ok")
+    # P4：上游掉线不能走「报了但核不上 → 换槽位再问」这条路。
+    failed = _lookup_failed(session)
+    if failed:
+        return failed
     if took:
         # 报了但对不上：问另一个槽位。刚报过的那个再问一遍是最没信息量的一句
         # （用户会以为你没听见他说话）。
@@ -1508,6 +1571,21 @@ def _stage_identity(session, text, flags):
     # 用户会把这句话听成"我的不满你根本没接"。
     if flags.get("angry"):
         return _angry_hold(session, "IDENTITY")
+
+    # T17-②：反问式不满（"干什么？""你需要干什么？"）必须**先说明来意**，
+    # 不能像真实事故那样接着问姓名、更不能回一句"没事"敷衍。
+    # 与 _angry_hold 的区别：骂人是暂停推进安抚；反问是不满但人还在听，
+    # 把"我是谁、为什么打来"讲清楚通常就愿意配合了。
+    # 只认反问式，普通 COMPLAIN_WORDS（"说了也没用"）仍走原来的 _soothe
+    # 路径，不改变既有行为。不烧 slot_asks、不推进阶段、不回写。
+    if (flags.get("complain") and not flags.get("angry")
+            and _is_rhetorical_displeasure(text)):
+        return _reply(
+            session,
+            _identity_text("reply_complain_hold",
+                           "不好意思打扰您了，我是京东客服中心的小采，来电不是推销，"
+                           "是想跟您核对一下信息。麻烦您配合一下，方便的话说一下手机号后四位。"),
+            intent="complain")
 
     # C6：噪声与环境人声单独走一条通道，绝不落进含糊/核身失败的桶里。
     # classify 已把「无中文且无数字」的 ASR 输出标成 evidence=noise——
@@ -1569,6 +1647,11 @@ def _stage_identity(session, text, flags):
         return _reply(session,
                       _fill_application(_soothe(cfg.get("reply_ok", ""), flags), app),
                       next_stage="NEED", intent="identity_ok")
+
+    # P4：查询工具报 error 时不重问、不烧核身次数，直接兜底转专员。
+    failed = _lookup_failed(session)
+    if failed:
+        return failed
 
     # C6：这一轮没给出任何可核身信息 —— 旁人说话、答非所问、中文环境
     # 人声被 ASR 当成用户发言。纯文本层**区分不了**「谁在说话」，但可以
@@ -1792,7 +1875,12 @@ def _stage_offer(session, text, flags):
     if flags["no"]:
         return _do_writeback(session, False)
 
-    # 说了方案之后必须走确认，不能默认同意
+    # 说了方案之后必须走确认，不能默认同意。
+    # T13 复核（11-06）：曾尝试在这里对「明确肯定」直接回写以让 N206 四轮闭环，
+    # 实测撞红 verify 证据 5 与 test_correction 共 5 条断言——CONFIRM 的
+    # must_say「确认」是合规必答要素，跳过它等于为提分削合规，已撤回。
+    # N206 的真实根因是用例轮数与规格不匹配（见 seed_cases.json N206._note），
+    # 不是意图判定缺陷；T10 否定作用域对「不要钱啊，那办吧」判的是 yes，正确。
     confirm = config_loader.stage_config("CONFIRM")
     return _reply(session, _soothe(confirm.get("reply", ""), flags),
                   next_stage="CONFIRM", intent=_intent_name(flags))

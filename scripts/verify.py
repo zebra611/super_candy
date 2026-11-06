@@ -1608,6 +1608,139 @@ def main():
           ["退出码 %d；末行：%s" % (_c6m.returncode,
                                     (_c6m_out or ["无输出"])[-1][:80])])
 
+    # ---- 证据 23：S1 intent 灰度决策（降级路径 / 默认不开 / 变异自测） ----
+    print()
+    print("=" * 74)
+    print("证据 23：S1 intent 模型灰度——降级路径与默认关闭")
+    print("=" * 74)
+
+    _s1 = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                       "intent_gray_probe.py"),
+                          "--offline", "--self-test"],
+                         cwd=ROOT, capture_output=True, text=True, timeout=180,
+                         env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    _s1_out = ((_s1.stdout or "") + (_s1.stderr or "")).strip().splitlines()
+    check("S1 降级路径 13/13（含密钥读取异常不外抛）且变异 2/2 能报红",
+          _s1.returncode == 0
+          and any("13/13 通过" in l for l in _s1_out)
+          and any("2/2 断言能变红" in l for l in _s1_out),
+          ["退出码 %d；末行：%s" % (_s1.returncode,
+                                    (_s1_out or ["无输出"])[-1][:80])])
+
+    with open(os.path.join(ROOT, "config", "scene.json"), encoding="utf-8") as _f:
+        _main_scene = json.load(_f)
+    _intent_cfg = _main_scene.get("intent") or {}
+    check("S1 默认仍 provider=template（决策文档要求不擅自开启模型）",
+          str(_intent_cfg.get("provider") or "template").strip() != "dashscope",
+          ["intent 段：%r" % _intent_cfg])
+
+    # ---- 证据 24：S2 kb 语义召回（降级 / 默认关闭 / 阈值安全线） ----
+    print()
+    print("=" * 74)
+    print("证据 24：S2 kb 语义召回外挂层——降级路径与默认关闭")
+    print("=" * 74)
+
+    _s2 = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                       "test_kb_semantic.py"),
+                          "--offline"],
+                         cwd=ROOT, capture_output=True, text=True, timeout=300,
+                         env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    _s2_out = ((_s2.stdout or "") + (_s2.stderr or "")).strip().splitlines()
+    check("S2 降级 9/9（无密钥/超时/乱码/no_call/默认阈值安全线）+ 变异 2/2",
+          _s2.returncode == 0
+          and any("9/9 通过" in l for l in _s2_out)
+          and any("2/2 断言能变红" in l for l in _s2_out),
+          ["退出码 %d；末行：%s" % (_s2.returncode,
+                                    (_s2_out or ["无输出"])[-1][:80])])
+
+    with open(os.path.join(ROOT, "config", "scenes", "pop_reject.json"),
+              encoding="utf-8") as _f:
+        _pop_scene = json.load(_f)
+    _sem_main = (_main_scene.get("knowledge") or {}).get("semantic") or {}
+    _sem_pop = (_pop_scene.get("knowledge") or {}).get("semantic") or {}
+    check("S2 默认关闭：两个场景都未开启 semantic（docs/27 开启建议）",
+          str(_sem_main.get("provider") or "").strip() != "dashscope"
+          and str(_sem_pop.get("provider") or "").strip() != "dashscope",
+          ["main=%r pop=%r" % (_sem_main, _sem_pop)])
+
+    from modules import kb_semantic as _kbs
+    check("S2 生产默认阈值 ≥0.60（0.45 实测无关样本 7/10 被乱答）",
+          _kbs._DEFAULT_THRESHOLD >= 0.60,
+          ["当前 %.2f" % _kbs._DEFAULT_THRESHOLD])
+
+    # ---- 证据 25：T17 / P4 回归 + 故障用例隔离 + T15 答辩口径 ----
+    print()
+    print("=" * 74)
+    print("证据 25：智能化线 T17/P4 回归与答辩口径")
+    print("=" * 74)
+
+    _ENV = dict(os.environ, PYTHONIOENCODING="utf-8")
+
+    _t17 = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                        "adversarial_run.py"),
+                           "--cases", os.path.join(ROOT, "eval",
+                                                   "adversarial_t17_realcall.json"),
+                           "--rounds", "1", "--no-report"],
+                          cwd=ROOT, capture_output=True, text=True, timeout=300,
+                          env=_ENV)
+    _t17_out = ((_t17.stdout or "") + (_t17.stderr or "")).strip().splitlines()
+    check("T17 真实通话 6 条对抗用例全部通过（中间轮承接也断言，不是只看闭环）",
+          _t17.returncode == 0 and any("通过 6/6" in l for l in _t17_out),
+          ["退出码 %d；末行：%s" % (_t17.returncode,
+                                    (_t17_out or ["无输出"])[-1][:80])])
+
+    _t17m = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                         "test_t17_mutation.py")],
+                           cwd=ROOT, capture_output=True, text=True, timeout=300,
+                           env=_ENV)
+    _t17m_out = ((_t17m.stdout or "") + (_t17m.stderr or "")).strip().splitlines()
+    check("T17 变异 3/3：反问承接/3位尾号引导/词表边界失效时必须报红",
+          _t17m.returncode == 0
+          and any("T17 变异验证：3/3 通过" in l for l in _t17m_out),
+          ["退出码 %d；末行：%s" % (_t17m.returncode,
+                                    (_t17m_out or ["无输出"])[-1][:80])])
+
+    _p4 = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                       "test_p4_timeout.py")],
+                         cwd=ROOT, capture_output=True, text=True, timeout=300,
+                         env=_ENV)
+    _p4_out = ((_p4.stdout or "") + (_p4.stderr or "")).strip().splitlines()
+    check("P4 故障注入 3/3 + 变异（关掉 _lookup_failed 必须报红）",
+          _p4.returncode == 0
+          and any("P4 故障注入基线：3/3 通过" in l for l in _p4_out)
+          and any("P4 变异验证：PASS" in l for l in _p4_out),
+          ["退出码 %d；末行：%s" % (_p4.returncode,
+                                    (_p4_out or ["无输出"])[-1][:80])])
+
+    _eval_dir = os.path.join(ROOT, "eval")
+    _auto = [n for n in os.listdir(_eval_dir)
+             if n.startswith("adversarial") and n.endswith(".json")]
+    check("需故障注入的 P4 用例已隔离，不污染默认 adversarial*.json 跑批",
+          not any("p4" in n.lower() for n in _auto)
+          and os.path.exists(os.path.join(_eval_dir, "fault_cases",
+                                          "p4_tool_error.json")),
+          ["自动跑批文件：%s" % ", ".join(sorted(_auto))])
+
+    _ib = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                       "intent_bench.py"),
+                          "--no-model"],
+                         cwd=ROOT, capture_output=True, text=True, timeout=180,
+                         env=_ENV)
+    _ib_out = ((_ib.stdout or "") + (_ib.stderr or "")).strip().splitlines()
+    check("T15 intent_bench 样本条数以 SAMPLES 为准（25 条）且离线基准可跑",
+          _ib.returncode == 0
+          and any("25 条口语化样本" in l for l in _ib_out),
+          ["退出码 %d；末行：%s" % (_ib.returncode,
+                                    (_ib_out or ["无输出"])[-1][:80])])
+
+    with open(os.path.join(ROOT, "docs", "21_答辩提纲与演示脚本.md"),
+              encoding="utf-8") as _f:
+        _d21 = _f.read()
+    check("T15 答辩口径写明「自拟样本 ≠ 泛化准确率」且不再念 86/88",
+          "自证覆盖" in _d21 and "不是泛化准确率" in _d21
+          and "25 条" in _d21 and "86/88" not in _d21,
+          ["docs/21 长度 %d 字" % len(_d21)])
+
     print()
     print("=" * 74)
     total = len(results)
