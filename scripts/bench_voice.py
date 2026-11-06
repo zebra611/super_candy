@@ -53,6 +53,9 @@ from modules import voice                            # noqa: E402
 
 OUT_JSON = os.path.join(_ROOT, "data", "bench_latest.json")
 
+# docs/04 §4：超过 10 秒记为超时，不并入分位数，但要单列条数。
+TIMEOUT_MS = 10000
+
 
 # 30 句模拟用户话术，长度从 2 字到 30 字。
 # 刻意覆盖真实外呼里会遇到的类型：确认身份、拒绝、质疑、报号码、长句解释。
@@ -127,11 +130,20 @@ def tts_to_pcm(text):
 
 
 def pct(vals, q):
-    """最近秩分位数。不插值——小样本插值会造出不存在的数。"""
+    """线性插值分位数，与 events._percentile 同一公式。
+
+    以前这里用最近秩法，和看板/门槛用的是两套算法——同一批数据会算出两个
+    P50，评审问"到底哪个"就答不上来。docs/04 §4 已经定了用插值，这里跟随它。
+    """
     if not vals:
         return 0.0
     s = sorted(vals)
-    return float(s[min(len(s) - 1, max(0, int(round(q * (len(s) - 1))))) ])
+    if len(s) == 1:
+        return float(s[0])
+    k = (len(s) - 1) * q
+    lo = int(k)
+    hi = min(lo + 1, len(s) - 1)
+    return float(s[lo] + (s[hi] - s[lo]) * (k - lo))
 
 
 def main():
@@ -191,19 +203,35 @@ def main():
         print("\n没有有效样本。检查密钥是否配好（config/secrets.json）。")
         return 1
 
-    print("\n" + "=" * 78)
-    print("有效样本 %d 轮，失败 %d 轮" % (len(ok), len(fails)))
-    print("=" * 78)
+    # 口径按 docs/04 §4：超时（>10s）不并入分位数，单列条数；样本 <20 不出 P95。
+    # 只报 P50 视为无效报告，所以样本数与超时条数必须和分位数一起出现。
+    def split(vals):
+        keep = [v for v in vals if 0 < v <= TIMEOUT_MS]
+        timeouts = sum(1 for v in vals if v > TIMEOUT_MS)
+        return keep, timeouts
 
     def line(name, key):
-        v = [r[key] for r in ok]
-        print("%-14s P50=%6.0fms  P95=%6.0fms  max=%6.0fms  min=%5.0fms"
-              % (name, pct(v, .5), pct(v, .95), max(v), min(v)))
+        keep, timeouts = split([r[key] for r in ok])
+        if not keep:
+            print("%-18s 无有效样本（超时 %d）" % (name, timeouts))
+            return keep, timeouts
+        p95 = ("%6.0fms" % pct(keep, .95)) if len(keep) >= 20 else "样本不足不出"
+        print("%-18s 样本 %2d（超时 %d）  P50=%6.0fms  P95=%s  max=%6.0fms"
+              % (name, len(keep), timeouts, pct(keep, .5), p95, max(keep)))
+        return keep, timeouts
 
-    line("识别 ASR", "asr_ms")
+    print("\n" + "=" * 78)
+    print("有效样本 %d 轮，失败 %d 轮（每轮=一次对话轮次，不是一次通话）" % (len(ok), len(fails)))
+    print("=" * 78)
+    print("口径：服务端；超时 >%dms 不并入分位数；分位数用线性插值（同 events._percentile）" % TIMEOUT_MS)
+
+    keep_total, to_total = line("识别 ASR", "asr_ms")
     line("首段合成", "tts_first_ms")
     line("服务端总响应", "total_ms")
     line("服务端首字下界", "server_first_ms")
+
+    estimated = sum(1 for r in ok if r["tts_mode"] == "browser")
+    print("\n其中估算 %d 条（合成回落成浏览器播报，首字不含真实合成耗时）" % estimated)
 
     # 按字数分组，验证"合成耗时随字数线性增长"这个结论是否仍成立
     print("\n按字数分组（验证合成耗时的增长趋势）：")
@@ -215,16 +243,17 @@ def main():
                      pct([r["tts_first_ms"] for r in g], .5),
                      pct([r["total_ms"] for r in g], .5)))
 
-    total_v = [r["total_ms"] for r in ok]
-    pass_gate = sum(1 for v in total_v if v <= 2000)
+    pass_gate = sum(1 for v in keep_total if v <= 2000)
     print("\n门槛判定（服务端口径，不含网络往返与浏览器播放启动）：")
-    print("  %d/%d 轮 <= 2000ms，占 %.0f%%" % (pass_gate, len(ok), pass_gate * 100.0 / len(ok)))
+    if keep_total:
+        print("  %d/%d 轮 <= 2000ms，占 %.0f%%（超时 %d 条已排除）"
+              % (pass_gate, len(keep_total), pass_gate * 100.0 / len(keep_total), to_total))
+    else:
+        print("  无有效样本，不判定")
     print("  注意：浏览器实测还要加一个网络往返 + 播放启动，约 100-250ms。")
 
-    fallback = sum(1 for r in ok if r["tts_mode"] == "browser")
-    if fallback:
-        print("\n  (!) %d 轮合成回落成浏览器播报，这些轮的首字口径不含真实合成耗时。"
-              % fallback)
+    if estimated:
+        print("\n  (!) %d 轮合成回落成浏览器播报，这些轮的首字口径不含真实合成耗时。" % estimated)
 
     with open(OUT_JSON, "w", encoding="utf-8") as f:
         json.dump({
@@ -233,14 +262,17 @@ def main():
             "failed": len(fails),
             "failed_detail": [{"n": n, "text": t, "error": e} for n, t, e in fails],
             "note": "输入为 TTS 合成人声；首字为服务端口径，非浏览器实测",
+            "caliber": {"unit": "turn", "timeout_ms": TIMEOUT_MS,
+                        "percentile": "linear_interpolation", "timeouts": to_total,
+                        "estimated": estimated},
             "summary": {
                 "asr_p50": pct([r["asr_ms"] for r in ok], .5),
-                "asr_p95": pct([r["asr_ms"] for r in ok], .95),
+                "asr_p95": pct([r["asr_ms"] for r in ok], .95) if len(ok) >= 20 else None,
                 "tts_first_p50": pct([r["tts_first_ms"] for r in ok], .5),
-                "tts_first_p95": pct([r["tts_first_ms"] for r in ok], .95),
-                "total_p50": pct(total_v, .5),
-                "total_p95": pct(total_v, .95),
-                "within_gate": "%d/%d" % (pass_gate, len(ok)),
+                "tts_first_p95": pct([r["tts_first_ms"] for r in ok], .95) if len(ok) >= 20 else None,
+                "total_p50": pct(keep_total, .5),
+                "total_p95": pct(keep_total, .95) if len(keep_total) >= 20 else None,
+                "within_gate": "%d/%d" % (pass_gate, len(keep_total)),
             },
             "rows": rows,
         }, f, ensure_ascii=False, indent=2)
