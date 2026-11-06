@@ -432,18 +432,18 @@ git config core.hooksPath .githooks
 ## 九、分支与合并状态
 
 `main` 是**随时能拿去演示**的那条线。目前 main 已含 2B 工具适配层（#14）、
-场景路径与日志落盘（#16）、落库开关文档化（#19），自检 87/87。开着的 PR：
+场景路径与日志落盘（#16）、落库开关文档化（#19）、团队对照与密钥提示（#20）、
+评测与质检工具链（#17：闭环双指标 / `_assert_isolated` 跑批隔离 / 对抗集 / docs/24 口径），
+自检 **91/91**。开着的 PR 只剩一个：
 
 | 分支 | 状态 | 内容 |
 |---|---|---|
-| `feature/eval-metering` | **PR #17 修改中** | 评测工具链（闭环双指标 / 语音基准 / 对抗集跑批 / 指标口径 docs/24），需 rebase + 吸收 #15 的 docs 同步 |
-| `exp/sim-adversarial` | **PR #18 排队中** | 8 角色×6 场景对抗模拟系统（确定性选句 + 课程进化），等 #17 合后 rebase |
-| `feat/r7-closed-loop-metric` | PR #15 已关闭（分支暂留） | 闭环率口径，被 #17 T16 接替（超集）；#17 合并后删分支 |
+| `exp/sim-adversarial` | **PR #18 修改中** | 8 角色×6 场景对抗模拟系统（确定性选句 + 课程进化）；待办：rebase 到 d3473a5、跑批产物出仓库、集成冒烟测试挂闸门（见 PR 内指南） |
 
-> 已合并的分支（`feat/platform-m5-m8`、`feat/task2-*`、`feat/r1-stage0-unlock`、
-> `feat/2b-tool-adapters`、`fix/2b-idempotency-switch` 等）合入后都已删除或待删。
-> `#4`~`#13` 那批堆叠 PR 也是同样结局：内容进了 main，PR 记录留着当审计。
-> 看某个功能是哪次进来的，用 `git log --oneline --all -- <文件>` 比翻 PR 列表快。
+> 已合并/已关闭的分支（`feat/platform-m5-m8`、`feat/task2-*`、`feat/r1-stage0-unlock`、
+> `feat/2b-tool-adapters`、`feature/eval-metering`、`feat/r7-closed-loop-metric` 等）都删除了，
+> 远程已 prune。`#4`~`#15` 的 PR 记录留着当审计：内容进了 main，看某功能哪次进来的，
+> 用 `git log --oneline --all -- <文件>` 比翻 PR 列表快。
 
 **PR #1 已于 2026-11-04 合入 `main`，但不是原样合**：审核发现的 4 个缺陷先修再进，
 修复明细见 [reviews/PR1_审核意见.md](reviews/PR1_审核意见.md)，最关键的一个是安全洞：
