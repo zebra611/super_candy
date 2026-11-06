@@ -4,96 +4,221 @@
     "category": "adversarial",
     "tag": "d1_bare_name",
     "goal": "D1：裸报名字（无“我叫”引导词）应能收进姓名槽，不得重复追问到挂断",
-    "turns": ["是我", "刘雨儿。", "尾号8866", "用着还行", "同意", "对，同意"],
-    "expect": {"closed": true, "consent": true}
+    "turns": [
+      "是我",
+      "刘雨儿。",
+      "尾号8866",
+      "用着还行",
+      "同意",
+      "对，同意"
+    ],
+    "expect": {
+      "closed": true,
+      "consent": true
+    }
   },
   {
     "id": "L902",
     "category": "adversarial",
     "tag": "d1_bare_name",
     "goal": "D1 变体：只报一个姓加句号，考察槽位是否只认引导词",
-    "turns": ["对", "张。", "尾号8866", "还行", "可以", "同意"],
-    "expect": {"closed": true, "consent": true}
+    "turns": [
+      "对",
+      "张。",
+      "尾号8866",
+      "还行",
+      "可以",
+      "同意"
+    ],
+    "expect": {
+      "closed": true,
+      "consent": true
+    }
   },
   {
     "id": "L903",
     "category": "adversarial",
     "tag": "d2_anger_offer",
     "goal": "D2：在方案环节骂“骗子”，必须先承接情绪，不得继续念确认话术",
-    "turns": ["是我，尾号8866", "用着一般", "你们这是骗子服务", "行吧你说完", "可以", "同意"],
-    "expect": {"closed": true, "consent": true,
-               "must_not": ["简单回我一句同意或者不需要"]}
+    "turns": [
+      "是我，尾号8866",
+      "用着一般",
+      "你们这是骗子服务",
+      "行吧你说完",
+      "可以",
+      "同意"
+    ],
+    "expect": {
+      "closed": true,
+      "consent": true,
+      "must_not": [
+        "简单回我一句同意或者不需要"
+      ]
+    }
   },
   {
     "id": "L904",
     "category": "adversarial",
     "tag": "d2_anger_confirm",
     "goal": "D2 变体：在确认环节发火，不得用“回我一句同意”硬推",
-    "turns": ["是我，尾号8866", "用着还行", "可以", "你们就是骗子", "算了你说吧", "同意"],
-    "expect": {"consent": true, "must_not": ["简单回我一句同意或者不需要"]}
+    "turns": [
+      "是我，尾号8866",
+      "用着还行",
+      "可以",
+      "你们就是骗子",
+      "算了你说吧",
+      "同意"
+    ],
+    "expect": {
+      "consent": true,
+      "must_not": [
+        "简单回我一句同意或者不需要"
+      ]
+    }
   },
   {
     "id": "L905",
     "category": "adversarial",
     "tag": "d3_knowledge_mix",
     "goal": "D3：有效期与收费同一句问，两件事都要答，不得只答一个或编造",
-    "turns": ["是我，尾号8866", "用着还行", "这个权益多久、要钱吗", "哦那还行", "同意"],
-    "expect": {"closed": true, "must_not": ["永久有效", "终身"]}
+    "turns": [
+      "是我，尾号8866",
+      "用着还行",
+      "这个权益多久、要钱吗",
+      "哦那还行",
+      "同意"
+    ],
+    "expect": {
+      "closed": true,
+      "must_not": [
+        "永久有效",
+        "终身"
+      ]
+    }
   },
   {
     "id": "L906",
     "category": "adversarial",
     "tag": "d4_boundary_change",
     "goal": "D4：环节切换边界改口（包装→屏幕），诉求应更新，不得按旧诉求继续推",
-    "turns": ["是我，尾号8866", "包装压坏了", "等等我改一下，其实是屏幕碎了", "对，屏碎了", "可以", "同意"],
-    "expect": {"closed": true, "consent": true, "must_not": ["包装压坏的情况"]}
+    "turns": [
+      "是我，尾号8866",
+      "包装压坏了",
+      "等等我改一下，其实是屏幕碎了",
+      "对，屏碎了",
+      "可以",
+      "同意"
+    ],
+    "expect": {
+      "closed": true,
+      "consent": true,
+      "must_not": [
+        "包装压坏的情况"
+      ]
+    }
   },
   {
     "id": "L907",
     "category": "adversarial",
     "tag": "d5_mixed_yes",
     "goal": "D5：“好的嗯”这类肯定词+语气词应判肯定或追问，不得直接判 unknown",
-    "turns": ["是我，尾号8866", "用着还行", "可以", "好的嗯"],
-    "expect": {"consent": true}
+    "turns": [
+      "是我，尾号8866",
+      "用着还行",
+      "可以",
+      "好的嗯"
+    ],
+    "expect": {
+      "consent": true
+    }
   },
   {
     "id": "L908",
     "category": "adversarial",
     "tag": "d6_complaint",
     "goal": "D6：用户抱怨“那还要让我说啥”时，必须先致歉再问，不得换个问法硬问",
-    "turns": ["是我，尾号8866", "用着一般", "那还要让我说啥", "行吧，你说权益", "可以", "同意"],
-    "expect": {"closed": true, "consent": true}
+    "turns": [
+      "是我，尾号8866",
+      "用着一般",
+      "那还要让我说啥",
+      "行吧，你说权益",
+      "可以",
+      "同意"
+    ],
+    "expect": {
+      "closed": true,
+      "consent": true
+    }
   },
   {
     "id": "L909",
     "category": "adversarial",
     "tag": "d7_endless_vague",
     "goal": "D7：同一槽位连续含糊两次应体面结束，不得在尾号/姓名/姓氏间无限轮换",
-    "turns": ["嗯", "哦", "嗯……", "哦哦"],
-    "expect": {"closed": false, "final_stage": "DONE"}
+    "turns": [
+      "嗯",
+      "哦",
+      "嗯……",
+      "哦哦"
+    ],
+    "expect": {
+      "closed": false,
+      "final_stage": "DONE"
+    }
   },
   {
     "id": "L910",
     "category": "adversarial",
     "tag": "d7_endless_vague",
     "goal": "D7 变体：核验环节连续含糊，不得反复换问法",
-    "turns": ["是我", "嗯……", "哦", "嗯"],
-    "expect": {"closed": false, "final_stage": "DONE"}
+    "turns": [
+      "是我",
+      "嗯……",
+      "哦",
+      "嗯"
+    ],
+    "expect": {
+      "closed": false,
+      "final_stage": "DONE"
+    }
   },
   {
     "id": "L911",
     "category": "adversarial",
     "tag": "d2_price_trap",
     "goal": "价格质疑与情绪叠加：不得用“免费”搪塞已产生的扣费投诉",
-    "turns": ["我卡里怎么少了三十块", "是我，尾号8866", "你们乱收费", "那钱退不退", "算了你登记吧", "同意"],
-    "expect": {"closed": true, "must_not": ["绝对是误扣", "肯定是系统问题"]}
+    "turns": [
+      "我卡里怎么少了三十块",
+      "是我，尾号8866",
+      "你们乱收费",
+      "那钱退不退",
+      "算了你登记吧",
+      "同意"
+    ],
+    "expect": {
+      "closed": true,
+      "must_not": [
+        "绝对是误扣",
+        "肯定是系统问题"
+      ]
+    }
   },
   {
     "id": "L912",
     "category": "adversarial",
     "tag": "d1_bare_name",
-    "goal": "D1 叠加听不清：报了名字但被噪声打断，不得连问三次姓名",
-    "turns": ["喂听得见吗", "刘雨儿", "啊？你说什么", "尾号8866", "可以", "同意"],
-    "expect": {"closed": true, "consent": true}
+    "goal": "D1 叠加噪声：问姓名后报了名字但被信号打断，不得连问三次姓名",
+    "turns": [
+      "喂听得见吗",
+      "是我",
+      "刘雨儿",
+      "啊？你说什么",
+      "尾号8866",
+      "同意"
+    ],
+    "expect": {
+      "closed": true,
+      "consent": true
+    }
   }
 ]
