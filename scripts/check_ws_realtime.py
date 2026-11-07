@@ -254,10 +254,17 @@ def main():
         partials = [(t, m.get("text") or "") for t, m in ws.msgs
                     if m.get("type") == "partial"]
         texts = [p for _, p in partials if p]
-        print("  [%s] 半句字幕 %d 条%s"
-              % ("OK" if len(texts) >= 3 else "FAIL", len(texts),
+        # 门槛是「≥2 条且后者更长」，不是「≥3 条」。
+        # 原来写死 3 条，但这取决于云端怎么分批：同一段 2.4 秒音频，
+        # 实测有时出 8 条、有时只出 2 条（"你好" → "你好，我是"），
+        # 拿条数当断言就是拿云端的抖动当标准，会时不时的假红。
+        # 真正要证明的是"边听边出、且内容在增长"，两条就够说明不是一次性吐完。
+        _grew = bool(texts) and len(texts[-1]) > len(texts[0])
+        ok_partial = len(texts) >= 2 and _grew
+        print("  [%s] 半句字幕 %d 条（后者更长=%s）%s"
+              % ("OK" if ok_partial else "FAIL", len(texts), _grew,
                  ("：" + " → ".join(texts[:5])) if texts else ""))
-        ok_all &= len(texts) >= 3
+        ok_all &= ok_partial
 
         dups = [(a, b) for a, b in zip(texts, texts[1:]) if near_dup(a, b)]
         print("  [%s] 相邻字幕没有重复推送（%d 处可疑）"
