@@ -213,7 +213,15 @@ Serena），声音不再是浏览器机械音。顺带修掉三个实测暴露�
 
 ### 最快的方式
 
-双击项目根目录的 **`启动.bat`** → 浏览器自动打开 `http://127.0.0.1:8000` → 点「开始通话」。
+按系统选一个入口（效果一样，都是启动本地服务并自动开浏览器到 `http://127.0.0.1:8000`）：
+
+- **Windows**：双击项目根目录的 **`启动.bat`**
+- **macOS**：双击 **`启动.command`**。首次若提示“无法验证开发者”，在 Finder 里**右键 → 打开**；
+  如果双击被文本编辑器打开，先在终端执行一次 `chmod +x 启动.command` 再双击。
+  也可以直接命令行：`cd 项目目录 && python3 app.py`
+- **Linux / 通用命令行**：`python3 app.py`
+
+启动后 → 点「开始通话」。
 
 点完「开始通话」就不用再碰按钮了：**直接说话**，说完约 0.7 秒自动提交；
 客服说话时**可以直接插话打断**，它会立刻闭嘴。想安静一下可以点「暂停聆听」（等于电话的静音键）。
@@ -264,7 +272,7 @@ APP_SCENE=retail_recall python app.py   # 换一套场景跑（话术、禁语�
 python mock_business/service.py     # Mock 业务系统：http://127.0.0.1:8100/mock/health
 ```
 
-一键起全套（含 Mock，两个窗口）：双击 **`启动全部.bat`**。
+一键起全套（含 Mock）：双击 **`启动全部.bat`**（Windows）/ **`启动全部.command`**（macOS）。
 容器化：`docker compose up --build`。
 
 详细说明：**[docs/18_事件流与看板.md](docs/18_事件流与看板.md)**、
@@ -436,7 +444,7 @@ python scripts/archive_events.py --stats   # 事件库体检：体积、行数�
 `verify.py` 每条都打出**实际事件链和字段值**，不是只打个 PASS——
 结论可以被伪造，原始输出不能。
 
-Windows 上也可以双击 **`验证.bat`**。
+也可以双击：Windows **`验证.bat`** / macOS **`验证.command`**。
 
 ---
 

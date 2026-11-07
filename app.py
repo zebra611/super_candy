@@ -683,11 +683,17 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
     }
 
 
-def start_call():
+def start_call(application_id=None, random_target=False):
     """开一通新电话：生成 session_id 与会话级 token、初始化状态、记一条 call_started。
 
     返回的 read_token 是这通电话的读取凭证：前端拿它查事件链与报告。
     它只存在于这次通话，不进日志、不进仓库。
+
+    外呼目标的三选一（只在开了 application_mode 的赛题场景生效）：
+        application_id 给定 → 按申请单号精确取（可复现复测）
+        random_target=True → 从可电话外呼的档案里随机抽一条（测试用，制造不同起点）
+        都没有             → 走外呼名单取下一条待外呼（默认生产行为）
+    售后场景不开 application_mode，三者都不生效，降级成没有公司名的泛问。
     """
     _purge_sessions()
 
@@ -703,9 +709,15 @@ def start_call():
     # 售后场景不开这个开关：C5 的场景隔离要求售后完全不碰申请单库，
     # 连"取名单"都不行——否则两个业务域又共用同一份数据了。
     try:
-        _tg = (tools.next_outbound_target()
-               if config_loader.load().get("application_mode")
-               else {"found": False})
+        app_mode = bool(config_loader.load().get("application_mode"))
+        if app_mode and application_id:
+            _tg = tools.get_application(application_id)
+        elif app_mode and random_target:
+            _tg = tools.random_application()
+        elif app_mode:
+            _tg = tools.next_outbound_target()
+        else:
+            _tg = {"found": False}
     except Exception:
         _tg = {"found": False}
     if _tg.get("found") and _tg.get("application"):
@@ -759,7 +771,12 @@ def start_call():
             "stages": list(contracts.STAGES),
             "gate_ms": contracts.LATENCY_GATE_MS,
             "opening": opening,
-            "opening_tts": opening_tts}
+            "opening_tts": opening_tts,
+            # 测试/演示用：把本通电话实际锁定的外呼目标档案回传前端，
+            # 前端据此在页面下方把"随机生成的公司具体信息"展示出来，
+            # 便于核对客服开场白是否真的对上了这家公司。
+            "matched_by": _tg.get("matched_by") if _tg.get("found") else None,
+            "company": sess.get("outbound_target")}
 
 
 def record_barge_in(session_id, turn_id=0, reason="user_speech", text="",
@@ -1200,6 +1217,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "scene": config_loader.scene_name(),
                              "gate_ms": contracts.LATENCY_GATE_MS})
             return
+        if path == "/api/company/random":
+            # 纯预览：随机抽一条可电话外呼的档案回传，**不创建会话**。
+            # 用途：测试页"随机"按钮先看清这家公司的信息，再决定用哪家与客服对话——
+            # 不该因为"点了一下预览"就开一通电话、占用一个 session。
+            # 回传的完整档案（含身份证号/统一社会信用代码等补全部件）即客服"知道"的信息。
+            _tg = tools.random_application()
+            self._send_json({
+                "matched_by": _tg.get("matched_by") if _tg.get("found") else None,
+                "company": _tg.get("application"),
+            })
+            return
         if path == "/api/metrics":
             # 聚合指标（分位数、计数、成本），不含任何个人信息，保持匿名可读
             self._send_json(events.metrics())
@@ -1315,7 +1343,12 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/call/start":
-            self._send_json(start_call())
+            # body 透传外呼目标选择：{application_id} 指定复测 / {random:true} 随机生成。
+            # 都不带时退回外呼名单下一条（默认生产行为）。
+            self._send_json(start_call(
+                application_id=body.get("application_id") or None,
+                random_target=bool(body.get("random")),
+            ))
             return
 
         if path == "/api/turn":

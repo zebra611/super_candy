@@ -47,6 +47,12 @@
   #metricNote { color: var(--muted); font-size: 11px; margin-top: 8px; }
   #events { font-family: Consolas, monospace; font-size: 11px; color: var(--muted); white-space: pre-wrap; max-height: 240px; overflow-y: auto; }
   .hint { color: var(--muted); font-size: 12px; }
+  .randinfo { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 18px; }
+  .randinfo .ri { display: flex; gap: 8px; font-size: 13px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+  .randinfo .ri.long { grid-column: 1 / -1; }
+  .randinfo .k { flex: 0 0 120px; color: var(--muted); }
+  .randinfo .v { flex: 1; color: var(--ink); word-break: break-all; }
+  .randinfo .v.hl { color: #0c447c; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -56,7 +62,9 @@
 
   <div class="card">
     <div class="row">
-      <button id="btnStart" class="primary">开始通话</button>
+      <button id="btnStart" class="primary">开始通话（语音）</button>
+      <button id="btnText" class="primary" title="纯文字模式：不开启语音系统（不连麦克风、不合成/播放语音），直接在下方输入框打字与客服对话，便于快速测试">纯文字测试</button>
+      <button id="btnRandom" class="primary" title="纯预览：随机生成一家公司并展示在下方，不发起通话；之后点「纯文字测试」或「开始通话」即可让客服基于它主动发起询问（用于功能测试）">随机预览</button>
       <button id="btnRec" disabled>暂停聆听</button>
       <button id="btnEnd" disabled class="danger">挂断</button>
       <span class="hint" id="sessionLine">未开始</span>
@@ -91,12 +99,22 @@
     </div>
     <div id="events">还没有事件。</div>
   </div>
+
+  <div class="card" id="randomCard" style="display:none">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <strong style="font-weight:500">本次外呼目标（测试用 · 客服将据此主动发起询问）</strong>
+      <span class="tag" id="randomMatched"></span>
+    </div>
+    <div id="randomInfo" class="randinfo"></div>
+    <div class="hint" style="margin-top:8px">上方为系统随机/指定锁定的公司档案。请对照客服开场白是否真的对上了这家公司（公司名 + 联系人身份），以验证四段式第②环。</div>
+  </div>
 </div>
 
 <script>
 // 全部状态放这里，避免到处找变量。
 // token 是这通电话的读取凭证：没有它，别人拿到 session_id 也查不到事件与报告。
-const S = { sessionId: null, token: null, busy: false, turnId: 0, t0: 0,
+const S = { sessionId: null, token: null, pendingTarget: null, textOnly: false,
+            busy: false, turnId: 0, t0: 0,
             // 连续通话状态机：idle → listening → user → thinking → agent → (打断) → user
             phase: "idle", autoMode: false,
             silentFrames: 0, bargeHits: 0, onsetHits: 0, prevPhase: "idle",
@@ -159,6 +177,79 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 }
 
+// 本次外呼目标要展示的字段：键是档案字段名，值是中文标签，
+// 第三个元素为 true 表示"长文本，占整行"（驳回原因、需补材料）。
+// 命中公司名/联系人身份这两个开场白占位符来源字段，加高亮便于核对四段式第②环。
+const RAND_FIELDS = [
+  ["company_name", "公司名称", "hl"],
+  ["company_short_name", "公司简称"],
+  ["company_type", "公司类型"],
+  ["region", "地区"],
+  ["registered_address", "注册地址", "long"],
+  ["shop_name", "店铺名称"],
+  ["shop_id", "店铺编号"],
+  ["shop_id_tail", "店铺编号后四位"],
+  ["shop_type", "店铺类型"],
+  ["shop_status", "经营状态"],
+  ["shop_open_date", "开店时间"],
+  ["legal_representative", "法定代表人"],
+  ["contact_name", "联系人"],
+  ["contact_role", "联系人身份", "hl"],
+  ["phone_tail", "联系电话尾号"],
+  ["id_card", "身份证号"],
+  ["id_card_tail", "身份证后四位"],
+  ["credit_code", "统一社会信用代码"],
+  ["credit_code_tail", "信用代码后四位"],
+  ["bank_account_tail", "对公账户尾号"],
+  ["application_id", "申请单号"],
+  ["application_type", "申请类型"],
+  ["brand_name", "品牌名称"],
+  ["brand_registration_no", "商标注册号"],
+  ["category_l1", "经营类目(一级)"],
+  ["category_l2", "经营类目(二级)"],
+  ["category_l3", "经营类目(三级)"],
+  ["reject_code", "驳回代码"],
+  ["reject_category", "驳回类别"],
+  ["reject_reason", "驳回原因", "long"],
+  ["required_materials", "需补充材料", "long"],
+  ["recheck_deadline", "复核截止"],
+  ["close_mode", "关单方式"],
+  ["call_status", "外呼状态"],
+];
+
+const MATCHED_LABEL = {
+  "random_test": "随机生成",
+  "application_id": "指定复测",
+  "outbound_list": "外呼名单",
+};
+
+// 把后端回传的外呼目标档案渲染到页面下方的卡片里。
+// company 为空（非赛题场景 / 取空）时隐藏卡片并给一句提示。
+function renderRandomCompany(company, matched_by) {
+  const card = $("randomCard");
+  const info = $("randomInfo");
+  const tag = $("randomMatched");
+  if (!company || typeof company !== "object") {
+    card.style.display = "none";
+    info.innerHTML = "";
+    tag.textContent = "";
+    return;
+  }
+  card.style.display = "";
+  tag.textContent = MATCHED_LABEL[matched_by] || (matched_by || "");
+  let html = "";
+  for (const [key, label, flag] of RAND_FIELDS) {
+    const v = company[key];
+    if (v === undefined || v === null || v === "") continue;
+    const cls = "ri" + (flag === "long" ? " long" : "");
+    const vcls = "v" + (flag === "hl" ? " hl" : "");
+    html += '<div class="' + cls + '"><span class="k">' + escapeHtml(label) +
+            '</span><span class="' + vcls + '">' + escapeHtml(String(v)) + '</span></div>';
+  }
+  if (!html) html = '<div class="ri"><span class="k">提示</span><span class="v">该记录无可展示字段</span></div>';
+  info.innerHTML = html;
+}
+
 // 启动时拉一次健康检查，确认后端活着
 async function boot() {
   try {
@@ -170,43 +261,97 @@ async function boot() {
   }
 }
 
-// 开始通话：拿 session_id 与 read_token，之后每一轮都要带它们
-async function startCall() {
-  const r = await fetch("/api/call/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+// 开始通话：拿 session_id 与 read_token，之后每一轮都要带它们。
+// opts.random=true  → 让后端从可电话外呼的档案里随机抽一条公司作为外呼目标；
+// opts.application_id=xxx → 指定某家（可复现复测）；
+// 都不带 → 优先用"随机预览"锁定的公司（S.pendingTarget），再没有就走外呼名单下一条。
+// opts.textOnly=true → 纯文字模式：不连麦克风、不合成/播放语音，只走打字对话。
+// 命中后后端会把"本次外呼目标"档案回传，我们在页面下方展示，便于对照客服开场白。
+async function startCall(opts) {
+  opts = opts || {};
+  const body = {};
+  // 优先用"随机预览"锁定的公司；只有显式指定/随机时才覆盖
+  if (S.pendingTarget && !opts.application_id && !opts.random) {
+    body.application_id = S.pendingTarget;
+  }
+  if (opts.application_id) body.application_id = opts.application_id;
+  if (opts.random) body.random = true;
+  const textOnly = !!opts.textOnly;
+
+  const r = await fetch("/api/call/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const d = await r.json();
   S.sessionId = d.session_id;
   S.token = d.read_token;
-  wsConnect();                     // S2：实时通道与通话同生共死，先建起来
-  $("sessionLine").textContent = "会话 " + d.session_id;
+  S.textOnly = textOnly;
+  S.pendingTarget = null;          // 已用于开会话，清掉；下次不重预览会走外呼名单
+  $("sessionLine").textContent = "会话 " + d.session_id + (textOnly ? "（纯文字）" : "");
   $("btnStart").disabled = true;
-  $("btnRec").disabled = false;
+  $("btnRandom").disabled = true;   // 通话进行中两个起通话的入口都锁住，避免孤儿会话
+  $("btnText").disabled = true;
+  $("btnRec").disabled = true;      // 纯文字模式本就无麦克风；语音模式在拿到麦克风后再开
   $("btnEnd").disabled = false;
   $("textInput").disabled = false;
   $("btnSend").disabled = false;
   $("btnEvents").disabled = false;
 
-  // 连续通话：进来就把麦克风打开，用户直接说话，不用点任何按钮。
-  // 采集在整个通话期间常开——播报时也要开着，否则检测不到"用户想插话"。
-  A.seq = 0;                       // 新会话，帧序号从头开始（服务端也是从 0 期望）
-  S.onsetHits = 0;                 // 开口确认计数也要清零，否则上一轮的残留会漏进来
-  try {
-    await startCapture();
-    S.autoMode = true;
-    S.phase = "agent";             // 开场白马上要播，此期间允许被打断
-    setPhaseLine();
-  } catch (e) {
+  // 展示本次外呼目标：随机/指定/名单命中的公司档案，让测试者一眼核对。
+  renderRandomCompany(d.company, d.matched_by);
+
+  if (textOnly) {
+    // 纯文字模式：不启用任何语音系统，客服回复以文字形式显示在对话区。
+    $("audioLine").textContent = "纯文字模式：未启用语音系统（不连麦克风、不播放语音）。直接在下方输入框打字即可，客服会基于上方公司信息主动对话。";
     S.autoMode = false;
     S.phase = "idle";
-    log("系统", "拿不到麦克风：" + (e && e.message ? e.message : e) +
-        "（可用下面打字；或检查浏览器权限）");
+    setPhaseLine();
+  } else {
+    wsConnect();                   // S2：实时音频通道；纯文字模式不会走到这里（也不连麦克风）
+    // 连续通话：进来就把麦克风打开，用户直接说话，不用点任何按钮。
+    // 采集在整个通话期间常开——播报时也要开着，否则检测不到"用户想插话"。
+    A.seq = 0;                     // 新会话，帧序号从头开始（服务端也是从 0 期望）
+    S.onsetHits = 0;               // 开口确认计数也要清零，否则上一轮的残留会漏进来
+    try {
+      await startCapture();
+      S.autoMode = true;
+      S.phase = "agent";           // 开场白马上要播，此期间允许被打断
+      setPhaseLine();
+    } catch (e) {
+      S.autoMode = false;
+      S.phase = "idle";
+      log("系统", "拿不到麦克风：" + (e && e.message ? e.message : e) +
+          "（可用下面打字；或检查浏览器权限）");
+    }
   }
 
   if (d.opening) {
     // 外呼由客服先开口：开场自报身份是六环节的第一环
     log("客服", d.opening, "开场");
-    speak(d.opening_tts || { text: d.opening, mode: "browser" }, 0);
+    if (!textOnly) speak(d.opening_tts || { text: d.opening, mode: "browser" }, 0);
   }
-  log("系统", "通话已建立。直接说话即可，说完会自动提交；客服说话时可以随时插话打断。");
+  log("系统", textOnly
+    ? "纯文字会话已建立。直接在下框输入，客服会基于上方公司信息主动发起询问。"
+    : "通话已建立。直接说话即可，说完会自动提交；客服说话时可以随时插话打断。");
+}
+
+// 纯预览：随机抽一家公司展示在下方，**不发起通话、不创建会话**。
+// 锁定的公司（application_id）存进 S.pendingTarget，供随后「纯文字测试」或「开始通话」复用，
+// 这样客服就能基于"你刚预览的那家"主动发起四段式询问——即"客服也需要知道这家公司"。
+async function previewRandom() {
+  try {
+    const r = await fetch("/api/company/random");
+    const d = await r.json();
+    const c = d.company;
+    if (!c || typeof c !== "object") {
+      log("系统", "随机取公司失败：后端未返回档案。");
+      return;
+    }
+    S.pendingTarget = c.application_id || null;
+    renderRandomCompany(c, d.matched_by);
+    const who = (c.company_name || "") + (c.contact_role ? "（" + c.contact_role + "）" : "");
+    log("系统", "已随机预览：" + who + " ［" + (MATCHED_LABEL[d.matched_by] || d.matched_by || "随机") +
+        "］。客服已拿到该公司信息；点「纯文字测试」或「开始通话」即可让客服基于它主动对话。");
+  } catch (e) {
+    log("系统", "随机预览失败：" + (e && e.message ? e.message : e));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -795,7 +940,7 @@ async function sendTurn(payload, t0) {
       S.bargeHits = 0;
       setPhaseLine();
     }
-    speak(d.tts || { text: d.reply_text, mode: "browser" }, d.turn_id);
+    if (!S.textOnly) speak(d.tts || { text: d.reply_text, mode: "browser" }, d.turn_id);
     refreshMetrics();
     refreshEvents();
   } catch (e) {
@@ -974,6 +1119,8 @@ async function endCall() {
   });
   log("系统", "通话已结束。");
   $("btnStart").disabled = false;
+  $("btnRandom").disabled = false;
+  $("btnText").disabled = false;
   $("btnRec").disabled = true;
   $("btnEnd").disabled = true;
   $("textInput").disabled = true;
@@ -1183,7 +1330,9 @@ function wsPlayNext() {
   }
 }
 
-$("btnStart").onclick = startCall;
+$("btnStart").onclick = () => startCall();
+$("btnText").onclick = () => startCall({ textOnly: true });
+$("btnRandom").onclick = previewRandom;
 $("btnRec").onclick = toggleRec;
 $("btnEnd").onclick = endCall;
 $("btnEvents").onclick = refreshEvents;
