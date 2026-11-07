@@ -112,6 +112,29 @@ class MockAdapter(BaseAdapter):
                                 "matched_by": key + ":contains", "_ms": _ms(t0)}
         return {"found": False, "application": None, "_ms": _ms(t0)}
 
+    def next_outbound_target(self):
+        """外呼名单：取下一条**要打电话**的申请单。
+
+        为什么需要这个：真实外呼是从名单打的——电话打给哪家，系统本来就知道。
+        官方 52 条话术因此是"请问您是（商家公司名/店铺名）…吗？"，而不是
+        "请问是贵公司的负责人吗？"（后者连是谁都不知道，商家凭什么信）。
+
+        之前系统里根本没有"本通电话的目标"这个概念：query_application 只在
+        核身时按用户给的关键词盲查全部档案，所以开场白填不出公司名。
+
+        选取规则：关单方式=电话（京麦驳回的不外呼）且 call_status=待外呼。
+        找不到就返回 found=False —— 演示/自检时可以没有名单，不能因此崩掉。
+        """
+        t0 = time.time()
+        for rec in _load_applications():
+            if str(rec.get("close_mode") or "").strip() != "电话":
+                continue
+            if str(rec.get("call_status") or "").strip() != "待外呼":
+                continue
+            return {"found": True, "application": rec,
+                    "matched_by": "outbound_list", "_ms": _ms(t0)}
+        return {"found": False, "application": None, "_ms": _ms(t0)}
+
     # ---- 写 -----------------------------------------------------------------
     def create_ticket(self, session_id, content, idempotency_key, version=1):
         """登记工单 —— 这一步就是赛题要的"结构化结果回写"。

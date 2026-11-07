@@ -438,6 +438,13 @@ def asr_provider():
 _ALLOWED_PLACEHOLDERS = {
     "amount", "status", "application_desc", "brand", "category",
     "reason", "materials", "code",
+    # 外呼目标的真值：开场白要报出公司名与联系人身份。
+    # 官方 52 条话术的固定格式就是"请问您是（商家公司名/店铺名）…吗？"，
+    # 没有这两个占位符，开场白只能泛问"贵公司的负责人吗？"——商家无从判断
+    # 这通电话是找谁的，赛题四段式的第②环（确认对方身份）就落空了。
+    # 这两个由 dialogue._fill_outbound 填（来源：外呼名单那条申请单），
+    # 不走 _fill_application —— 后者填的是申请单的业务字段。
+    "company_name", "contact_role",
 }
 
 _REQUIRED_TOP = ("scene_name", "stages", "slots", "answers", "compliance", "budget")

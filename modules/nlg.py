@@ -110,7 +110,17 @@ def say(session, base_text, stage=""):
         return base_text                       # 默认路径：原样返回，行为不变
 
     rewritten = _rewrite(session, base_text, stage, cfg)
-    return rewritten if rewritten else base_text
+    if not rewritten:
+        return base_text
+    # 第 7 道守卫：改写不能把关键实体改掉。
+    # 实测踩过（11-07）：骨架是"您是北京市川上商贸有限责任公司的法定代表人吗？"，
+    # 模型改写成"您是这家公司的法定代表人吗？"——公司名没了。
+    # 号码长度与事实都没变，六道守卫一道都没拦住，但商家听不出这通电话是找谁的，
+    # 赛题四段式的第②环又废了。改写可以换语气，**不能换事实**。
+    if not _entities_ok(base_text, rewritten, session):
+        _warn_once("entity", "改写把关键实体（公司名/申请单号等）改没了，已丢弃")
+        return base_text
+    return rewritten
 
 
 def _rewrite(session, base_text, stage, cfg):
@@ -167,6 +177,10 @@ def _rewrite(session, base_text, stage, cfg):
 
     text = text.strip().strip("\"'“”「」").strip()
 
+    if not _entities_ok(base_text, text, session):   # 第 7 道：实体被改没了
+        _warn_once("entity", "改写把关键实体（公司名/申请单号等）改没了，已丢弃")
+        return None
+
     if not _facts_ok(base_text, text):      # 6 类里的 5：编造业务事实
         _warn_once("fact", "改写引入了骨架没有的具体数字/金额/日期，已丢弃")
         return None
@@ -191,6 +205,37 @@ def _as_int(value, default):
     except (TypeError, ValueError):
         return default
     return num if num > 0 else default
+
+
+def _must_keep(session):
+    """改写后必须原样保留的实体清单。
+
+    来源是**外呼目标档案**（company_name / 短名 / 店名 / 申请单号 / 品牌 / 尾号）。
+    这些是这一通电话的事实：说错了就是打错人、说错了就是核错单。
+    官方话术要求开场就报出公司名，这一项被改掉等于把赛题第②环废掉。
+    """
+    t = (session or {}).get("outbound_target") or {}
+    out = []
+    for key in ("company_name", "company_short_name", "shop_name",
+                "application_id", "brand_name", "phone_tail"):
+        v = str(t.get(key) or "").strip()
+        if len(v) >= 2 and v not in out:
+            out.append(v)
+    return out
+
+
+def _entities_ok(base_text, text, session):
+    """改写后的文本是否还留着骨架里出现过的那些实体。
+
+    规则很窄：**骨架里有的才要求保留**（骨架没提就别硬塞，那是编造）；
+    而且只查档案里的关键实体，不查普通短语——否则改写一句都过不了。
+    """
+    if not base_text or not text:
+        return True
+    for token in _must_keep(session):
+        if token in base_text and token not in text:
+            return False
+    return True
 
 
 def _short(exc):

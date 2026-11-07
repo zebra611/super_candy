@@ -232,6 +232,14 @@ def query_application(keyword):
     return _adapter().call("query_application", keyword)
 
 
+def next_outbound_target():
+    """外呼名单里的下一通该打的电话（带 found / application）。
+
+    没有名单时返回 found=False，调用方自己决定怎么降级——不能让通话开不起来。
+    """
+    return _adapter().call("next_outbound_target")
+
+
 def create_ticket(session_id, content, idempotency_key, version=1):
     """登记工单 —— 结构化结果回写。幂等语义见 adapters/mock.py。"""
     content, notes = prepare_writeback(content)
