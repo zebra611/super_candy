@@ -202,9 +202,17 @@ def main():
            "next_stage = %s" % out2["next_stage"]])
     end_call(sid_b)
 
+    # 证据 5~8 这四段是**售后回访场景**的用例（台词是"用着还行""同意"，
+    # 禁语是"保证您百分百赚钱"，必说话术也是售后那套）。默认场景换成赛题
+    # POP 资审之后，它们的台词/阶段/禁语表全对不上——之前能过是因为默认场景
+    # 恰好就是售后占位场景，等于测试绑死在"默认值"上。
+    # 现在显式切到 service_outbound 跑，跑完切回默认（赛题场景）。
+    _prev_scene = config_loader.scene_path()
+    config_loader.set_scene("service_outbound")
+
     print()
     print("=" * 74)
-    print("证据 5：含糊回答会不会被当成拒绝")
+    print("证据 5：含糊回答会不会被当成拒绝（售后回访场景）")
     print("=" * 74)
     sid_c = start_call()["session_id"]
     for t in ["是我，8866", "用着还行", "可以"]:
@@ -264,7 +272,7 @@ def main():
 
     print()
     print("=" * 74)
-    print("证据 7：禁语命中后被整句替换，而不是打码")
+    print("证据 7：禁语命中后被整句替换，而不是打码（售后回访场景）")
     print("=" * 74)
     guard = dialogue.compliance_guard("我保证您百分百赚钱，不办就没名额了")
     check("命中禁语 → 整句换成合规话术",
@@ -276,7 +284,7 @@ def main():
 
     print()
     print("=" * 74)
-    print("证据 8：质检报告能不能判必说话术与分类违规")
+    print("证据 8：质检报告能不能判必说话术与分类违规（售后回访场景）")
     print("=" * 74)
     sid_e = start_call()["session_id"]
     for t in ["是我，8866", "用着还行", "可以", "同意"]:
@@ -299,6 +307,9 @@ def main():
            % (report["score"], open_report["score"])])
     end_call(sid_e2)
     end_call(sid_e)
+
+    # 切回默认场景（赛题 POP 资审）：后面所有断言都按它来。
+    config_loader.set_scene(_prev_scene)
 
     print()
     print("=" * 74)
@@ -1199,14 +1210,22 @@ def main():
           ["validate() 报：%s" % (_flat_probs[0] if _flat_probs else "无（说明又静默了）")])
 
     _nodef = json.loads(json.dumps(_cfg))
-    _nodef["writeback_template"]["required"]["need"].pop("default", None)
+    # 挑一个**当前场景真实存在**的 required 字段，而不是写死 "need"：
+    # 默认场景已换成赛题 POP 资审，它的写回必填项与售后场景不同，
+    # 写死字段名会让这条断言在换场景时直接 KeyError 崩掉整段自检。
+    _req = (_nodef.get("writeback_template") or {}).get("required") or {}
+    _pick = "need" if "need" in _req else (sorted(_req.keys())[0] if _req else None)
+    if _pick:
+        _req[_pick].pop("default", None)
     _nodef_probs = config_loader.validate(_nodef)
     def _flat_keys(cfg):
         return set(config_loader._flatten_writeback(cfg.get("writeback_template") or {}).keys())
     _lost = sorted(_flat_keys(_cfg) - _flat_keys(_nodef))
     check("required 缺 default 会被拦下，且能指出摊平后会丢哪个字段",
-          any("缺 default" in x for x in _nodef_probs) and "need" in _lost,
-          ["validate() 报：%s" % next((x for x in _nodef_probs if "缺 default" in x), "无"),
+          bool(_pick) and any("缺 default" in x for x in _nodef_probs)
+          and _pick in _lost,
+          ["拿来做试验的字段：%r" % _pick,
+           "validate() 报：%s" % next((x for x in _nodef_probs if "缺 default" in x), "无"),
            "摊平对比：缺 default 后少了 %s" % (_lost or "无")])
 
     # ---- 证据 16：任务2 七项能力的自测脚本 + 3 条直接断言 ----
@@ -1229,6 +1248,9 @@ def main():
               ["退出码 %d；末行：%s" % (_run.returncode, _last)])
 
     # 三条直接断言：都是"看起来对、其实配置没生效"的典型，子测试里容易被绕过。
+    # 这一条查的是**售后知识库**（"多久能上门" vs "权益有效期"），要显式切到售后场景。
+    _kb_prev = config_loader.scene_path()
+    config_loader.set_scene("service_outbound")
     _hit = kb.load().match("多久能上门")
     check("知识库短词抢占已被更长的词压住（问上门时长不会答成权益有效期）",
           (_hit or {}).get("id") == "KB-ONSITE-001",
@@ -1562,6 +1584,11 @@ def main():
 
     # 场景隔离：主场景不得查申请单库（两个业务域共用 4 位尾号键空间，
     # 无条件查会让售后场景的"错误尾号 1234"意外命中归档数据）。
+    # 这条断言的语义是"**售后**场景不查申请单库"（两个业务域共用 4 位尾号键空间）。
+    # 默认场景已换成赛题 POP 资审——那个场景**本来就要**查申请单库（C5 的正主），
+    # 拿默认场景跑这条，测的就不是它想测的东西了。显式切到售后场景。
+    _c5_prev = config_loader.scene_path()
+    config_loader.set_scene("service_outbound")
     _orig_qa = _dlg.tools.query_application
     _qa_calls = []
     _dlg.tools.query_application = lambda kw: (_qa_calls.append(kw), {"found": False})[1]
@@ -1575,6 +1602,7 @@ def main():
           not _qa_calls and not config_loader.load().get("application_mode"),
           ["调用次数=%d 主场景 application_mode=%r"
            % (len(_qa_calls), config_loader.load().get("application_mode"))])
+    config_loader.set_scene(_c5_prev)      # 切回默认（赛题 POP 资审）
 
     # 数据包校验脚本挂进总闸门：改坏任何一份档案，总闸门必须红。
     _ck = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
@@ -2014,6 +2042,29 @@ def main():
     print("=" * 74)
     print("证据 28：Z7 实时字幕——默认开启 + 去重 + 端到端")
     print("=" * 74)
+
+    # ⓪ 默认场景必须是**赛题场景**，不是占位场景。
+    #    实测踩过：直接 python app.py 不带 APP_SCENE 时跑的是 config/scene.json，
+    #    而它长期是"服务类外呼（占位场景，等官方公布后替换）"——官方早就公布了
+    #    （11 月初那两份 xlsx），演示/线上却还在跑占位场景，开场白还是
+    #    "我是京东客服中心的小采，请问是张先生本人吗？"。评审看到的是错的题。
+    #    这条断言把"默认跑什么"钉死。
+    try:
+        with open(os.path.join(ROOT, "config", "scene.json"), encoding="utf-8") as f:
+            _dflt = json.load(f)
+    except Exception:
+        _dflt = {}
+    _dflt_name = _dflt.get("scene_name") or ""
+    _dflt_ok = ("POP" in _dflt_name
+                and bool(_dflt.get("application_mode"))
+                and bool(_dflt.get("reject_rules")))
+    check("Z7 默认场景（config/scene.json）就是赛题 POP 资审场景，不是占位场景",
+          _dflt_ok,
+          ["scene_name = %r" % _dflt_name,
+           "application_mode = %s，reject_rules %d 条"
+           % (_dflt.get("application_mode"), len(_dflt.get("reject_rules") or [])),
+           "占位场景已挪到 config/scenes/service_outbound.json，"
+           "需要时用 APP_SCENE=service_outbound 切"])
 
     # ① **所有**场景包都要开，不是"开一个算数"。
     #    实测踩过两次：先只改 config/scene.json → ready.realtime 仍 false（场景包整体

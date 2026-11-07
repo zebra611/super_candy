@@ -85,7 +85,9 @@ def main():
 
     env = dict(os.environ)
     env.pop("PORT", None)
-    env["APP_SCENE"] = "pop_reject"   # 赛题真实场景（POP 资审驳回外呼）
+    # 刻意**不设** APP_SCENE：默认场景本来就该是赛题 POP 资审，
+    # 显式设了就等于没验到"默认跑什么"这件事。
+    env.pop("APP_SCENE", None)
     env.pop("APP_CONFIG", None)
     proc = subprocess.Popen([PY, os.path.join(ROOT, "app.py"), str(PORT)],
                             cwd=ROOT, env=env,
