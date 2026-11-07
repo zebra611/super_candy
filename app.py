@@ -693,6 +693,23 @@ def start_call():
 
     session_id = "s_" + uuid.uuid4().hex[:12]
     sess = dialogue.new_session(session_id)
+
+    # 外呼名单：真实外呼是从名单打的，电话打给哪家系统本来就知道。
+    # 官方 52 条话术因此是"请问您是（商家公司名/店铺名）…吗？"，带公司名。
+    # 之前系统里没有"本通电话的目标"这个概念，开场白只能泛问"贵公司的负责人吗"，
+    # 商家无从判断这通电话是找谁的——赛题四段式的第②环就这么被跳过了。
+    # 名单取空（自检、名单用完）不阻塞通话：降级成没有公司名的泛问。
+    # 只在**开了 application_mode 的场景**（POP 资审）去取外呼名单。
+    # 售后场景不开这个开关：C5 的场景隔离要求售后完全不碰申请单库，
+    # 连"取名单"都不行——否则两个业务域又共用同一份数据了。
+    try:
+        _tg = (tools.next_outbound_target()
+               if config_loader.load().get("application_mode")
+               else {"found": False})
+    except Exception:
+        _tg = {"found": False}
+    if _tg.get("found") and _tg.get("application"):
+        sess["outbound_target"] = _tg["application"]
     sess["read_token"] = secrets.token_urlsafe(12)
     sess["created_ts"] = time.time()
     sess["last_active_ts"] = time.time()
@@ -702,12 +719,19 @@ def start_call():
     with _STORE_LOCK:
         _SESSIONS[session_id] = sess
 
-    events.write_event(session_id, "call_started",
-                       {"scene": config_loader.scene_name()})
+    # 外呼目标也记在这里，不另造事件类型：contracts.EVENT_TYPES 是封闭契约，
+    # 临时造名字会被 events.write_event 直接拒掉（这正是它该有的行为）。
+    _started = {"scene": config_loader.scene_name()}
+    _tgt = sess.get("outbound_target") or {}
+    if _tgt:
+        _started["outbound_application_id"] = _tgt.get("application_id")
+        _started["outbound_company_name"] = _tgt.get("company_name")
+    events.write_event(session_id, "call_started", _started)
 
     # 外呼由客服先开场：自报身份是六环节的第一环，也是合规要求。
     # 以前开场白只在"回应用户第一句"时才会出现，用户抢先报尾号就被整段跳过。
-    guard = dialogue.compliance_guard(dialogue.opening_line())
+    opening_text = dialogue.opening_line(sess.get("outbound_target"))
+    guard = dialogue.compliance_guard(opening_text)
     opening = guard["text"]
     events.write_event(session_id, "agent_reply",
                        {"text": opening, "stage": "GREETING", "next_stage": "GREETING",

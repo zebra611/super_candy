@@ -265,6 +265,11 @@ def new_session(session_id):
             "order": None,
         },
         "closed": False,
+        # 本通电话的外呼目标（外呼名单里那条申请单）：开场白要靠它报公司名。
+        "outbound_target": None,
+        # 商家是否已经确认"我就是这家公司"。赛题四段式：② 确认身份在③说明原因之前，
+        # 没确认就把"你被驳回了"说出来，商家凭什么信这通电话。
+        "company_confirmed": False,
         "identity_attempts": 0,
         "confirm_asks": 0,
         "empty_count": 0,
@@ -1557,6 +1562,38 @@ def _stage_greeting(session, text, flags):
         if slot:
             return _ask_identity(session, slot, next_stage="IDENTITY")
 
+    # ── 赛题四段式的第②环：确认「您是XX公司吗」─────────────────────────
+    # 官方 52 条话术的固定格式是"您好，我是京东商家资质审核专员，请问您是
+    # （商家公司名/店铺名）…吗？"，赛题数据说明写得更死：
+    #   "确认对方身份（请问您是 XX 公司吗），**不能省，打错人是重大事故**"。
+    #
+    # 我们原来在开场白里就把"您提交的资质申请没有通过审核"说了出去——
+    # 用户还没确认这通电话是找谁的，就先被告知被驳回了。商家凭什么信？
+    # 更糟的是打错了人也要照样把驳回理由念一遍。
+    #
+    # 现在：用户确认公司之前，只回答问题 + 重复确认公司名，
+    # **不进核身、不说驳回原因**。确认之后才按赛题往下走。
+    _target = session.get("outbound_target")
+    if _target and not session.get("company_confirmed"):
+        if _mentions_target_company(text, _target) or _is_affirm_company(text):
+            session["company_confirmed"] = True
+        elif _is_deny_company(text):
+            # 赛题原文："确认对方身份不能省，打错人是重大事故"。
+            # 打错了就必须停，不能接着把驳回理由念给错的人听。
+            return _finish(session, cfg.get("reply_deny", "抱歉打扰您了，再见。"),
+                           "not_me")
+        else:
+            _prefix = ""
+            if flags.get("ask"):
+                _hit = kb.match(text) if kb.enabled() else None
+                if _hit and _hit.get("answer"):
+                    _prefix = _hit["answer"]
+            _confirm_q = _fill_outbound(
+                config_loader.stage_config("GREETING").get("reply_confirm_company")
+                or cfg.get("reply", ""), _target)
+            return _reply(session, ("%s %s" % (_prefix, _confirm_q)).strip(),
+                          next_stage="GREETING", intent="greeting_confirm_company")
+
     # Q1-D6：第一句就问「号码哪来的 / 我凭什么告诉你」——先正面回答，再核对。
     # 开场不答问题直接要尾号，是最容易被挂断的开场之一（Q1 分诊 Q1-R3）。
     # 回答仍要带核身问题，否则用户答完就沉默了。
@@ -2157,7 +2194,94 @@ def safe_fallback(session, reason="error"):
     return _reply(session, fallback_for(reason), intent="error")
 
 
-def opening_line():
+# 确认"我就是这家公司"的肯定说法。只在**短句**上认，长句另作处理。
+# 刻意不把"是"单独当万能词：先排除否定与打错，再看肯定词。
+AFFIRM_COMPANY = ("是的", "是啊", "对啊", "对对", "没错", "正是", "就是",
+                  "我就是", "是我", "对", "嗯", "是")
+
+
+def _target_company_tokens(target):
+    """外呼目标公司的可匹配标识。
+
+    商家在电话里一般只报字号（"川上"）或店名（"川上官方旗舰店"），
+    很少逐字念全称（"北京市川上商贸有限责任公司"），所以三个都收，
+    另外把全称的前若干字也算上（"北京市川上"）。
+    """
+    if not target:
+        return []
+    out = []
+    for key in ("company_short_name", "shop_name", "company_name"):
+        v = str(target.get(key) or "").strip()
+        if v and v not in out:
+            out.append(v)
+    full = str(target.get("company_name") or "").strip()
+    if len(full) >= 6:
+        head = full[:6]
+        if head not in out:
+            out.append(head)
+    return out
+
+
+def _mentions_target_company(text, target):
+    """用户这句话里有没有提到目标公司。"""
+    t = (text or "").strip()
+    if not t:
+        return False
+    for token in _target_company_tokens(target):
+        if len(token) >= 2 and token in t:
+            return True
+    return False
+
+
+def _is_affirm_company(text):
+    """用户是不是认了"我就是这家公司"。"""
+    t = re.sub(r"[\s，,。.!！?？、…～~]", "", text or "")
+    if not t or len(t) > 14:
+        return False
+    if any(w in t for w in ("不是", "不对", "没有", "打错", "找错", "不要", "别")):
+        return False
+    return any(w in t for w in AFFIRM_COMPANY)
+
+
+def _is_deny_company(text):
+    """用户否认"我就是这家公司"。
+
+    只在**短句**上认：刚问完"您是XX公司的XX吗"，对方回一个"不是"就是否认。
+    长句里的"不是"多半是别的意思（"不是我不想配合，是这个章我拿不到"），
+    那种该继续谈而不是直接挂断——打错人挂断是对的，把话说清楚的人挂断是错的。
+    """
+    t = re.sub(r"[\s，,。.!！?？、…～~]", "", text or "")
+    if not t or len(t) > 10:
+        return False
+    return any(w in t for w in ("不是", "不对", "没有", "打错", "找错", "我不是"))
+
+
+def _fill_outbound(text, target):
+    """把开场白里的 {company_name} / {contact_role} 填成外呼目标的真值。
+
+    为什么要有这一步：官方 52 条话术的固定格式是
+    "您好，我是京东商家资质审核专员，请问您是（商家公司名/店铺名）…吗？"——
+    **带公司名**。我们原来写的是"请问是贵公司的负责人吗？"，既没公司名，
+    又让人无从判断这通电话是找谁的。商家凭什么相信一个陌生来电说"你被驳回了"？
+
+    没有外呼目标时（自检、名单取空）原样返回，不留花括号给用户听。
+    """
+    if not target or not text:
+        return text
+    name = (target.get("company_name") or "").strip()
+    short = (target.get("company_short_name") or "").strip()
+    shop = (target.get("shop_name") or "").strip()
+    role = (target.get("contact_role") or "").strip()
+    who = name or shop or short
+    out = text
+    if who:
+        out = out.replace("{company_name}", who)
+    if role:
+        out = out.replace("{contact_role}", role)
+    return out if "{" not in out else text
+
+
+def opening_line(target=None):
     """开场白：外呼是客服先说话，不是等用户先开口。
 
     为什么单独一个函数：外呼场景里"开场自报身份"是六环节的第一环，也是合规要求
@@ -2165,9 +2289,11 @@ def opening_line():
     结果用户一上来就报尾号时，客服直接从"核对上了"开始，自报身份被整段跳过——
     既拿不到必说话术分，也不符合外呼的合规惯例。
 
+    target 是这通电话的外呼目标（外呼名单里那条申请单），用来把公司名填进开场白。
     返回：str
     """
-    return config_loader.stage_config("GREETING").get("reply", "您好。")
+    raw = config_loader.stage_config("GREETING").get("reply", "您好。")
+    return _fill_outbound(raw, target)
 
 
 def respond(session, user_text):

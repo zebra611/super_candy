@@ -2043,6 +2043,70 @@ def main():
     print("证据 28：Z7 实时字幕——默认开启 + 去重 + 端到端")
     print("=" * 74)
 
+    # ⓪-b 赛题四段式的第②环：确认「您是XX公司吗」必须在第③环（说明驳回原因）之前。
+    #    赛题数据说明原文："确认对方身份（请问您是 XX 公司吗），**不能省，打错人是重大事故**"。
+    #    官方 52 条话术的固定格式就是"您好，我是京东商家资质审核专员，请问您是
+    #    （商家公司名/店铺名）…吗？"——带公司名。我们原来既没公司名，
+    #    又在开场白里先把"没通过审核"说了出去。
+    try:
+        with open(os.path.join(ROOT, "config", "scenes", "pop_reject.json"),
+                  encoding="utf-8") as f:
+            _pop = json.load(f)
+    except Exception:
+        _pop = {}
+    _g = (_pop.get("stages") or {}).get("GREETING") or {}
+    _open_reply = _g.get("reply") or ""
+    check("赛题第②环：开场白按官方格式报出公司名，且不提前说驳回",
+          "{company_name}" in _open_reply and "驳回" not in _open_reply
+          and "资质审核" in _open_reply,
+          ["GREETING.reply = %r" % _open_reply,
+           "含公司名占位符=%s，提前说驳回=%s"
+           % ("{company_name}" in _open_reply, "驳回" in _open_reply)])
+
+    # ⓪-c 真跑一通：开场白里出现真实公司名；用户确认公司之前不能说驳回原因。
+    #     显式切到 pop_reject 跑，别指望"主进程当前恰好是哪个场景"——
+    #     verify 里前面几段证据会切场景，靠默认值等于把断言绑在执行顺序上。
+    _q4_prev = config_loader.scene_path()
+    config_loader.set_scene("pop_reject")
+    _sid_o = start_call()["session_id"]
+    _open_txt = payload_of(_sid_o, "agent_reply") or {}
+    _open_line = (_open_txt.get("text") or "")
+    _tgt = (_pop.get("_scene_meta") or {})
+    check("赛题第②环：开场白填的是外呼名单里的真实公司名",
+          bool(_open_line) and ("公司" in _open_line or "店" in _open_line)
+          and "请问您是" in _open_line,
+          ["开场白 = %r" % _open_line[:60]])
+
+    _r1 = handle_turn(_sid_o, user_text="怎么了")
+    _r2 = handle_turn(_sid_o, user_text="不是")
+    check("赛题第②环：用户确认公司前不进核身；否认身份立即收尾",
+          "后四位" not in (_r1.get("reply_text") or "")
+          and "没有通过审核" not in (_r1.get("reply_text") or "")
+          and _r2.get("next_stage") == "DONE",
+          ["第一轮回复：%r（不应出现核身/驳回原因）" % (_r1.get("reply_text") or "")[:60],
+           "否认后 next_stage = %s（应为 DONE）" % _r2.get("next_stage")])
+    end_call(_sid_o)
+    config_loader.set_scene(_q4_prev)      # 切回默认场景
+
+    # ⓪-d nlg 实体保护：改写把公司名改没了必须丢弃（实测踩过：
+    #     "北京市川上商贸有限责任公司" 被改写成 "这家公司"，六道守卫一道没拦）。
+    try:
+        from modules import nlg as _nlg
+        _sess = {"outbound_target": {"company_name": "北京市川上商贸有限责任公司",
+                                     "company_short_name": "川上",
+                                     "shop_name": "川上官方旗舰店",
+                                     "application_id": "QZ202611060001",
+                                     "brand_name": "闻樾",
+                                     "phone_tail": "0086"}}
+        _base = "请问您是北京市川上商贸有限责任公司的法定代表人吗？"
+        check("nlg 实体保护：公司名被改写掉时必须丢弃改写",
+              _nlg._entities_ok(_base, "请问您是这家公司的法定代表人吗？", _sess) is False
+              and _nlg._entities_ok(_base, "请问您是北京市川上商贸有限责任公司的法定代表人吗？",
+                                    _sess) is True,
+              ["改掉公司名 → 判为不合格；保留公司名 → 判为合格"])
+    except Exception as _exc:
+        mark_uncovered("nlg 实体保护", str(_exc)[:80])
+
     # ⓪ 默认场景必须是**赛题场景**，不是占位场景。
     #    实测踩过：直接 python app.py 不带 APP_SCENE 时跑的是 config/scene.json，
     #    而它长期是"服务类外呼（占位场景，等官方公布后替换）"——官方早就公布了
