@@ -1,0 +1,13 @@
+# VAD 可选依赖（Z6）——**不是主链路的必需项**
+#
+# 装了这个文件里的两个包，vad_gate 会自动切到 Silero VAD（召回更高）；
+# 不装也能跑：自动降级到纯标准库谱特征门，verify 一样全绿。
+# 所以故意不写进 Dockerfile 的默认构建，也不叫 requirements.txt——
+# 免得有人以为"装不上就跑不起来"。
+#
+# 装完再跑一次：python scripts/fetch_silero_vad.py
+#
+# 实测（Python 3.13 / Windows）：onnxruntime 1.31.1 + numpy 2.5.4 可用，
+# 推理 0.33ms/32ms 窗，实时率约 1%。低版本（<1.20）不支持 3.13。
+onnxruntime>=1.20
+numpy>=1.26

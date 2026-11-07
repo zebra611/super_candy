@@ -99,15 +99,23 @@
 const S = { sessionId: null, token: null, busy: false, turnId: 0, t0: 0,
             // 连续通话状态机：idle → listening → user → thinking → agent → (打断) → user
             phase: "idle", autoMode: false,
-            silentFrames: 0, bargeHits: 0,
+            silentFrames: 0, bargeHits: 0, onsetHits: 0, prevPhase: "idle",
             // 打断的两段式状态：idle（等声音）→ suspect（疑似，已压低音量）
             // → probing（正在识别这段到底说了什么）。只有 identify 出实义文字才真停。
             bargeState: "idle", bargeBuf: [], ducked: false,
             currentAudio: null, playToken: 0 };
 
-// VAD 判定参数。逐帧（20ms）算 RMS，不用模型，纯能量。
-// 为什么纯能量够用：这段链路里只有一个人说话，噪声被 getUserMedia 的
-// noiseSuppression 压过一道，能量判定的误判率可以接受，而且零延迟。
+// VAD 判定参数。逐帧（20ms）算特征，不起模型：这段链路在浏览器主线程上跑，
+// 一秒 50 次，必须便宜。
+//
+// Z6 把"纯能量"升级成"能量 + 谱特征"，原因很实在：
+//   能量门挡不住键盘（瞬态够响）和摩擦声，演示现场敲一下键盘就会切一轮。
+//   语音与噪声在谱上的差别比在响度上大得多：
+//     · 过零率：语音 0.1~0.3，白噪/纸张摩擦 >0.4
+//     · 谱倾斜（400Hz 能量 / 2000Hz 能量）：语音低频强（>1），键盘高频强（<0.3）
+//   zcrMax / tiltMin 是**宽松值**：宁可多放进来（后面还有 3 帧确认 + 服务端
+//   VAD + ASR 三层），也不要漏掉真人说话。浏览器开了噪声抑制与 AGC，
+//   与离线语料的电平分布不同，所以这两个值现场还要用 ?vaddebug=1 看一眼再定。
 const VAD = {
   speechRms: 0.020,      // 一帧超过它 = 有人在说话（约 -34dBFS）
   silenceRms: 0.010,     // 低于它算静音
@@ -119,7 +127,16 @@ const VAD = {
   probeSilenceFrames: 18,  // 疑似之后静音 18 帧（360ms）= 这一句说完了
   bargeMaxFrames: 160,     // 最多攒 160 帧（3.2 秒），防止用户一直说导致永远不判
   duckVolume: 0.12,        // 疑似期间把播报压到 12%（约 -18dB）
+  // Z6 新增：谱特征门与开口确认
+  zcrMax: 0.45,          // 过零率上限，挡白噪/纸张摩擦（0.45 偏宽，只为不误伤真人）
+  tiltMin: 0.35,         // 低频/高频能量比下限，挡键盘（实测键盘约 0.1）
+  onsetFrames: 2,        // 连续 2 帧（40ms）够"像人声"才算开口，键盘单帧不再触发
 };
+
+// 现场标定开关：地址后面加 ?vaddebug=1，麦克风状态行会实时显示 rms/zcr/tilt
+// 与判定结果。为什么要有：浏览器噪声抑制 + 设备频响会让"理论阈值"偏一截，
+// 现场 30 秒看一眼就知道该往哪调，比事后猜快得多。
+const VAD_DEBUG = /[?&]vaddebug=1/.test(location.search);
 
 const $ = (id) => document.getElementById(id);
 
@@ -166,6 +183,7 @@ async function startCall() {
   // 连续通话：进来就把麦克风打开，用户直接说话，不用点任何按钮。
   // 采集在整个通话期间常开——播报时也要开着，否则检测不到"用户想插话"。
   A.seq = 0;                       // 新会话，帧序号从头开始（服务端也是从 0 期望）
+  S.onsetHits = 0;                 // 开口确认计数也要清零，否则上一轮的残留会漏进来
   try {
     await startCapture();
     S.autoMode = true;
@@ -312,7 +330,7 @@ function onFrame(d) {
   A.samples += pcm.length;
 
   if (S.autoMode) {
-    vadTick(frameRms(pcm));
+    vadTick(analyzeFrame(pcm));
     // 只在"该收用户声音"的两个状态上传。思考中/播报中的音频不能进识别：
     // 播报时麦克风是开着的（要判打断），会把客服自己的声音采进来。
     if (S.phase === "listening" || S.phase === "user") {
@@ -337,25 +355,65 @@ function frameRms(pcm) {
   return Math.sqrt(sum / pcm.length);
 }
 
+// 单频点能量（Goertzel）。只要两三个频点，比做 FFT 便宜一个量级。
+function bandEnergy(pcm, freq, sr) {
+  const coeff = 2 * Math.cos(2 * Math.PI * freq / sr);
+  let s0 = 0, s1 = 0, s2 = 0;
+  for (let i = 0; i < pcm.length; i++) {
+    s0 = pcm[i] / 32768 + coeff * s1 - s2;
+    s2 = s1;
+    s1 = s0;
+  }
+  const e = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+  return e > 0 ? e : 0;
+}
+
+// 一帧特征。与 scripts/tune_barge_vad.py 的 analyze_frame() 必须保持一致——
+// 那边用同一套判据在语料上标定参数，两边不一致就等于标定了个寂寞。
+function analyzeFrame(pcm) {
+  const rms = frameRms(pcm);
+  let zc = 0, prev = pcm[0];
+  for (let i = 1; i < pcm.length; i++) {
+    const v = pcm[i];
+    if ((v >= 0) !== (prev >= 0)) zc += 1;
+    prev = v;
+  }
+  const zcr = pcm.length > 1 ? zc / (pcm.length - 1) : 0;
+  const tilt = bandEnergy(pcm, 400, 16000) / (bandEnergy(pcm, 2000, 16000) + 1e-12);
+  const voiced = rms >= VAD.speechRms && zcr <= VAD.zcrMax && tilt >= VAD.tiltMin;
+  return { rms, zcr, tilt, voiced };
+}
+
 // VAD 状态推进。每个 20ms 帧调一次，是整套连续对话的心脏。
-function vadTick(rms) {
+function vadTick(f) {
+  // 状态刚从别处切回 listening 时，开口计数必须清零：
+  // 否则上一轮残留的 1 帧会让"下一帧像人声"立刻判成开口，
+  // 等于把 40ms 的确认门悄悄关掉。
+  if (S.prevPhase !== S.phase) {
+    if (S.phase === "listening") S.onsetHits = 0;
+    S.prevPhase = S.phase;
+  }
   if (S.phase === "agent") {
-    agentTick(rms);
+    agentTick(f);
     return;
   }
   if (S.phase === "thinking") return;         // 等响应，不判任何东西
 
   if (S.phase === "listening") {
-    if (rms >= VAD.speechRms) {
+    // 开口要连续几帧"像人声"：键盘单帧很响但谱不对，40ms 才认。
+    S.onsetHits = f.voiced ? S.onsetHits + 1 : 0;
+    if (S.onsetHits >= VAD.onsetFrames) {
       S.phase = "user";
       S.silentFrames = 0;
+      S.onsetHits = 0;
       setPhaseLine();
     }
+    if (VAD_DEBUG) updateAudioLine(f);
     return;
   }
 
   if (S.phase === "user") {
-    if (rms >= VAD.speechRms) S.silentFrames = 0;
+    if (f.voiced) S.silentFrames = 0;
     else S.silentFrames += 1;
     if (S.silentFrames >= VAD.endpointFrames) {
       // 端点到了：用户说完了，自动提交，不需要按任何按钮
@@ -369,6 +427,7 @@ function vadTick(rms) {
         sendTurn({ audio_streamed: true, audio_dropped: A.dropped }, t0);
       }
     }
+    if (VAD_DEBUG) updateAudioLine(f);
   }
 }
 
@@ -378,7 +437,9 @@ function vadTick(rms) {
 // 而打断是不可逆的——那半句话用户再也听不到了，得重听一遍。
 // 所以能量只当"疑似"，真正停播要等这段说完、识别出实义文字。
 // 代价是"客服多说了半句"，但这在半双工电话里听起来像正常的反应延迟。
-function agentTick(rms) {
+function agentTick(f) {
+  const rms = f.rms;                        // 打断仍用能量：要快，宁可多探一次再否决
+  if (VAD_DEBUG) updateAudioLine(f);
   if (S.bargeState === "probing") return;   // 正在识别，等结果，别重复触发
 
   if (S.bargeState === "suspect") {
@@ -625,13 +686,20 @@ async function uploadChunk(seq, pcm16) {
 }
 
 // 采集状态条：这是 S1 唯一能"眼看为实"的地方
-function updateAudioLine() {
+function updateAudioLine(f) {
   if (!S.autoMode && !A.frames) return;
   const parts = ["采集 " + A.frames + " 帧 / " + A.samples +
                  " 采样（" + (A.samples / 16000).toFixed(2) + " 秒）"];
   if (A.srvSamples) parts.push("服务端已收 " + A.srvSamples + " 采样");
   if (A.srvGaps) parts.push("序号缺口 " + A.srvGaps + " 次");
   if (A.dropped) parts.push("本地丢帧 " + A.dropped);
+  // 现场标定：看得到才能调。这三个数分别对应"够不够响""是不是噪声""偏高频吗"。
+  if (VAD_DEBUG && f) {
+    parts.push("rms=" + f.rms.toFixed(3) + (f.rms >= VAD.speechRms ? "✓" : "·"));
+    parts.push("zcr=" + f.zcr.toFixed(2) + (f.zcr <= VAD.zcrMax ? "✓" : "·"));
+    parts.push("tilt=" + f.tilt.toFixed(2) + (f.tilt >= VAD.tiltMin ? "✓" : "·"));
+    parts.push(f.voiced ? "判人声" : "非人声");
+  }
   $("audioLine").textContent = parts.join(" · ");
 }
 
@@ -956,6 +1024,11 @@ function wsOnMessage(m) {
       WS.started = true;
       WS.rtReady = !!m.realtime;
       log("系统", "实时通道已建立（S2）" + (WS.rtReady ? "，流式字幕开启" : "") + "。");
+      // 流式没起来要说清原因：演示现场"字幕不出"最常见的三个原因是
+      // 没密钥、模型没开通、公司网拦 WSS。不讲原因就只能干猜。
+      if (!WS.rtReady && m.realtime_error) {
+        log("系统", "流式字幕未启用，回落整段识别：" + m.realtime_error, "降级");
+      }
       return;
     case "turn_result":
       handleWsTurnResult(m);
@@ -995,6 +1068,9 @@ function wsOnMessage(m) {
 function handleWsTurnResult(m) {
   S.turnId = m.turn_id;
   S.busy = false;
+  // 半句字幕到此为止：整句已经落在下面的对话日志里，字幕再留着就是同一句
+  // 出现两遍（这就是验收里说的"不重复"）。
+  $("liveSubtitle").textContent = "";
   $("btnSend").disabled = false;
   log("用户", m.user_text || "（无应答）");
   log("客服", m.reply_text, m.next_stage);

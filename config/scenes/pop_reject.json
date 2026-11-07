@@ -17,6 +17,8 @@
   "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
   "realtime_model": "paraformer-realtime-v2",
   "realtime_endpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+  "realtime": true,
+  "_realtime_why": "Z7：这个场景包是演示默认场景，流式字幕必须在这里也打开——只改 config/scene.json 时实测 ready.realtime 仍是 false（场景包整体覆盖 asr 段），字幕一条都不出。失败自动回落批式，不影响通话。",
   "language": "zh",
   "itn": true,
   "_timeout_why": "识别不再用单一超时值。实测两段几乎等长的音频（2080ms / 2040ms）耗时 398ms 与 5404ms，是云端长尾，与音频长度无关；而 urllib 的 timeout 只管单次 socket 操作，管不住总时长。现在改成两轮「socket 2s/墙钟 2s → socket 3s/墙钟 3s」，超时即重试，见 modules/voice.py 的 plan。",

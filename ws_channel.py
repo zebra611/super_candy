@@ -169,8 +169,12 @@ class WsCallSession:
         self._backend.attach(sess, self)
         if self._backend.realtime_enabled():
             self._rt = voice.open_realtime_asr()
+        # 建不上就把原因带出去：否则前端只看到"字幕没出来"，无从判断是
+        # 没密钥、模型没开通、还是公司网拦了 WSS。这条字段只用于排障，不影响协议。
         self.send_json({"type": "ready", "session_id": self.session_id,
-                        "realtime": bool(self._rt)})
+                        "realtime": bool(self._rt),
+                        "realtime_error": ("" if self._rt
+                                           else voice.last_realtime_error())})
 
     def _on_turn(self, msg):
         if not self.sess:

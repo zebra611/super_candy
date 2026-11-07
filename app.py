@@ -480,6 +480,7 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
     else:
         # ③ VAD：只有真的收到音频才做端点检测。
         # 文字输入不写 vad_result——否则 VAD 准确度统计里会混进一堆"没声音"的轮次。
+        vad = None
         if audio_bytes:
             vad = voice.vad_detect(audio_bytes)
             events.write_event(session_id, "vad_result", vad, turn_id=turn_id)
@@ -505,7 +506,7 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
                     "provider": asr_override.get("provider", "paraformer-realtime"),
                 }
             else:
-                asr_out = voice.asr(audio_bytes, hints=config_loader.asr_hints())
+                asr_out = voice.asr(audio_bytes, hints=config_loader.asr_hints(), vad=vad)
             heard = asr_out["text"]
             asr_ms = asr_out["latency_ms"]
             is_fake = bool(asr_out.get("fake", False))
