@@ -828,7 +828,31 @@ def _has_interrupt_content(text):
     return True
 
 
-def probe_speech(session_id, pcm):
+def _is_self_echo(text, agent_text, ratio=0.6):
+    """这段识别结果是不是**客服自己播报的回声**。
+
+    为什么必须单独判：外放时麦克风收得到自己的声音（AEC 只压 20~30dB，
+    而且只在浏览器里生效）。回声本来就是人声，谱特征挡不住；ASR 会把客服
+    刚说的话原样识别出来；`_has_interrupt_content` 看到一整句中文，判"有实义"
+    → **直接停播**。用户看到的就是"客服说一半突然不说了"，而且找不到原因。
+
+    判据用字符级覆盖度而不是编辑距离：ASR 对回声的识别通常是原句的一部分，
+    末尾可能因为截断缺几个字，覆盖度对这种情况稳，编辑距离会被长度差带偏。
+
+    阈值 0.6 的取舍：宁可漏掉一次"用户复述客服的话"（极少），
+    也不能把回声放过去——放过去就是停播，不可逆。
+    """
+    a = re.sub(r"[^\u4e00-\u9fa5]", "", text or "")
+    b = re.sub(r"[^\u4e00-\u9fa5]", "", agent_text or "")
+    if len(a) < 4 or len(b) < 4:
+        return False           # 太短没法和播报文本比，交给 _has_interrupt_content 判
+    import difflib
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    matched = sum(blk.size for blk in sm.get_matching_blocks())
+    return matched / len(a) >= ratio
+
+
+def probe_speech(session_id, pcm, agent_text=""):
     """播报期间截到的一小段疑似插话：只识别，不建轮次、不推进状态机。
 
     为什么不复用 handle_turn：那一整套会写 turn_start/turn_end、推进阶段、
@@ -851,9 +875,13 @@ def probe_speech(session_id, pcm):
                 "reason": "asr_error", "error": str(e)[:200]}
 
     text = (out.get("text") or "").strip()
+    echo = _is_self_echo(text, agent_text)
     return {
         "text": text,
-        "has_content": _has_interrupt_content(text),
+        # 回声一律否决，理由单独写出来——不要让它伪装成"识别到噪声"，
+        # 否则以后排查会以为是 ASR 不行，其实是外放耦合。
+        "has_content": False if echo else _has_interrupt_content(text),
+        "reason": "echo_self" if echo else None,
         "asr_ms": round((time.time() - t0) * 1000, 1),
         "fake": bool(out.get("fake")),
         "error": out.get("error"),
@@ -1454,7 +1482,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "AUDIO_TOO_LARGE", "detail": str(e)}, 413)
             return
 
-        self._send_json(probe_speech(sid, pcm))
+        self._send_json(probe_speech(sid, pcm,
+                                     (qs.get("agent_text") or [""])[0]))
 
     def _handle_metric(self, body):
         """前端上报首字响应（T4−T0）。上报失败不影响通话，所以错误码给得很明确。"""

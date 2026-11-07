@@ -103,6 +103,11 @@ const S = { sessionId: null, token: null, busy: false, turnId: 0, t0: 0,
             // 打断的两段式状态：idle（等声音）→ suspect（疑似，已压低音量）
             // → probing（正在识别这段到底说了什么）。只有 identify 出实义文字才真停。
             bargeState: "idle", bargeBuf: [], ducked: false,
+            // 当前正在播报的文本。用途：探针识别出的文字要是与它高度重合，
+            // 那就是**自己的回声**，不是用户在插话。没有这个字段时，
+            // 外放环境下麦克风收到自己的播报，ASR 会原样识别出客服的话，
+            // _has_interrupt_content 判"有实义"→ 直接停播。这是硬 bug。
+            agentText: "",
             currentAudio: null, playToken: 0 };
 
 // VAD 判定参数。逐帧（20ms）算特征，不起模型：这段链路在浏览器主线程上跑，
@@ -355,8 +360,8 @@ function frameRms(pcm) {
   return Math.sqrt(sum / pcm.length);
 }
 
-// 单频点能量（Goertzel）。只要两三个频点，比做 FFT 便宜一个量级。
-function bandEnergy(pcm, freq, sr) {
+// 单频点能量（Goertzel）。只要几个频点，比做 FFT 便宜一个量级。
+function goertzel(pcm, freq, sr) {
   const coeff = 2 * Math.cos(2 * Math.PI * freq / sr);
   let s0 = 0, s1 = 0, s2 = 0;
   for (let i = 0; i < pcm.length; i++) {
@@ -366,6 +371,20 @@ function bandEnergy(pcm, freq, sr) {
   }
   const e = s1 * s1 + s2 * s2 - coeff * s1 * s2;
   return e > 0 ? e : 0;
+}
+
+// 频段能量 = 几个频点的均值。
+// **这里之前写成"单点 400Hz / 单点 2000Hz"，那是错的**：20ms 窗的频率分辨率
+// 只有 50Hz，单点测的是"这个精确频率上有没有能量"，跟基频/共振峰落在哪强相关。
+// 女声基频 200Hz 附近、400Hz 上恰好是谷，tilt 就掉到 0.1 以下，真人被判成键盘。
+// 换成每侧三个点取均值后，测的是"这一带整体有多亮"，才对得上注释里的"谱倾斜"。
+const LOW_BAND = [300, 500, 700];
+const HIGH_BAND = [1800, 2400, 3000];
+
+function bandSum(pcm, freqs, sr) {
+  let e = 0;
+  for (let i = 0; i < freqs.length; i++) e += goertzel(pcm, freqs[i], sr);
+  return e / freqs.length;
 }
 
 // 一帧特征。与 scripts/tune_barge_vad.py 的 analyze_frame() 必须保持一致——
@@ -379,7 +398,8 @@ function analyzeFrame(pcm) {
     prev = v;
   }
   const zcr = pcm.length > 1 ? zc / (pcm.length - 1) : 0;
-  const tilt = bandEnergy(pcm, 400, 16000) / (bandEnergy(pcm, 2000, 16000) + 1e-12);
+  const tilt = bandSum(pcm, LOW_BAND, 16000) / (bandSum(pcm, HIGH_BAND, 16000) + 1e-12);
+  // voiced 只回答"这一帧像不像人在说话"，用于**开口确认**和打断探针。
   const voiced = rms >= VAD.speechRms && zcr <= VAD.zcrMax && tilt >= VAD.tiltMin;
   return { rms, zcr, tilt, voiced };
 }
@@ -413,7 +433,13 @@ function vadTick(f) {
   }
 
   if (S.phase === "user") {
-    if (f.voiced) S.silentFrames = 0;
+    // 「还在说」用**能量**判，不用 voiced。
+    // 之前这里写的是 `if (f.voiced) silentFrames = 0`，是个真 bug：
+    // voiced 里含过零率和谱倾斜两个门，用户说到一半侧个头、换个字音、
+    // 音量略降，zcr/tilt 一不达标就被当成静音，700ms 一到直接把一句话切成两半。
+    // 端点只该回答「还有没有声音」，不该用"像不像人声"去判。
+    // （silenceRms 之前定义了却从来没用过——这个死参数就是那条 bug 的证据。）
+    if (f.rms >= VAD.silenceRms) S.silentFrames = 0;
     else S.silentFrames += 1;
     if (S.silentFrames >= VAD.endpointFrames) {
       // 端点到了：用户说完了，自动提交，不需要按任何按钮
@@ -492,7 +518,8 @@ async function confirmBargeIn() {
   let d = null;
   try {
     const q = "?session_id=" + encodeURIComponent(S.sessionId) +
-              "&token=" + encodeURIComponent(S.token);
+              "&token=" + encodeURIComponent(S.token) +
+              "&agent_text=" + encodeURIComponent(S.agentText || "");
     const r = await fetch("/api/asr/probe" + q, {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream" },
@@ -595,6 +622,7 @@ function afterPlayback() {
   S.bargeState = "idle";
   S.bargeBuf = [];
   S.ducked = false;
+  S.agentText = "";
   setPhaseLine();
   // 播报期间麦克风一直开着（为了能打断），这段音频里混着客服自己的声音，
   // 不清掉的话下一轮识别会把它们当成用户说的话。
@@ -797,6 +825,8 @@ function speak(tts, turnId) {
     reported = true;
     reportMetric(turnId, performance.now() - t0, estimate);
   };
+
+  S.agentText = text;                    // 回声比对用（见 confirmBargeIn）
 
   // 分段合成路线：第一段先出声，后面的段自动接上。
   // 服务端把长回复切成 3–5 字的头段 + 若干尾段并发合成，
@@ -1168,6 +1198,141 @@ $("textInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("bt
 
 boot();
 refreshMetrics();
+
+// ===========================================================================
+// 现场校准模式（地址加 ?vadcal=1）
+//
+// 为什么要有这个：离线语料是 TTS 合成的、噪声是我用 math 拼的，在那上面怎么调
+// 都全过；但真正决定演示成败的是这台机器的**扬声器→房间→麦克风→浏览器 AEC**
+// 这一整条链。链上有多少残余回声、底噪多高、设备频响偏多少，离线一个都测不到。
+// 这个模式就在真实链路上采四个阶段的逐帧特征，导出一份 JSON，
+// 再交给 scripts/fit_vad_from_calib.py 算建议阈值。
+//
+// 四个阶段刻意覆盖了会上翻车的四种情况：
+//   静音 · 外放自己的播报 · 用户说话 · 敲键盘
+// ===========================================================================
+const VADCAL = /[?&]vadcal=1/.test(location.search);
+
+const CAL_LINE = "您好，我是京东商家资质审核的工作人员，您这边提交的营业执照经营范围与店铺主营类目不一致，需要您补充说明一下。";
+const CAL_READ = "我这边已经上传了新的营业执照，你看看能不能过。";
+
+function vadCalPanel() {
+  const box = document.createElement("div");
+  box.id = "vadcal";
+  box.style.cssText = "position:fixed;right:16px;bottom:16px;width:360px;z-index:9999;" +
+    "background:#fff;border:1px solid #d8dee8;border-radius:10px;padding:12px 14px;" +
+    "box-shadow:0 8px 28px rgba(0,0,0,.14);font:13px/1.6 system-ui,sans-serif;color:#1b2430";
+  box.innerHTML =
+    '<b style="font-size:14px">现场 VAD 校准</b>' +
+    '<div style="color:#5b6b7c;margin:4px 0 8px">约 22 秒，四步：静音 → 外放播报 → 你说话 → 敲键盘。' +
+    '请确保用的是<b>扬声器</b>不是耳机，音量正常。</div>' +
+    '<button id="vcStart">开始</button> <button id="vcSave" disabled>下载 JSON</button>' +
+    '<div id="vcStep" style="margin-top:8px;font-weight:600;min-height:22px"></div>' +
+    '<pre id="vcLog" style="margin:8px 0 0;max-height:150px;overflow:auto;' +
+    'background:#f5f7fa;border-radius:6px;padding:6px;font-size:11px;white-space:pre-wrap"></pre>';
+  document.body.appendChild(box);
+  $("vcStart").onclick = () => runVadCal();
+  $("vcSave").onclick = () => saveVadCal();
+}
+
+let _calRows = [];
+let _calMeta = {};
+
+function vcLog(s) { $("vcLog").textContent += s + "\n"; $("vcLog").scrollTop = 1e9; }
+function vcStep(s) { $("vcStep").textContent = s; }
+
+async function runVadCal() {
+  $("vcStart").disabled = true;
+  _calRows = [];
+  const rows = _calRows;
+  let phase = "prep";
+
+  let stream, ctx, node;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true,
+               noiseSuppression: true, autoGainControl: true }
+    });
+  } catch (e) {
+    vcStep("拿不到麦克风：" + e.message);
+    $("vcStart").disabled = false;
+    return;
+  }
+
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: "application/javascript" }));
+  try { await ctx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
+  const src = ctx.createMediaStreamSource(stream);
+  node = new AudioWorkletNode(ctx, "pcm-collector");
+  const gain = ctx.createGain();
+  gain.gain.value = 0;
+  src.connect(node); node.connect(gain); gain.connect(ctx.destination);
+
+  const t0 = performance.now();
+  node.port.onmessage = (e) => {
+    const f = analyzeFrame(new Int16Array(e.data.pcm));
+    rows.push({ t: Math.round(performance.now() - t0), ph: phase,
+                rms: +f.rms.toFixed(5), zcr: +f.zcr.toFixed(3), tilt: +f.tilt.toFixed(2) });
+  };
+
+  const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+  // ① 静音
+  phase = "silence";
+  vcStep("① 静音 4 秒 · 请别说话");
+  await wait(4000);
+
+  // ② 外放自己的播报（浏览器 TTS，走的是同一套喇叭→麦克风路径）
+  phase = "echo";
+  if (window.speechSynthesis) {
+    vcStep("② 正在外放一句客服话术，请别跟着念");
+    const u = new SpeechSynthesisUtterance(CAL_LINE);
+    u.lang = "zh-CN";
+    speechSynthesis.speak(u);
+    await wait(7000);
+    speechSynthesis.cancel();
+  } else {
+    vcLog("[跳过] 这个浏览器没有 speechSynthesis");
+  }
+
+  // ③ 用户说话
+  phase = "voice";
+  vcStep("③ 请念这句话：「" + CAL_READ + "」");
+  await wait(6000);
+
+  // ④ 敲键盘
+  phase = "keytap";
+  vcStep("④ 请敲键盘 5 秒（正常力度）");
+  await wait(5000);
+
+  phase = "done";
+  node.port.onmessage = null;
+  try { stream.getTracks().forEach(t => t.stop()); } catch (e) { /* 已经关了 */ }
+  try { await ctx.close(); } catch (e) { /* 同上 */ }
+
+  const n = {};
+  for (const r of rows) n[r.ph] = (n[r.ph] || 0) + 1;
+  _calMeta = {
+    ua: navigator.userAgent,
+    saved_at: new Date().toISOString(),
+    front_params: VAD,
+    counts: n
+  };
+  vcStep("完成，共 " + rows.length + " 帧（" + JSON.stringify(n) + "）→ 点「下载 JSON」");
+  vcLog("把 JSON 放到 data/vad_calib/ 下，跑 python scripts/fit_vad_from_calib.py");
+  $("vcSave").disabled = false;
+}
+
+function saveVadCal() {
+  const payload = JSON.stringify({ meta: _calMeta, rows: _calRows });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([payload], { type: "application/json" }));
+  a.download = "vadcal_" + Date.now() + ".json";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+}
+
+if (VADCAL) vadCalPanel();
 </script>
 </body>
 </html>
