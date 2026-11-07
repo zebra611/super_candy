@@ -240,6 +240,20 @@ def next_outbound_target():
     return _adapter().call("next_outbound_target")
 
 
+def random_application():
+    """测试/演示专用：从可电话外呼的档案里随机抽一条作为外呼目标。
+
+    与 next_outbound_target 的区别见 modules/adapters/mock.py 的同名方法注释。
+    返回 dict(found, application, matched_by)。
+    """
+    return _adapter().call("random_application")
+
+
+def get_application(app_id):
+    """按申请单号精确取一条档案（可复现复测）。返回 dict(found, application)。"""
+    return _adapter().call("get_application", app_id)
+
+
 def create_ticket(session_id, content, idempotency_key, version=1):
     """登记工单 —— 结构化结果回写。幂等语义见 adapters/mock.py。"""
     content, notes = prepare_writeback(content)

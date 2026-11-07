@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import time
 
 from .base import BaseAdapter
@@ -133,6 +134,40 @@ class MockAdapter(BaseAdapter):
                 continue
             return {"found": True, "application": rec,
                     "matched_by": "outbound_list", "_ms": _ms(t0)}
+        return {"found": False, "application": None, "_ms": _ms(t0)}
+
+    def random_application(self):
+        """测试/演示专用：从『可电话外呼』的档案里随机抽一条作为外呼目标。
+
+        为什么只取 close_mode=电话：京麦驳回档案核上即收尾、不进六阶段，
+        抽它出来测试时客服只会说一句"站内看指引"就挂，没法验证完整的
+        质审→核身→驳回→确认→回写链路。随机按钮本意就是"随便找家公司测功能"，
+        所以默认圈定电话外呼这一批（97 条），既保证流程走得通，又保留足够多样性。
+
+        与 next_outbound_target 的区别：那个按"名单顺序"取第一条待外呼，
+        这条是"随机"，给测试者制造不同的对话起点，避免每次都从同一家公司开场。
+        """
+        t0 = time.time()
+        pool = [r for r in _load_applications()
+                if str(r.get("close_mode") or "").strip() == "电话"
+                and (r.get("company_name") or "").strip()
+                and (r.get("contact_role") or "").strip()]
+        if not pool:
+            return {"found": False, "application": None, "_ms": _ms(t0)}
+        rec = random.choice(pool)
+        return {"found": True, "application": rec,
+                "matched_by": "random_test", "_ms": _ms(t0)}
+
+    def get_application(self, app_id):
+        """按申请单号精确取一条档案。供"指定某家公司复测"用（可复现）。"""
+        t0 = time.time()
+        kw = (app_id or "").strip()
+        if not kw:
+            return {"found": False, "application": None, "_ms": _ms(t0)}
+        for rec in _load_applications():
+            if str(rec.get("application_id") or "").strip() == kw:
+                return {"found": True, "application": rec,
+                        "matched_by": "application_id", "_ms": _ms(t0)}
         return {"found": False, "application": None, "_ms": _ms(t0)}
 
     # ---- 写 -----------------------------------------------------------------

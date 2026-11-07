@@ -599,11 +599,18 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     # （契约见 docs/17 第 3.1 节）。默认 provider=template，nlg.say 原样返回，
     # 行为与接入前完全一致——verify 53/53 就是用来守这条的。
     #
-    # 但下面两类不改写：
+    # 但下面三类不改写：
     #   intent=error/empty —— 编排出错、用户沉默时，要的是确定和简短，
     #                         不能引入"模型换个说法"的不确定性；
-    #   end_reason 有值     —— 挂断/拒绝话术，"再见"不能被改写成"拜拜下次聊"。
-    if not end_reason and intent not in ("error", "empty"):
+    #   end_reason 有值     —— 挂断/拒绝话术，"再见"不能被改写成"拜拜下次聊"；
+    #   identity_* 且不是 identity_ok —— 核身**问句**（问的是"哪一个后四位"），
+    #                         指代必须明确、可逐字复述，不能随模型每次改写漂移
+    #                         （11-07 实测：模型会把"预留手机号后四位"压成
+    #                         "说下…后四位数字"，反而更含糊）。identity_ok 是
+    #                         核对结果陈述、不是问句，仍照常改写以保留口语自然度。
+    _freeze_identity = (str(intent or "").startswith("identity_")
+                        and intent != "identity_ok")
+    if not end_reason and intent not in ("error", "empty") and not _freeze_identity:
         text = nlg.say(session, _fill_application(text, session["slots"].get("application")),
                        stage_now)
     else:

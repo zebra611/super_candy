@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import os
@@ -63,6 +64,8 @@ COMPANY_TYPES = [
     "有限责任公司", "股份有限公司", "个体工商户", "合伙企业", "分公司",
     "个人独资企业", "外商投资企业", "港澳台投资企业",
 ]
+
+SHOP_TYPES = ["旗舰店", "专卖店", "专营店", "普通店铺", "企业店铺"]
 
 SURNAMES = ["柏", "沈", "陆", "岑", "裴", "晏", "殷", "虞", "祁", "容",
             "闻", "阙", "甄", "郗", "扈", "竺", "童", "牧", "澹台", "钟离"]
@@ -189,6 +192,52 @@ def _pick(rng, pool, i):
     return pool[i % len(pool)]
 
 
+# 地区 → 6 位行政区划代码（GB/T 2260 省级码，公开规范值；仅作合成骨架，
+# 不对应任何真实主体，全部数据为虚构）。
+REGION_CODE = {
+    "北京市": 110000, "上海市": 310000, "天津市": 120000, "重庆市": 500000,
+    "河北省": 130000, "山西省": 140000, "辽宁省": 210000, "吉林省": 220000,
+    "黑龙江省": 230000, "江苏省": 320000, "浙江省": 330000, "安徽省": 340000,
+    "福建省": 350000, "江西省": 360000, "山东省": 370000, "河南省": 410000,
+    "湖北省": 420000, "湖南省": 430000, "广东省": 440000, "海南省": 460000,
+    "四川省": 510000, "贵州省": 520000, "云南省": 530000, "陕西省": 610000,
+    "甘肃省": 620000, "青海省": 630000, "内蒙古自治区": 150000,
+    "广西壮族自治区": 450000, "西藏自治区": 540000, "宁夏回族自治区": 640000,
+    "新疆维吾尔自治区": 650000, "中国香港": 810000, "中国澳门": 820000,
+    "中国台湾": 710000,
+}
+
+# 身份证号（GB 11643-1999）与统一社会信用代码（GB 32100-2015）的**结构合法**
+# 合成：仅用于联调 / 演示，内容为虚构，不对应任何真实自然人或企业。
+# 校验位严格按国标算，保证"看起来合法、查不出破绽"，但整串是合成值。
+_ID_WEIGHTS = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2]
+_ID_CHECK = "10X98765432"
+_USCC_CHARS = "0123456789ABCDEFGHJKLMNPQRTUWXY"   # 31 位，剔除 I/O/Z/S/V
+_USCC_WEIGHTS = [1, 3, 9, 27, 19, 26, 16, 17, 20, 29, 25, 13, 8, 24, 10, 30, 28]
+
+
+def make_id_card(region_code, seq):
+    """合成 18 位、校验位合法的虚构身份证号（结构合法，内容为虚构）。"""
+    year = 1965 + (seq * 7) % 30          # 1965~1994 之间
+    month = 1 + (seq * 3) % 12
+    day = 1 + (seq * 5) % 28
+    body17 = "%06d%04d%02d%02d%03d" % (region_code % 1000000, year, month, day, seq % 1000)
+    s = sum(int(c) * w for c, w in zip(body17, _ID_WEIGHTS)) % 11
+    return body17 + _ID_CHECK[s]
+
+
+def make_credit_code(region_code, seq):
+    """合成 18 位、校验位合法的虚构统一社会信用代码（结构合法，内容为虚构）。"""
+    h = hashlib.md5(("CC-%d" % seq).encode("utf-8")).hexdigest()
+    org7 = "".join(_USCC_CHARS[int(h[i], 16) % 31] for i in range(7))
+    # 末两位用 seq 的 base-31 编码，保证 120 条全局唯一（31^2 = 961 > 120）
+    b = seq
+    org2 = _USCC_CHARS[b % 31] + _USCC_CHARS[(b // 31) % 31]
+    body17 = "91" + ("%06d" % (region_code % 1000000)) + org7 + org2
+    s = sum(_USCC_CHARS.index(c) * w for c, w in zip(body17, _USCC_WEIGHTS)) % 31
+    return body17 + _USCC_CHARS[(31 - s) % 31]
+
+
 def build_records():
     rng = random.Random(SEED)
 
@@ -267,6 +316,27 @@ def build_records():
         phone = "1990000" + phone_tail
         email = "contact%03d@example.test" % seq
 
+        # 核验补充信息（C5 联调用的"公司信息后四位"等）：全部结构合法、内容为虚构。
+        # region_code 决定身份证 / 信用代码的地区段；seq 保证全局唯一。
+        region_code = REGION_CODE.get(region, 100000)
+        id_card = make_id_card(region_code, seq)
+        credit_code = make_credit_code(region_code, seq)
+        bat = (seq * 131 + 17) % 10000
+        if bat == int(phone_tail):           # 避免与联系电话尾号撞值，方便对照
+            bat = (bat + 1) % 10000
+        bank_account_tail = "%04d" % bat
+
+        # 店铺信息（补全：此前只有店铺名，缺店铺编号/类型/状态/开店时间，
+        # 更没有"店铺编号后四位"这类可用于核对的数字——商家报"店铺信息后四位"
+        # 时根本没有对应的字段可核，这是此前遗漏的最主要一项）。
+        shop_id = "SHOP%08d" % (20260100 + seq)      # 全局唯一（含 seq）
+        shop_id_tail = shop_id[-4:]
+        shop_type = SHOP_TYPES[idx % len(SHOP_TYPES)]
+        shop_status = "整改中" if ("withdrawn_application" in edges) else "正常经营"
+        shop_open_date = (date(2016, 1, 1) + timedelta(days=(idx * 53) % 2200)).isoformat()
+        # 公司注册地址（公司信息补全；虚构地址，不含任何真实主体名）。
+        registered_address = "%s创新大道%d号%d层" % (region, 11 + (seq * 17) % 900, 1 + seq % 20)
+
         submitted = base_date + timedelta(days=(idx * 3) % 60)
         reject_at = submitted + timedelta(days=1 + idx % 7)
         deadline = reject_at + timedelta(days=7 + (idx * 2) % 23)
@@ -344,18 +414,31 @@ def build_records():
             "company_name": company_name,
             "company_short_name": company_short,
             "shop_name": shop_name,
+            "shop_id": shop_id,
+            "shop_id_tail": shop_id_tail,
+            "shop_type": shop_type,
+            "shop_status": shop_status,
+            "shop_open_date": shop_open_date,
             "company_type": ctype,
             "region": region,
             "registered_capital_wan": 10 + (idx * 37) % 990,
             "established_date": (date(2016, 1, 1) + timedelta(days=(idx * 41) % 2500)).isoformat(),
             "legal_representative": names[120 + idx],
             "business_scope": business_scope,
+            # ②-附 公司级核验信息（"公司信息后四位"等）
+            "credit_code": credit_code,
+            "credit_code_tail": credit_code[-4:],
+            "bank_account_tail": bank_account_tail,
+            "registered_address": registered_address,
             # ③ 联系人（全部虚构）
             "contact_name": contact_name,
             "contact_role": CONTACT_ROLES[idx % len(CONTACT_ROLES)],
             "contact_phone": phone,
             "phone_tail": phone_tail,
             "contact_email": email,
+            # ③-附 联系人级核验信息（身份证号等）
+            "id_card": id_card,
+            "id_card_tail": id_card[-4:],
             "alternative_contact": ("（未提供备用联系人·%03d）" % seq)
                                    if "no_alternative_contact" in edges
                                    else "%s（%s）" % (names[240 + idx], "资质助理"),
