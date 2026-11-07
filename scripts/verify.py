@@ -18,6 +18,7 @@
     - 每条都打印实际数据，不只打印"PASS"——结论可以被伪造，原始输出不能。
 """
 
+import glob
 import json
 import math
 import os
@@ -2014,20 +2015,25 @@ def main():
     print("证据 28：Z7 实时字幕——默认开启 + 去重 + 端到端")
     print("=" * 74)
 
-    # ① 两个场景包都要开：pop_reject 是演示默认场景，它整体覆盖 asr 段。
-    #    实测踩过：只改 config/scene.json 时 ready.realtime 仍是 false，字幕一条不出，
-    #    而 health 看起来一切正常——这种"配置看起来开了实际没开"必须由断言兜住。
+    # ① **所有**场景包都要开，不是"开一个算数"。
+    #    实测踩过两次：先只改 config/scene.json → ready.realtime 仍 false（场景包整体
+    #    覆盖 asr 段）；改完 pop 又漏了 service_outbound / retail_recall —— 售后主场景
+    #    照样一条字幕都没有，而 health 看起来一切正常。所以这里**不写死文件名**，
+    #    而是扫 config/scenes/ 下所有包：以后新增场景包，漏配就会直接报红。
     _rt_flags = {}
-    for rel in ("config/scene.json",
-                os.path.join("config", "scenes", "pop_reject.json")):
+    for rel in ["config/scene.json"] + [
+            os.path.join("config", "scenes", os.path.basename(f))
+            for f in sorted(glob.glob(os.path.join(ROOT, "config", "scenes", "*.json")))]:
         try:
             with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
                 _rt_flags[rel] = bool((json.load(f).get("asr") or {}).get("realtime"))
         except Exception:
             _rt_flags[rel] = False
-    check("Z7 主配置与 pop 场景包都开了流式识别（场景包覆盖 asr 段，漏一个就没字幕）",
-          all(_rt_flags.values()),
-          [json.dumps(_rt_flags, ensure_ascii=False)])
+    _rt_missing = [k for k, v in _rt_flags.items() if not v]
+    check("Z7 主配置与**全部**场景包都开了流式识别（扫 config/scenes/，不是挑几个看）",
+          not _rt_missing,
+          [json.dumps(_rt_flags, ensure_ascii=False),
+           "缺 realtime 的：%s" % (", ".join(_rt_missing) or "无")])
 
     # ② 半句去重：同一段文本只推一次，正常增长照常推。离线断言，不花钱。
     from modules import realtime_asr as _rtmod

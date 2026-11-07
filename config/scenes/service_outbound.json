@@ -13,6 +13,7 @@
     "provider": "dashscope",
     "model": "qwen3-asr-flash",
     "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "realtime": true,
     "realtime_model": "paraformer-realtime-v2",
     "realtime_endpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
     "language": "zh",
