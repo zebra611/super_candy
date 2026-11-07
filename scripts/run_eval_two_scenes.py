@@ -56,7 +56,7 @@ def _run(label, scene, cases, report):
     env.pop("APP_SCENE", None)          # 不让上一个场景污染
     env.pop("EVAL_SCENE", None)
     print("\n" + "=" * 74)
-    print("跑场景：%s（%s）" % (label, scene or "默认/售后"))
+    print("跑场景：%s（%s）" % (label, scene or "默认"))
     print("=" * 74)
     proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True,
                           timeout=1800, env=env)
@@ -84,7 +84,9 @@ def main(argv=None):
     reports = os.path.join(ROOT, "docs", "eval_reports")
     os.makedirs(reports, exist_ok=True)
     runs = [
-        _run("售后主场景", "",
+        # 显式写场景，不靠"默认值"：默认已是赛题 POP 资审，
+        # 这里要跑的是售后回访场景那 88 条种子用例。
+        _run("售后主场景", "service_outbound",
              os.path.join(EVAL, "seed_cases.json"),
              os.path.join(reports, "eval_main_%s.md" % args.date_tag)),
         _run("pop_reject 赛题", "pop_reject", c4_path,

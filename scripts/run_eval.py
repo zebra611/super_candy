@@ -72,7 +72,13 @@ import config_loader              # noqa: E402
 # C4/Q5：跑批场景可切换，且必须赶在 `import app` 之前。
 # 这里在模块级解析参数，而不是等 main()——app 在 import 时就把配置读进缓存了，
 # 事后调 set_scene 只能改「每轮现读」的那部分，启动期缓存的仍留在旧场景。
-# 不传 --scene 且不设 EVAL_SCENE 时保持默认（售后），老命令逐字节不变。
+# 不传 --scene 且不设 EVAL_SCENE 时跑 **service_outbound（售后回访）**。
+# 这里必须写死，不能"跟随默认场景"：
+#   · 跑批用例（T17 真实通话、Q1 分诊回归、Q2 课程）是在售后场景下设计的，
+#     must_say 钉的是售后话术（如"我是京东客服中心"）；
+#   · 默认场景后来换成了赛题 POP 资审，"跟随默认"会让这批用例集体失配——
+#     实测踩过：默认一换，T17 立刻从 6/6 掉到 5/6，报错的是用例不是代码。
+#   · 老命令（不带 --scene）逐字节不变：它本来跑的就是售后场景。
 def _scan_argv(argv):
     """一次性解析参数。main() 与模块级都读它，避免两处口径漂移。"""
     opts = {"scene": "", "cases": "", "report": "",
@@ -107,7 +113,8 @@ def _scan_argv(argv):
 
 _OPTS = _scan_argv(sys.argv[1:])
 
-_EVAL_SCENE = (_OPTS["scene"] or os.environ.get("EVAL_SCENE", "")).strip()
+_EVAL_SCENE = ((_OPTS["scene"] or os.environ.get("EVAL_SCENE", "")).strip()
+               or "service_outbound")
 if _EVAL_SCENE:
     os.environ["APP_SCENE"] = _EVAL_SCENE
     config_loader.load(force=True)

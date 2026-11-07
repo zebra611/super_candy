@@ -15,6 +15,11 @@ import os
 import sys
 import unittest
 
+# 这套用例测的是**售后回访场景**（台词是"用着还行""权益""上门""订单"，
+# 知识库条目也是售后那批）。默认场景已换成赛题 POP 资审，不钉死场景就会全红。
+# 必须钉在 import config_loader **之前**——它的配置路径在 import 时就解析好了。
+os.environ.setdefault("APP_SCENE", "service_outbound")
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config_loader  # noqa: E402
