@@ -1,0 +1,125 @@
+{
+  "_comment": "模拟商家画像（L2 自进化的前提）。与 eval/personas_generated.json 的根本区别：那边是**固定台词回放**，这边只声明「这个人知道什么、愿不愿说、听不听得清、有多少耐心」，具体说什么由 modules/user_sim.py 按客服**实际说了什么**现场决定。因此同一份画像在不同客服话术下会走出不同对话——这才测得出话术好坏。",
+  "_schema": {
+    "knows": "他知道哪些事实（值来自本通电话真正拨出的那条档案，不是编的）。false = 他真的不知道。",
+    "willing": "on_ask=问了就说；refuse=先质疑再决定；never=绝不说",
+    "traits.hearing": "一句能听清的概率，1.0 = 完全听得清",
+    "traits.patience": "耐心预算；重复要同一条信息 -1，问了不答 -1，耗尽即挂断",
+    "traits.trust0": "初始信任（陌生人打来电话的默认状态）",
+    "traits.trust_gate": "低于这个信任值就不肯报个人信息",
+    "goal": "confirm=会配合到底；question_only=只关心要补什么；refuse=拒绝核身；wrong_person=不是本人；hangup_now=接起来就挂；offtopic=絮叨跑题",
+    "split": "train=调参用；holdout=**只做验收**，不得据它改话术"
+  },
+  "personas": [
+    {
+      "id": "S01",
+      "label": "配合的经办人",
+      "goal": "confirm",
+      "split": "train",
+      "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+      "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+      "traits": {"hearing": 0.95, "patience": 6, "trust0": 0.45, "trust_gate": 0.2, "verbosity": 0.3},
+      "style": ["嗯"],
+      "expect": {"closed": true}
+    },
+    {
+      "id": "S02",
+      "label": "谨慎的店长",
+      "goal": "confirm",
+      "split": "train",
+      "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+      "willing": {"phone_tail": "refuse", "contact_name": "on_ask"},
+      "traits": {"hearing": 1.0, "patience": 5, "trust0": 0.05, "trust_gate": 0.55, "verbosity": 0.4},
+      "style": ["我跟你说"],
+      "expect": {"closed": true}
+    },
+    {
+      "id": "S03",
+      "label": "耳背的老会计",
+      "goal": "confirm",
+      "split": "holdout",
+      "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+      "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+      "traits": {"hearing": 0.45, "patience": 8, "trust0": 0.4, "trust_gate": 0.25, "verbosity": 0.9},
+      "style": ["啊"],
+      "expect": {"closed": true}
+    },
+    {
+      "id": "S04",
+      "label": "记不住号码的店主",
+      "goal": "confirm",
+      "split": "train",
+      "knows": {"phone_tail": false, "contact_name": true, "company_name": true},
+      "willing": {"contact_name": "on_ask"},
+      "traits": {"hearing": 1.0, "patience": 6, "trust0": 0.4, "trust_gate": 0.2, "verbosity": 0.5},
+      "style": ["唉"],
+      "expect": {"closed": true}
+    },
+    {
+      "id": "S05",
+      "label": "拒绝提供信息的商家",
+      "goal": "refuse",
+      "split": "train",
+      "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+      "willing": {"phone_tail": "never", "contact_name": "never"},
+      "traits": {"hearing": 1.0, "patience": 4, "trust0": 0.1, "trust_gate": 0.9, "verbosity": 0.4},
+      "style": ["我说"],
+      "expect": {"closed": false}
+    },
+    {
+      "id": "S06",
+      "label": "打错人了",
+      "goal": "wrong_person",
+      "split": "holdout",
+      "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+      "willing": {},
+      "traits": {"hearing": 1.0, "patience": 5, "trust0": 0.5, "trust_gate": 0.2, "verbosity": 0.3},
+      "style": ["喂"],
+      "expect": {"closed": false}
+    },
+    {
+      "id": "S07",
+      "label": "接起来就挂",
+      "goal": "hangup_now",
+      "split": "train",
+      "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+      "willing": {},
+      "traits": {"hearing": 1.0, "patience": 0, "trust0": 0.3, "trust_gate": 0.3, "verbosity": 0.2},
+      "style": ["哎"],
+      "expect": {"closed": false}
+    },
+    {
+      "id": "S08",
+      "label": "只关心补什么材料",
+      "goal": "question_only",
+      "split": "train",
+      "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+      "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+      "traits": {"hearing": 1.0, "patience": 7, "trust0": 0.5, "trust_gate": 0.2, "verbosity": 0.5},
+      "style": ["行"],
+      "expect": {"closed": true}
+    },
+    {
+      "id": "S09",
+      "label": "怕被收费的商家",
+      "goal": "confirm",
+      "split": "train",
+      "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+      "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+      "traits": {"hearing": 1.0, "patience": 6, "trust0": 0.3, "trust_gate": 0.25, "verbosity": 0.5},
+      "style": ["我跟你说"],
+      "expect": {"closed": true}
+    },
+    {
+      "id": "S10",
+      "label": "絮叨跑题的老板",
+      "goal": "offtopic",
+      "split": "holdout",
+      "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+      "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+      "traits": {"hearing": 1.0, "patience": 7, "trust0": 0.5, "trust_gate": 0.2, "verbosity": 1.0},
+      "style": ["哎呀"],
+      "expect": {"closed": false}
+    }
+  ]
+}

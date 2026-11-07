@@ -67,6 +67,10 @@ class RealtimeAsr:
         self._min_sid = 1          # 句子号从 1 起；收走之前不拦任何句子
         # 喂音频的节流缓冲
         self._pending = bytearray()
+        # 整句明细（含说话人编号）。默认接口不返回 speaker_id，
+        # 只有在 run-task 里开了 speaker_diarization 才有；没有就是 None。
+        # 留着它是为了"谁在说"能被记录与复算，而不是只留在内存里被拼成字符串。
+        self._sentences = []
 
     # ------------------------------------------------------------------
     # 建连
@@ -114,13 +118,19 @@ class RealtimeAsr:
         # streaming 必须是 "duplex"（官方文档原文，三条指令都一样）。
         # 旧 NLS 协议的 "out"/"in" 在这里会得到一个诡异的 NO_VALID_AUDIO_ERROR：
         # task-started 照样回，但音频全被当作不存在——错得一点都不响。
+        # 说话人分离（diarization）：开了才有 speaker_id，用来区分"本人/旁人"。
+        # 默认关——多一项能力也多一份计费与兼容风险，等实测确认可用再默认开。
+        _params = {"format": "pcm", "sample_rate": 16000}
+        if config_loader.asr_config().get("speaker_diarization"):
+            _params["speaker_diarization_enabled"] = True
+
         run_task = {
             "header": {"action": "run-task", "task_id": task_id,
                        "streaming": "duplex"},
             "payload": {
                 "task_group": "audio", "task": "asr",
                 "function": "recognition", "model": model,
-                "parameters": {"format": "pcm", "sample_rate": 16000},
+                "parameters": _params,
                 "input": {},
             },
         }
@@ -209,6 +219,11 @@ class RealtimeAsr:
             self._min_sid = self._max_sid + 1
             return text
 
+    def sentences(self):
+        """已闭合的句子明细（含 speaker_id，若服务端给了的话）。"""
+        with self._lock:
+            return list(self._sentences)
+
     def restart(self):
         """丢弃已攒未取的结果（打断后调用）。任务连接保持不动，
         但句子号划界前移：被打断那句话的任何后续结果都不再要。"""
@@ -285,6 +300,12 @@ class RealtimeAsr:
             if sentence.get("sentence_end"):
                 if text:
                     self._finals.append(text)
+                    self._sentences.append({
+                        "sid": sid, "text": text,
+                        "speaker": sentence.get("speaker_id"),
+                        "begin_ms": sentence.get("begin_time"),
+                        "end_ms": sentence.get("end_time"),
+                    })
                 self._partials = ""    # 整句落袋，半句自然作废
                 self._last_partial = ""
             elif text:

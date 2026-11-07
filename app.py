@@ -411,6 +411,57 @@ def reset_audio_buffer(sess):
 # 业务流程：一轮对话的完整链路
 # ---------------------------------------------------------------------------
 
+#: 只为"没启用/为什么没启用"打印一次，别每轮刷屏。
+_SPK_NOTED = set()
+
+
+def _speaker_probe(sess, pcm, source):
+    """看这一句是不是"刚才那位"说的。返回要写进事件的 dict，或 None（不适用）。
+
+    现在只做影子模式：结论写事件，**不改变**这一轮怎么处理。
+    为什么不敢直接拦：本机标定用的是 TTS 五个音色（零误杀 / 漏放 15%），
+    真人双人语料一条都没有。没有真机数据就拦，等于拿演示赌一个没测过的阈值。
+
+    注册纪律（这一条比阈值重要）：
+        · 注册未满 3 条时，把说过的都收下——这时候还没有"中心"，收谁就是谁；
+        · 注册满了以后，**只收判为 same 的段**继续更新中心。
+          不能把旁人也往里加，否则中心会被慢慢拽到"两个人之间"，
+          之后谁都判不出——这是在线聚类最典型的漂移故障。
+    """
+    cfg = config_loader.load().get("speaker_gate") or {}
+    if not cfg.get("enabled") or source != "asr" or not pcm:
+        return None
+
+    from modules import speaker_gate as sg
+    ok, why = sg.available()
+    if not ok:
+        if why not in _SPK_NOTED:
+            _SPK_NOTED.add(why)
+            print("  [speaker-gate] 未启用：%s" % why)
+        return {"decision": "abstain", "reason": why, "mode": "shadow"}
+
+    prof = sess.get("speaker_profile")
+    if prof is None:
+        prof = sg.SpeakerProfile()
+        sess["speaker_profile"] = prof
+
+    res = prof.decide(pcm)
+    if not prof.enrolled:
+        prof.add_pcm(pcm)                     # 注册期：还没中心，收到就是它
+    elif res.get("decision") == "same":
+        prof.add_pcm(pcm, alpha=0.25)         # 像本人：正常更新
+    elif res.get("decision") == "uncertain":
+        prof.add_pcm(pcm, alpha=0.05)         # 灰区：慢速跟随，防漂移
+
+    res["mode"] = "shadow"
+    res["enrolled"] = prof.count
+    # 配了 enforce 也只记录：这件事还没到能拦的时候，配置文件不该比实测更乐观。
+    if cfg.get("mode") == "enforce" and "enforce" not in _SPK_NOTED:
+        _SPK_NOTED.add("enforce")
+        print("  [speaker-gate] mode=enforce 尚未接入对话流程，当前按 shadow 记录")
+    return res
+
+
 def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=False,
                 audio_dropped=0, asr_override=None):
     """执行一轮对话：这是整个哑链路的核心，也是五个人将来各自替换的接缝。
@@ -542,6 +593,14 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
                 payload["provider"] = provider
             events.write_event(session_id, "asr_result", payload,
                                turn_id=turn_id, latency_ms=asr_ms)
+
+        # ④½ 说话人一致性门（可选）：判"这句是不是刚才那位说的"。
+        # 现在只做**影子模式**——判完记一条事件，不影响任何对话行为。
+        # 为什么先影子：本机只在 TTS 多音色语料上标定过（零误杀/漏放 15%），
+        # 还没有真人双人语料证明接进流程不会误伤。先攒真机分布，再决定是否拦。
+        _spk = _speaker_probe(sess, audio_bytes, source)
+        if _spk:
+            events.write_event(session_id, "speaker_gate", _spk, turn_id=turn_id)
 
         # ⑤ 编排：吃用户话，吐回复（可能附带工具调用）
         t_llm = time.time()

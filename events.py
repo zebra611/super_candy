@@ -161,9 +161,12 @@ def write_event(session_id, event_type, payload=None, turn_id=0, latency_ms=0.0)
     先改 contracts 再改调用处，这正是契约该有的约束力。
     """
     if event_type not in EVENT_TYPES:
+        # 种类数不写死：11-08 新增 speaker_gate 后这句话还停在"16 种"，
+        # 报错信息自己先过时了。数量从契约现算。
         raise ValueError(
-            "未登记的事件类型：%r。合法值是 contracts.EVENT_TYPES 里的 16 种；"
-            "要新增事件请先改契约，不要在调用处临时造名字。" % (event_type,))
+            "未登记的事件类型：%r。合法值是 contracts.EVENT_TYPES 里的 %d 种；"
+            "要新增事件请先改契约，不要在调用处临时造名字。"
+            % (event_type, len(EVENT_TYPES)))
 
     conn = _connect()
     cur = conn.execute(

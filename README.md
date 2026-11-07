@@ -37,6 +37,83 @@ GitHub 的 Contributors 只显示账号名，看不出是谁，所以这里给�
 
 > 最新在最上面。每条改动都附当时的回归结果，断言数即验收标准。
 
+**2026-11-08 · 真实用户模拟 + L2 自进化闭环 + 说话人一致性门**：三件事，都建立在实测而非推断上。
+
+**① 真实用户模拟器**（`modules/user_sim.py` + `eval/personas_sim.json` 10 类画像）。
+原来的"模拟用户"是**固定台词回放**——按 stage 排好句子顺着念，不看客服上一句说了什么；
+`docs/28` 已判过它：40 条里 24 条失败，其中 5 条人设"台词里根本没有可核身信息"却要求闭环，
+**失败是模拟器自己造的**。新模拟器只受三条约束，不做更聪明的台词：
+**受知**（事实全部取自本通电话真正拨出的那条档案，`knows=false` 的字段在 `derive_facts()` 里不存在）、
+**受听**（拿不到 stage/intent/slots，只从客服**字面**推测被问了什么；听错按概率发生且同一要素只错一次）、
+**受耐心**（重复同一句 −2、重复要同一条 −1、问了不答 −1；信任低于门槛就不报信息）。
+随机源按 `(画像, 轮次)` 播种，同输入逐字节一致。
+
+**② L2 闭环**（`scripts/sim_eval.py` 跑批 → `modules/attribution.py` 归因 →
+`modules/cluster.py` 聚类 → `scripts/evolve.py` 的 `init/propose/gate/promote/rollback`）。
+归因先判责任再聚类：`agent`（系统真错）/ `case`（画像缺信息）/ `sim`（秒挂、打错人、拒绝）/
+`unexplained`（单列待查），**只有 agent 类进优化池**；用规则不用 LLM 判官，每条缺陷都能带原话复算。
+候选只允许改 `config/` 里的**话术键**（`contracts.py`、事实实体禁改），五道闸门：
+train 不降、holdout 不降、有实际收益、无个体回退、缺陷总数不增。
+实测：基线 **7/10**（train 5/7、holdout 2/3）→ 候选 v2 **8/10**（train 6/7、holdout 2/3）；
+**回滚实测 8/10 → 7/10 → 再上线 8/10**。版本库 `config/evolution/`（`versions/v1`、`versions/v2`、
+`versions.json` 指针），`promote` 只同步**改动过的键**，保留两份场景各自的引擎开关。
+
+**③ 说话人一致性门**（`modules/speaker_gate.py`，新事件类型 `speaker_gate`，契约 16→17 种）。
+外呼是**我们先打过去**，拨号前不知道接电话的是谁——**没有可比的声纹模板**。
+能做的是同一通电话内的"像不像刚才那位"。三条路都实测过，两条被否：
+手工特征（MFCC+F0）EER **24%**、短句 30%、零误杀工作点漏放 **99%**（根因是 MFCC 均值里"内容"的
+方差比"说话人"还大，调参救不了）；paraformer 实时接口显式开 `speaker_diarization_enabled`
+也不返回 `speaker_id`（3 句全 `None`）。采用 WeSpeaker 中文 ONNX（CN-Celeb ResNet34，26MB，
+`scripts/fetch_speaker_model.py` 下载，`*.onnx` 已 gitignore）：EER **16%**、长句 **8%**、短句 11.2%，
+零误杀阈值 0.746 下旁人漏放 **15%**。音色两两相似度说明风险在哪：跨性别 0.20~0.26（几乎不会错），
+三个女声彼此 0.64~0.70（夫妻/同事这类同性别近音色才是混淆源）。
+**当前是影子模式**：每轮识别后判一次、写事件，**不改变任何对话行为**——数字全部来自 TTS 五个音色，
+不是真人，没有真机录音就开拦截等于拿演示赌阈值。
+
+顺带刨出 3 个真缺陷：商家质疑来电身份时客服绕圈 5 轮被挂断、商家说记不住尾号时客服只重复同一条要求
+（两条是话术，v2 已修）、**商家报了姓名"就是晏青梧"系统不收**（`_take_identity_slots` 只认"我叫/姓X"，
+这是代码缺陷，`propose` 会标 `needs_code` 且**不生成候选**，尚未修）。
+两个自己踩过并已加护栏的坑：闸门原写"不得出现新缺陷类型"是反的（候选让通话走得更远必然暴露更深的坑，
+惩罚这种"发现"等于奖励"别往下走"）；基线曾拿 v2 的分数当 v1 的标准（用考过的卷子当没考过的），
+现在基线绑定**场景内容哈希**（规范化 JSON 而非文件字节），对不上或缺哈希一律拒绝初始化，负向测试当场验过。
+
+回归：`verify.py` **192/192**（新增证据 30 模拟器与归因 9 条、证据 31 说话人门 8 条）。
+证据：`docs/32_真实用户模拟与L2自进化.md`、`docs/33_说话人一致性门.md`。
+
+**2026-11-07 · 赛题四段式 + 测试台（外呼名单、随机纯预览、纯文字模式、档案补全、核身问法）**：
+**① 四段式开场**（#40）：`start_call` 从外呼名单取本通电话的目标（`next_outbound_target`，
+只取 `close_mode=电话` 且 `call_status=待外呼`），写进 `sess["outbound_target"]`，开场变成
+"您好，我是京东商家资质审核专员，请问您是{公司名}的{联系人身份}吗？"——不再是泛问"贵公司的负责人吗"，
+商家能判断这通电话是找谁的。新增确认门：用户确认公司前只回答问题、不进核身、**不说驳回原因**；
+短句"不是/打错"立即礼貌收尾，长句里的"不是"不当否认，避免误挂断。
+同一轮还修掉一个真缺陷：阿里云改写把完整公司名压成"这家公司"，六道 NLG 守卫都没拦住——
+新增 `_entities_ok()`，公司名/简称/店铺名/申请单号/品牌/尾号在改写前后必须一致，**换语气可以，换事实不行**。
+
+**② 测试台**（#41）：测试页新增「随机预览」——`GET /api/company/random` 抽一家公司展示在页面下方，
+**不发起通话、不创建会话**（实测 session 数不变）；预览把 `application_id` 锁进 `pendingTarget`，
+随后点「纯文字测试」或「开始通话」即加载这家公司作为外呼目标。
+「纯文字测试」为 `textOnly` 模式：**不连麦克风、不建音频 WebSocket、不合成播放语音**，
+只在输入框打字，方便无麦/无 key 环境复测。
+
+**③ 档案补全**：确定性生成器 `scripts/gen_mock_applications.py` 补齐 5 个身份字段
+（`id_card` / `id_card_tail` / `credit_code` / `credit_code_tail` / `bank_account_tail`）与
+6 个店铺/公司字段（`shop_id` / `shop_id_tail` / `shop_type` / `shop_status` / `shop_open_date` /
+`registered_address`），120 条共 **62 字段**。身份证按 GB 11643、信用代码按 GB 32100 生成校验位，
+独立复核 **0 错误**、全局唯一；`check_mock_applications.py` 七项（含**字节级可复算**）全过。
+**改的是生成器，不是数据文件**——手改 JSON/CSV 会让可复算校验直接红。
+
+**④ 核身问法**：原来问"您的**店铺或公司信息后四位**是多少"，商家名下有手机号/信用代码/店铺编号/
+对公账户多个"后四位"，等于让他猜；`nlg=dashscope` 还会把它再压成更生硬的短句（真机复现过）。
+统一改为点名一个具体数字——"核对申请单需要您**申请时预留的手机号后四位**，说四个数字就行"，
+并提供姓名/申请单编号等替代路径；`identity_*` 问句**不经 LLM 改写**（`identity_ok` 仍照常改写），
+保证指代明确、可逐字复述。
+
+**⑤ macOS 启动**：新增 `启动.command` / `启动全部.command` / `验证.command`（100755）与
+`_pycheck.sh`（真跑导入 + 版本判断找 3.9+，能排除残缺解释器），对应 Windows 的三个 `.bat`；
+README 补双平台入口。
+
+回归：`verify.py` **175/175**、`test_nlg.py` 25/25，线上链接重新发布（TTS `provider=dashscope`）。
+
 **2026-11-06 · 评测与质检工具链（R3）**：闭环率改为双指标（**应闭环 11/11、误闭环 0/14**，
 未声明 5 条单列）；跑批加启动断言，事件库不在临时目录直接拒绝启动；`bench_voice` 分位数改线性插值、
 补样本数与超时条数；新增对抗集 10 条与三套评测脚本（`adversarial_run` / `eval_suite` / `daily_run`）；
@@ -191,19 +268,33 @@ Serena），声音不再是浏览器机械音。顺带修掉三个实测暴露�
 | **话术改写接缝** | `nlg.say()` 已接 `qwen-flash`，默认 `provider=template` 不改写（行为等于没接），超时或出错原样返回 |
 | **知识库检索** | 21 条结构化条目 + 加权检索 + 可溯源；问"多久能上门"不会答成权益有效期 |
 | **长会话记忆** | 需求与最近发言落库，到第 18 轮仍答得上"我刚才说的什么" |
+| **外呼名单 + 四段式开场** | 从名单取本通电话的真实目标（120 条档案，`close_mode=电话` 且待外呼），开场直接报"请问您是{公司名}的{联系人身份}吗"；确认前**不进核身、不说驳回原因**，短句"打错了"立即礼貌收尾 |
+| **公司档案（62 字段）** | 个人/店铺/公司/对公账户四类信息齐全，含 5 类"后四位"（手机、身份证、信用代码、店铺编号、对公账户）；身份证按 GB 11643、信用代码按 GB 32100 生成校验位，`check_mock_applications` 七项（含可复算）全过 |
+| **测试台：随机预览** | `GET /api/company/random` 抽一家公司展示在页面下方，**不建会话、不发起通话**；预览锁定的公司会被下一次会话直接当外呼目标，客服"知道"的就是它 |
+| **测试台：纯文字模式** | `textOnly`：不连麦克风、不建音频 WebSocket、不合成播放语音，只打字对话。没麦、没 key 也能复测全流程 |
+| **实体护栏（NLG）** | 改写前后公司名/简称/店铺名/申请单号/品牌/尾号必须一致——**可以换语气，不能换事实**（曾把"北京市川上商贸有限责任公司"改成"这家公司"，已拦） |
+| **真实用户模拟** | 10 类商家画像，只受三条约束：**受知**（事实仅来自本通档案）、**受听**（只从客服字面推测被问了什么，听错同一要素只错一次）、**受耐心**（重复要求扣耐心、信任不足不报信息）；同种子逐字节可复现 |
+| **L2 自进化闭环** | 跑批 → 归因（agent/case/sim 三类，只有 agent 进优化池）→ 失败聚类 → 候选话术 → train+holdout 双跑闸门 → 版本快照/指针/回滚。实测 7/10 → 8/10，回滚 8/10 → 7/10 → 8/10 |
+| **说话人一致性门（影子）** | WeSpeaker 中文 ONNX 判"像不像开场应答那位"：EER 16%、长句 8%，零误杀工作点旁人漏放 15%。**只写事件、不改行为**，等真机录音标定后才谈拦截 |
 
 ### 还没做的（不是忘了，是排期在后面）
 
-- **工具层仍返回写死数据**（`modules/tools.py`）。2B 的适配层在 PR #14 里（Mock / Real 双 provider、
-  300ms 超时闸门、幂等回写），三条必改没修完，尚未合入。`mock_business/` 已经是真的了，
-  可以直接对着它写适配器。
+- **Real provider 没接真实京东接口**（`modules/adapters/real.py` 有了，但地址与鉴权没接过真环境）。
+  现在默认走 Mock 档案（120 条 CSV）+ `mock_business/` 沙箱服务，演示与评测都够用。
 - ~~实时字幕没做~~ **已做（Z7）**：默认开启，半句字幕 + 整句落袋，见上表与 `docs/16`。
   仍有的边界：字幕只对"正在说的这一句"负责，跨轮的整段历史在对话日志里，不在字幕条上。
-- **没有说话人分离**：环境里别人说话，会被当成用户说的话。
+- **说话人只做到"影子模式"**：能判"像不像开场应答那位"（EER 16%），但**没有开拦截**——
+  数字全部来自 TTS 五个音色，不是真人。缺一次真机录音标定（本人 5 句 + 换人 5 句）才能改
+  `mode: "enforce"`。另：旁人抢在**第一句**接电话这条挡不住（拨号前没有可比模板，任何方案都挡不住）。
+  跨性别几乎不会错（0.20~0.26），同性别近音色（夫妻/同事）才是风险区（0.64~0.70）。
 - **语义级合规没做**：禁语仍是词表匹配，换个说法就漏（3 号）。
-- **评测集只有 30 条，且与判定规则同源**：评委问"100% 怎么来的"要主动说明过拟合风险；
-  扩到 80–120 条 + 20% 留出集排在后面（3 号）。
-- **RSI 自进化（K5）未开始**：迭代后分数要高于基线并留回滚记录，同分裁决第一顺位。
+- **`_take_identity_slots` 只认"我叫/姓X"**：商家说"就是晏青梧"这类自然表述会被漏掉，
+  模拟跑批已把它刨出来（标 `needs_code`），属代码缺陷、尚未修。
+- **"没听明白"仍被当"拒绝整改"回写**：`_stage_confirm` 的分支要收紧，同样是代码缺陷。
+- **L2 只进到文本层**：模拟器不模拟声学误差（噪声/口音/断句），10 个画像覆盖有限，
+  候选是单轮补丁而非多轮搜索；L3 权重微调（SFT/LoRA）**不做**——数据量不够、不可复现、合规难审计。
+- **评测集口径**：`run_eval` 30 条仍与判定规则同源（过拟合风险写在 `docs/06` 第 7 节）；
+  另有对抗集 9 批与 10 条模拟画像，但不能代替 80–120 条独立标注集（3 号）。
 
 逐条写明影响和责任人：**[docs/14_接口与代码地图.md](docs/14_接口与代码地图.md)** 第 3 节。
 
@@ -230,6 +321,31 @@ Serena），声音不再是浏览器机械音。顺带修掉三个实测暴露�
 
 > **不要双击 `web/index.html`**：它需要后端才能工作，双击只会看到一堆失败请求。
 > 正确入口永远是 `http://127.0.0.1:8000`。
+
+### 测试台：随机预览 / 纯文字模式（不花钱、不用麦）
+
+页面上有三个入口，按你要测什么选：
+
+| 按钮 | 做什么 | 适合场景 |
+|---|---|---|
+| **随机预览** | `GET /api/company/random` 抽一家公司，把 62 个字段（公司/店铺/个人/对公账户）摊在页面下方；**不建会话、不发起通话** | 核对档案是否完整、看客服待会儿会拿到什么 |
+| **纯文字测试** | 用预览锁定的那家公司开一个 `textOnly` 会话：**不连麦克风、不建音频 WS、不合成语音** | 无麦/无 key/省额度，纯测对话逻辑 |
+| **开始通话（语音）** | 走完整语音链路（真 ASR + TTS + 打断） | 演示与语音调优 |
+
+先「随机预览」→ 再「纯文字测试」，客服的开场会直接问"请问您是{公司名}的{联系人身份}吗"，
+下方卡片就是它手里的那份档案——开场白与档案对不上，一眼能看出来。
+命令行等价物：
+
+```bash
+curl -s http://127.0.0.1:8000/api/company/random            # 纯预览，不建会话
+curl -s -X POST http://127.0.0.1:8000/api/call/start \
+     -H "Content-Type: application/json" \
+     -d '{"application_id":"QZ202611060001"}'                 # 指定公司开一通
+```
+
+> 核身时商家要报的是**申请时预留的手机号后四位**（不是"信息后四位"这种含糊问法）：
+> 名下手机、身份证、信用代码、店铺编号、对公账户都各有后四位，问"信息后四位"等于让他猜。
+> 卡片上"联系电话尾号"就是核身要的那四个数字。
 
 ### 想听到真人声音（要配密钥）
 
@@ -369,7 +485,7 @@ python mock_business/service.py     # Mock 业务系统：http://127.0.0.1:8100/
 |---|---|---|
 | [docs/01_架构与分工设计.md](docs/01_架构与分工设计.md) | 双环路架构、八模块、时延预算、里程碑 K0–K6 | 全员 |
 | [docs/02_状态机定义.md](docs/02_状态机定义.md) | 六环节迁移条件、必说话术、退出条件、代码对照 | 2A 必读 |
-| [docs/03_事件契约.md](docs/03_事件契约.md) | 16 种事件的 payload 字段级定义 | 全员 |
+| [docs/03_事件契约.md](docs/03_事件契约.md) | 17 种事件的 payload 字段级定义 | 全员 |
 | [docs/04_时延打点规范.md](docs/04_时延打点规范.md) | T0–T4 五个点位、预算表、双口径怎么算 | 1 号、4 号 |
 | [docs/05_技术选型对比.md](docs/05_技术选型对比.md) | ASR/TTS/大模型/传输选型、开源件、成本估算 | 全员 |
 | [docs/07_任务1实现方案.md](docs/07_任务1实现方案.md) | 实时语音这一段怎么做、难点排序、实施进展 | 1 号 |
@@ -383,6 +499,8 @@ python mock_business/service.py     # Mock 业务系统：http://127.0.0.1:8100/
 | [docs/06_评测集说明.md](docs/06_评测集说明.md) | 30 条用例怎么用、怎么扩、必说话术怎么判、过拟合警告 | 3 号必读 |
 | [docs/08_方案审查与待确认清单.md](docs/08_方案审查与待确认清单.md) | 9 处实测缺陷的来龙去脉 + 修复记录 + 还没做的 | 全员 |
 | [docs/14_接口与代码地图.md](docs/14_接口与代码地图.md) | 接口表与错误码、文件归属、现在哪些还是假的 | 全员 |
+| [docs/32_真实用户模拟与L2自进化.md](docs/32_真实用户模拟与L2自进化.md) | 模拟用户三条约束、四类归因、五道闸门、版本与回滚、基线哈希护栏 | 3 号、答辩 |
+| [docs/33_说话人一致性门.md](docs/33_说话人一致性门.md) | 声纹三条路实测对比、EER 与音色相似度、影子模式为何先不拦截 | 1 号、答辩 |
 
 ### 平台与交付（4 号）的文档
 
@@ -400,28 +518,38 @@ python mock_business/service.py     # Mock 业务系统：http://127.0.0.1:8100/
 
 ```
 app.py            HTTP 路由 + 串联链路 + 会话边界 + 音频分片 + 打断/探针接口
-contracts.py      禁改区：16 种事件、六环节、工具签名、首字门槛、PCM 常量
+contracts.py      禁改区：17 种事件、六环节、工具签名、首字门槛、PCM 常量
 events.py         SQLite 事件流，转写/质检/时延/成本全从这里派生
 dashboard.py      看板聚合（只读）：把事件读成 KPI、分布、逐通摘要
 cost_guard.py     日成本闸门与速率限制（默认关闭）
 config_loader.py  读配置（支持多场景 + schema 校验）与密钥（环境变量优先）
 config/scenes/    可切换的场景包：换一个文件 = 换一套话术与禁语
+config/evolution/ 话术版本库：versions/v1、v2 快照 + versions.json 指针（回滚点）
 modules/
   voice.py        静音闸门、墙钟闸门、识别、合成（长句切段）、断连重试
   dialogue.py     规则版状态机：意图、槽位、话术、改口；回复统一从 _reply() 出
   nlg.py          措辞改写：say() 收口 + _rewrite() 已实现（默认 provider=template 不改写）
   kb.py           知识库引擎：结构化条目 + 词长加权检索 + explain/validate/conflicts
-  tools.py        工单工具（幂等、改口更新）
+  tools.py        工单工具（幂等、改口更新）+ 外呼名单 / 随机取档入口
+  adapters/       业务适配层：mock（CSV 档案）/ real / store，换 provider 不改调用处
   eval.py         五项质检与闭环打分
   realtime_asr.py 流式识别适配（paraformer-realtime，默认关闭）
+  user_sim.py     真实用户模拟：受知（只认本通档案）/ 受听（只听话面）/ 受耐心
+  attribution.py  逐轮归因：agent（系统错）/ case（画像缺信息）/ sim（非系统）/ unexplained
+  cluster.py      失败聚类：缺陷码 × 阶段 × 用户动作 → 建议改哪句配置键
+  speaker_gate.py 说话人一致性门：WeSpeaker ONNX 嵌入 + 在线档案（影子模式）
 ws_channel.py      通话协议层：/ws/call 的消息分发与 TTS 分段推送（后端可注入测试）
 wsproto.py         RFC 6455 编解码（纯标准库，可离线断言）
 web/index.html      AudioWorklet 采集、五态状态机、能量 VAD、三段式打断、双口径面板
 web/dashboard.html  指标看板：KPI、时延双口径、事件分布、质检汇总、库体检
 mock_business/      独立 Mock 业务服务：查客户 / 查订单 / 建工单（幂等）
-scripts/            verify（91 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
+config/mock/        外呼档案（120 条 62 字段，生成器可复算）
+scripts/            verify（192 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
+                    sim_eval（模拟用户跑批）/ evolve（init·propose·gate·promote·rollback）
+                    bench_speaker_gate（声纹阈值标定）/ gen_speaker_corpus（多音色语料）
+                    gen_mock_applications + check_mock_applications（档案生成与可复算校验）
                     task2_metrics（四项指标出数）/ check_realtime_asr（流式识别连通验证）
-                    test_*（七项能力的离线自测，已作为证据 16 挂进 verify）
+                    test_*（八套离线自测，已作为证据 16/30 挂进 verify）
                     clean_events · archive_events（库体检/归档）/ check_key / 试听 / 录音验识别
 CODEOWNERS          谁的文件谁审（GitHub 账号对照）
 .githooks/          pre-push：禁止直接推 main（要 git config core.hooksPath .githooks）
@@ -435,14 +563,33 @@ reviews/            PR 审核记录
 ## 七、怎么验证我改的东西没坏
 
 ```bash
-python scripts/verify.py       # 91 条行为断言，用临时库，不污染 data/
+python scripts/verify.py       # 192 条行为断言，用临时库，不污染 data/
 python scripts/run_eval.py     # 30 条用例跑批（离线，不调云端）
+python scripts/sim_eval.py     # 10 类模拟用户跑完整通话 + 逐轮归因（不调云端）
+python scripts/evolve.py status            # 现在线上是哪一版话术、分数多少、能不能回滚
 python config_loader.py        # 配置结构与占位符校验（一秒出结果）
 python scripts/archive_events.py --stats   # 事件库体检：体积、行数、索引
 ```
 
 `verify.py` 每条都打出**实际事件链和字段值**，不是只打个 PASS——
 结论可以被伪造，原始输出不能。
+
+想复现"话术进化"这一整套（不是只看结果，是自己跑一遍）：
+
+```bash
+python scripts/evolve.py rollback                     # 退回上一版（回滚点永远留着）
+python scripts/sim_eval.py --tag baseline \
+       --json eval/reports/sim_baseline.json --report eval/reports/sim_baseline.md
+python scripts/evolve.py init --scene config/scenes/pop_reject.json \
+       --baseline eval/reports/sim_baseline.json      # 基线必须与场景内容哈希对得上
+python scripts/evolve.py propose --out config/evolution/candidates/c001.json
+python scripts/evolve.py gate config/evolution/candidates/c001.json   # 五道闸门
+python scripts/evolve.py promote v2                   # 过闸门才允许上线
+```
+
+> `gate` 会拒绝三类候选：train 掉分、holdout 掉分、没有实际收益。
+> 它也会拒绝**基线来源不明**的跑批结果——基线绑定场景内容哈希，
+> 拿改过话术之后的分数当"没改过的标准"会直接被拦下（这条负向测试验过）。
 
 也可以双击：Windows **`验证.bat`** / macOS **`验证.command`**。
 
@@ -467,16 +614,19 @@ git config core.hooksPath .githooks
 
 `main` 是**随时能拿去演示**的那条线。目前 main 已含 2B 工具适配层（#14）、
 场景路径与日志落盘（#16）、落库开关文档化（#19）、团队对照与密钥提示（#20）、
-评测与质检工具链（#17：闭环双指标 / `_assert_isolated` 跑批隔离 / 对抗集 / docs/24 口径），
-自检 **91/91**。开着的 PR 只剩一个：
+评测与质检工具链（#17）、语音线 Z6/Z7/V1（#35–#37）、端到端跑通脚本（#38）、
+默认场景改赛题 POP（#39）、**四段式开场**（#40）、**档案补全 + 随机纯预览 + 纯文字模式 +
+macOS 启动**（#41），自检 **192/192**。**当前没有开着的 PR**。
 
-| 分支 | 状态 | 内容 |
-|---|---|---|
-| `exp/sim-adversarial` | **PR #18 修改中** | 8 角色×6 场景对抗模拟系统（确定性选句 + 课程进化）；待办：rebase 到 d3473a5、跑批产物出仓库、集成冒烟测试挂闸门（见 PR 内指南） |
+2026-11-08 的 L2 自进化与说话人门这批改动，按队长要求**直接进 main**（未开 PR），
+用的是 `.githooks/pre-push` 里写明的逃生舱 `ALLOW_MAIN_PUSH=1`；
+进之前跑了 `verify.py` **192/192**、`test_nlg.py` 25/25、`sim_eval` 8/10。
+规矩仍然是"改动走 PR"（见 §八），这次是明确的一次性例外，不是流程失效。
 
 > 已合并/已关闭的分支（`feat/platform-m5-m8`、`feat/task2-*`、`feat/r1-stage0-unlock`、
-> `feat/2b-tool-adapters`、`feature/eval-metering`、`feat/r7-closed-loop-metric` 等）都删除了，
-> 远程已 prune。`#4`~`#15` 的 PR 记录留着当审计：内容进了 main，看某功能哪次进来的，
+> `feat/2b-tool-adapters`、`feature/eval-metering`、`feat/r7-closed-loop-metric`、
+> `feat/identity-smart-and-random-preview` 等）都删除了，远程已 prune。
+> `#4`~`#15` 的 PR 记录留着当审计：内容进了 main，看某功能哪次进来的，
 > 用 `git log --oneline --all -- <文件>` 比翻 PR 列表快。
 
 **PR #1 已于 2026-11-04 合入 `main`，但不是原样合**：审核发现的 4 个缺陷先修再进，

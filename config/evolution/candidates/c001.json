@@ -1,0 +1,85 @@
+{
+ "id": "c001",
+ "created": "2026-11-08 00:19:18",
+ "base_version": "v1",
+ "scene_file": "config/scenes/pop_reject.json",
+ "from_baseline": "eval/reports/sim_baseline.json",
+ "targets": [
+  "agent_loop|IDENTITY|ask_why|identity_ask",
+  "agent_loop|IDENTITY|cant_remember|identity_offtopic",
+  "agent_loop|IDENTITY|refuse_info|identity_offtopic"
+ ],
+ "patches": [
+  {
+   "path": "stages.IDENTITY.reply_ask_identity",
+   "old": "您问的这个问题我记下了，稍后专员给您详细解答。这边先把申请单核对一下，方便说一下申请时预留手机号的后四位吗？",
+   "value": "您的号码是商家入驻时预留的联系方式，我们这边是官方审核，只用来核对这笔资质申请，不会外传。您报一下手机号后四位，或者说联系人姓名，都可以。",
+   "cluster": "agent_loop|IDENTITY|ask_why|identity_ask",
+   "clusters": [
+    "agent_loop|IDENTITY|ask_why|identity_ask"
+   ],
+   "rationale": "原句「您问的这个问题我记下了，稍后专员解答」等于不回答。商家问的是「你哪来的我号码」，这是合理质疑，必须正面回答才建立信任；答了信任够了，他自然愿意报后四位。"
+  },
+  {
+   "path": "stages.IDENTITY.reply_offtopic",
+   "old": "嗯，您说的我记下了。咱们先把申请单核对一下，方便说一下预留手机号的后四位吗？",
+   "value": "没关系，记不住号码也正常。您说个联系人姓名，或者申请单编号后六位，任意一个我都能核对上；实在不方便，我让专员用官方号码再联系您。",
+   "cluster": "agent_loop|IDENTITY|cant_remember|identity_offtopic",
+   "clusters": [
+    "agent_loop|IDENTITY|cant_remember|identity_offtopic",
+    "agent_loop|IDENTITY|refuse_info|identity_offtopic"
+   ],
+   "rationale": "原句只说「您说的我记下了」又把同一条要求重复一遍，记不住尾号的人被卡死在这里。给替代路径（姓名/单号）才能继续核身，也符合官方四路径核身设计。"
+  }
+ ],
+ "gate": {
+  "result": "pass",
+  "checks": [
+   {
+    "check": "train 不降",
+    "pass": true,
+    "detail": "5 → 6"
+   },
+   {
+    "check": "holdout 不降",
+    "pass": true,
+    "detail": "2 → 2"
+   },
+   {
+    "check": "有实际收益",
+    "pass": true,
+    "detail": "总通过 7→8，系统缺陷会话 4→4"
+   },
+   {
+    "check": "无个体回退",
+    "pass": true,
+    "detail": "无"
+   },
+   {
+    "check": "缺陷总数不增",
+    "pass": true,
+    "detail": "8 → 8"
+   }
+  ],
+  "version": "v2",
+  "at": "2026-11-08 00:19:19",
+  "metrics": {
+   "all_ok": 8,
+   "all_total": 10,
+   "train_ok": 6,
+   "train_total": 7,
+   "holdout_ok": 2,
+   "holdout_total": 3,
+   "agent_defect_sessions": 4,
+   "case_defect_sessions": 0,
+   "codes": {
+    "agent_slot_loss": 3,
+    "agent_noise_on_question": 1,
+    "agent_no_progress": 2,
+    "agent_loop": 1,
+    "agent_premature_writeback": 1
+   },
+   "defect_total": 8
+  }
+ }
+}

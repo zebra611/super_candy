@@ -48,6 +48,7 @@ from app import (_acquire, _audio_state, _auth, _has_interrupt_content,  # noqa:
                  probe_speech, record_barge_in,
                  report_client_metric, start_call)
 from modules import dialogue, eval as eval_mod, kb, nlg, tools, voice  # noqa: E402
+from modules import attribution, user_sim  # noqa: E402  L2：模拟用户与失败归因
 
 # 自检默认不真的调云端合成：既慢又要花钱，还会让"没有密钥的队友"跑不过。
 # TTS 的真实请求构造与失败回落，下面用本地假接口单独测（见证据 9 之后那段）。
@@ -1238,7 +1239,8 @@ def main():
     print("=" * 74)
 
     for _suite in ("test_kb", "test_fallback", "test_intent", "test_slots",
-                   "test_correction", "test_memory", "test_nlg", "test_tools"):
+                   "test_correction", "test_memory", "test_nlg", "test_tools",
+                   "test_user_sim"):
         _path = os.path.join(ROOT, "scripts", _suite + ".py")
         _run = subprocess.run([sys.executable, _path], cwd=ROOT,
                               capture_output=True, text=True, timeout=180)
@@ -2318,6 +2320,196 @@ def main():
 
     print()
     print("=" * 74)
+    print("证据 30：L2 自进化——模拟用户受知/受听/受耐心，归因不冤枉系统，版本可回滚")
+    print("=" * 74)
+
+    # 30.1 受知：画像不知道尾号，问三次都不能吐出正确值。
+    # 这条是整个 L2 的地基：模拟器一旦会编事实，聚类出来的"失败"就全是自证的。
+    _sim_co = {"company_name": "测试商贸有限责任公司", "contact_role": "法定代表人",
+               "contact_name": "张三", "phone_tail": "8642",
+               "application_id": "QZ202611060099"}
+    _sim_p = {"id": "V30", "goal": "confirm",
+              "knows": {"phone_tail": False, "contact_name": True},
+              "willing": {"contact_name": "on_ask"},
+              "traits": {"hearing": 1.0, "patience": 6, "trust0": 0.5,
+                         "trust_gate": 0.2, "verbosity": 0.3}, "style": []}
+    _ask = "好的，核对申请单需要您预留手机号的后四位，说四个数字就行。"
+    _s1 = user_sim.UserSim(_sim_p, _sim_co, seed="v30")
+    _outs = [_s1.say(_ask) for _ in range(3)]
+    _said = " ".join(o["text"] for o in _outs)
+    check("模拟用户不会编造它不知道的尾号（问三次也不出现 8642）",
+          "8642" not in _said and "八六四二" not in _said,
+          ["三次回答：%s" % " / ".join(o["text"] for o in _outs),
+           "首轮动作=%s（应为 cant_remember）" % _outs[0]["action"]])
+
+    # 30.2 受知（正向）：知道就必须报出档案里的那个值，不能是另一套写死的数字。
+    _s2 = user_sim.UserSim(dict(_sim_p, knows={"phone_tail": True, "contact_name": True}),
+                           _sim_co, seed="v30b")
+    _o2 = _s2.say(_ask)
+    check("模拟用户报出的尾号来自本通档案（8642），不是写死的",
+          _o2["action"] == "answer_tail" and
+          ("8642" in _o2["text"] or "八六四二" in _o2["text"]),
+          ["动作=%s；原话=%s" % (_o2["action"], _o2["text"])])
+
+    # 30.3 受听：开场白只确认身份，没要信息 → 不能主动交信息。
+    _s3 = user_sim.UserSim(_sim_p, _sim_co, seed="v30c")
+    _o3 = _s3.say("您好，我是京东商家资质审核专员，请问您是测试商贸有限责任公司的法定代表人吗？")
+    check("没被问到就不主动交信息（开场只确认身份）",
+          _o3["action"] not in user_sim.GAVE_FACT_ACTIONS and "8642" not in _o3["text"],
+          ["动作=%s；原话=%s" % (_o3["action"], _o3["text"])])
+
+    # 30.4 受听：听不清只错一次，且必须留下证据（否则归因会算成客服的错）。
+    _s4 = user_sim.UserSim(dict(_sim_p, traits={"hearing": 0.0, "patience": 6,
+                                                "trust0": 0.5, "trust_gate": 0.2}),
+                           _sim_co, seed="v30d")
+    _o4a, _o4b = _s4.say(_ask), _s4.say(_ask)
+    check("听不清只错一次，且记下听错了哪个词",
+          _o4a["action"] == "mishear" and _o4b["action"] != "mishear" and bool(_o4a["missed"]),
+          ["第一次=%s（missed=%s）｜第二次=%s"
+           % (_o4a["action"], _o4a["missed"], _o4b["action"])])
+
+    # 30.5 受耐心：挂断由耐心预算触发，不是脚本里写死的。
+    _s5 = user_sim.UserSim(dict(_sim_p, traits={"hearing": 1.0, "patience": 0,
+                                                "trust0": 0.5, "trust_gate": 0.2}),
+                           _sim_co, seed="v30e")
+    _o5 = _s5.say("您好，我是京东商家资质审核专员。")
+    check("耐心耗尽才挂断（patience=0 → hangup 且 ended=True）",
+          _o5["action"] == "hangup" and _s5.ended,
+          ["动作=%s；ended=%s" % (_o5["action"], _s5.ended)])
+
+    # 30.6 归因：用户提问被回"有杂音没听清" → 必须判成系统缺陷，不能当噪声放过。
+    _t_noise = [{"user": {"action": "ask_material", "text": "那我具体要补什么材料？"},
+                 "agent": {"reply_text": "不好意思，这边有点杂音没听清，您再说一次。",
+                           "stage": "IDENTITY", "next_stage": "IDENTITY",
+                           "intent": "noise", "slots": {}}}]
+    _codes = [d["code"] for d in attribution.analyse_turns(_t_noise)]
+    check("用户提问被当成「有杂音没听清」→ 判为系统缺陷",
+          attribution.AGENT_NOISE_ON_QUESTION in _codes,
+          ["缺陷码=%s；用户原话=%s" % (_codes, _t_noise[0]["user"]["text"])])
+
+    # 30.7 归因：用户报了尾号、客服同一轮又问一遍 → 槽位丢失。
+    _t_slot = [{"user": {"action": "answer_tail", "text": "后四位是 8642"},
+                "agent": {"reply_text": _ask, "stage": "IDENTITY",
+                          "next_stage": "IDENTITY", "intent": "identity_retry",
+                          "slots": {}}}]
+    _codes2 = [d["code"] for d in attribution.analyse_turns(_t_slot)]
+    check("用户已报尾号、客服同轮又问同一条 → 判为槽位丢失",
+          attribution.AGENT_SLOT_LOSS in _codes2,
+          ["缺陷码=%s；客服原话=%s" % (_codes2, _ask[:32])])
+
+    # 30.8 归因纪律：画像自己没这条信息 → 责任在用例，不许记到系统头上。
+    _sess = {"id": "V30X", "closed": False, "blocked_by_missing_fact": ["phone_tail"],
+             "turns": [{"user": {"action": "cant_remember", "text": "我记不住"},
+                       "agent": {"reply_text": "您再想想？", "stage": "IDENTITY",
+                                 "next_stage": "IDENTITY", "intent": "unclear",
+                                 "slots": {}}}]}
+    _res = attribution.analyse_session(_sess, {"goal": "confirm", "expect": {"closed": True}})
+    check("用例自己缺信息时不冤枉系统（fault=case 而不是 agent）",
+          _res["fault"] == "case",
+          ["fault=%s（缺的字段：%s）" % (_res["fault"], _sess["blocked_by_missing_fact"])])
+
+    # 30.9 版本库：上线过的版本必须留快照，且补丁只能落在话术上。
+    _vs_path = os.path.join(ROOT, "config", "evolution", "versions.json")
+    if not os.path.exists(_vs_path):
+        mark_uncovered("L2 版本库", "没有 config/evolution/versions.json（还没跑过 evolve.py）")
+    else:
+        with open(_vs_path, "r", encoding="utf-8") as _f:
+            _vs = json.load(_f)
+        _act = next((h for h in _vs.get("history", []) if h["version"] == _vs.get("active")), {})
+        _patched = [p["path"] for h in _vs.get("history", [])
+                    for p in ((h.get("candidate") or {}).get("patches") or [])]
+        check("进化版本库有生效版本，且补丁只改话术（stages.*）",
+              bool(_act) and all(p.startswith("stages.") for p in _patched),
+              ["active=%s 状态=%s｜补丁路径=%s"
+               % (_vs.get("active"), _act.get("status"), sorted(set(_patched)))])
+        _snap_ok = all(os.path.exists(os.path.join(ROOT, "config", "evolution", "versions",
+                                                   h["version"], "scene.json"))
+                       for h in _vs.get("history", []) if h.get("status") != "rejected")
+        check("每个有效版本都有可回滚的场景快照",
+              _snap_ok,
+              ["版本：%s" % [h["version"] for h in _vs.get("history", [])]])
+
+    # 30.10 两份同场景文件不许漂移：改一份不改另一份，演示时就是"改了没生效"。
+    _sc_main = os.path.join(ROOT, "config", "scene.json")
+    _sc_pkg = os.path.join(ROOT, "config", "scenes", "pop_reject.json")
+    if os.path.exists(_sc_main) and os.path.exists(_sc_pkg):
+        with open(_sc_main, "r", encoding="utf-8") as _f:
+            _a = json.load(_f).get("stages") or {}
+        with open(_sc_pkg, "r", encoding="utf-8") as _f:
+            _b = json.load(_f).get("stages") or {}
+        _diff = sorted(k for k in set(_a) | set(_b) if _a.get(k) != _b.get(k))
+        check("默认场景与 pop_reject 场景包的话术不漂移",
+              not _diff,
+              ["不一致的阶段：%s" % (_diff or "无")])
+    else:
+        mark_uncovered("双场景一致性", "缺 config/scene.json 或 scenes/pop_reject.json")
+
+    print()
+    print("=" * 74)
+    print("证据 31：说话人一致性门——同人/旁人可区分，影子模式不改行为")
+    print("=" * 74)
+
+    from modules import speaker_gate as spk_mod
+
+    check("speaker_gate 事件已进契约（不是调用处临时造的名字）",
+          "speaker_gate" in contracts.EVENT_TYPES,
+          ["事件全集里命中=%s" % ("speaker_gate" in contracts.EVENT_TYPES)])
+
+    _ok_spk, _why_spk = spk_mod.available()
+    _corpus = os.path.join(ROOT, "data", "speaker_corpus")
+    # 显式切到赛题场景：说话人门的开关写在场景包里，
+    # 前面几条断言把场景切走了，这里不切回来就会读到"没这个配置"而静默跳过。
+    _spk_scene_prev = config_loader.scene_path()
+    try:
+        config_loader.set_scene("pop_reject")
+    except FileNotFoundError:
+        pass
+    if not _ok_spk:
+        # 缺 numpy / onnxruntime / 模型 / 标定，都属"没条件验"，不能记成 PASS。
+        mark_uncovered("说话人一致性门", _why_spk)
+    elif not os.path.isdir(_corpus):
+        mark_uncovered("说话人一致性门", "没有 data/speaker_corpus（先跑 gen_speaker_corpus.py）")
+    else:
+        def _spk_pcm(rel):
+            with open(os.path.join(_corpus, rel), "rb") as _f:
+                _d = _f.read()
+            _i, _out = 12, None
+            while _i + 8 <= len(_d):
+                _cid = _d[_i:_i + 4]
+                _sz = struct.unpack("<I", _d[_i + 4:_i + 8])[0]
+                if _cid == b"data":
+                    _out = _d[_i + 8:_i + 8 + _sz]
+                _i += 8 + _sz + (_sz & 1)
+            return _out or b""
+
+        _sess_spk = {}
+        for _tid in ("t1", "t2", "t3"):          # 注册 3 条
+            app_mod._speaker_probe(_sess_spk, _spk_pcm("Serena/%s.wav" % _tid), "asr")
+        _prof = _sess_spk.get("speaker_profile")
+        _same = app_mod._speaker_probe(_sess_spk, _spk_pcm("Serena/t4.wav"), "asr")
+        _other = app_mod._speaker_probe(_sess_spk, _spk_pcm("Ethan/t4.wav"), "asr")
+        _other2 = app_mod._speaker_probe(_sess_spk, _spk_pcm("Cherry/t4.wav"), "asr")
+
+        check("同一人的新句子不会被判成旁人",
+              _same.get("decision") in ("same", "uncertain"),
+              ["判定=%s 相似度=%s（注册 %d 条）"
+               % (_same.get("decision"), _same.get("score"),
+                  _prof.count if _prof else 0)])
+        check("换一个人说话会被判成 other（跨性别）",
+              _other.get("decision") == "other",
+              ["Ethan 判定=%s 相似度=%s" % (_other.get("decision"), _other.get("score"))])
+        check("换一个同性别的相近音色也能判成 other",
+              _other2.get("decision") == "other",
+              ["Cherry 判定=%s 相似度=%s（最像的一对音色）"
+               % (_other2.get("decision"), _other2.get("score"))])
+        check("文字输入不走说话人门（没有音频就没有结论）",
+              app_mod._speaker_probe({}, _spk_pcm("Serena/t1.wav"), "text") is None,
+              ["source=text 时返回 None"])
+
+    config_loader.set_scene(_spk_scene_prev)
+
+    print()
+    print("=" * 74)
     total = len(results)
     passed = sum(1 for _, ok in results if ok)
     print("结果：%d/%d 通过" % (passed, total))
@@ -2337,10 +2529,12 @@ def main():
     print("            实时字幕（Z7：paraformer-realtime-v2 默认开启，半句覆盖不重复）、")
     print("            前端谱特征 VAD + 40ms 开口确认（V1 参数在 15 场景上标定）、")
     print("            LLM 改写接缝、S2 WebSocket 双向通道、")
-    print("            任务2 七项（知识库检索/兜底细分/置信度分级/槽位追问/改口/记忆/T17 指标）。")
+    print("            任务2 七项（知识库检索/兜底细分/置信度分级/槽位追问/改口/记忆/T17 指标）、")
+    print("            L2 自进化（模拟用户受知/受听/受耐心、失败归因三分类、")
+    print("                     话术候选双跑闸门、版本快照与指针回滚）。")
     print("  仍然是占位的：语义级合规（S3 能力已接、默认关闭）、")
-    print("            说话人分离（音频层分不清旁人声与用户声；")
-    print("            文本层 C6 已做到不误伤——噪声不烧核身次数、不挂断，但做不到\"听清\"）、")
+    print("            说话人分离（**影子模式已接**：WeSpeaker 嵌入判“是不是刚才那位”，")
+    print("            只在事件里记录、不拦截；没接 enforce，因为还没有真人双人语料，见 docs/33）、")
     print("            nlg 改写默认关闭（provider=template；开启后受账号配额与\"期限表述\"规则影响）、")
     print("            真流式 TTS（现在是分段合成，不是首包流式）。")
     return 0
