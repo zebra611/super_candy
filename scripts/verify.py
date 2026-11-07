@@ -721,6 +721,28 @@ def main():
               ["has_content = %s，reason = %s"
                % (out_empty.get("has_content"), out_empty.get("reason"))])
 
+        # 回声否决：外放时麦克风收到客服自己的播报，ASR 会原样识别出这句话。
+        # 不单独判的话它会被 _has_interrupt_content 当成"用户在插话"→ 直接停播，
+        # 用户看到的就是"客服说一半突然不说了"。真实外放录音里回声最高到 0.21 rms，
+        # 谱特征拦不住（回声本来就是人声），只能在文字层比对。
+        _agent_line = ("您好，我是京东商家资质审核的工作人员，您这边提交的营业执照"
+                       "经营范围与店铺主营类目不一致，需要您补充说明一下")
+        _FixedASR.spoken = "我是京东商家资质审核的工作人员您这边提交的营业执照"
+        out_echo = probe_speech(sid_x, pcm_speech, agent_text=_agent_line)
+        check("探针：识别结果与自己正在播报的文本重合 → 判成回声，不许停播",
+              out_echo.get("has_content") is False
+              and out_echo.get("reason") == "echo_self",
+              ["识别文本 = %r" % out_echo.get("text"),
+               "has_content = %s，reason = %s"
+               % (out_echo.get("has_content"), out_echo.get("reason"))])
+
+        _FixedASR.spoken = "等一下你先别说了"
+        out_user = probe_speech(sid_x, pcm_speech, agent_text=_agent_line)
+        check("探针：同一段播报期间的真人插话仍要放行（回声判定不能一刀切）",
+              out_user.get("has_content") is True,
+              ["识别文本 = %r，reason = %s"
+               % (out_user.get("text"), out_user.get("reason"))])
+
         # 探针不能污染业务：它只识别，不该推进状态机、不该多出轮次
         n_before = len(event_types(sid_x))
         probe_speech(sid_x, pcm_speech)
@@ -2125,10 +2147,14 @@ def main():
     #    bargeRms 调到 0.025 时强回声场景自己打断自己（128 组里 32 组失败）。
     #    这条断言不是"禁止改参数"，而是"改了要重跑扫描并把数字更新到 docs/16"。
     if _fp_ok:
-        check("V1 参数落在实测安全区内（speechRms ≤0.020、bargeRms ≥0.035）",
+        # 注意措辞：这条约束的是**合成场景**里的安全区，不是真机安全区。
+        # 真机上底噪 rms 峰值能到 0.035（docs/16 §4.8），所以它挡不住"静音误开口"，
+        # 那一层靠浏览器的 AEC/NS/AGC 与 ?vadcal=1 现场标定，不能靠这条断言担保。
+        check("V1 参数落在合成场景安全区内（speechRms ≤0.020、bargeRms ≥0.035）",
               _fp.get("speechRms", 1) <= 0.020 and _fp.get("bargeRms", 0) >= 0.035,
               ["speechRms=%s（>0.020 漏极小声） bargeRms=%s（<0.035 强回声自打断）"
-               % (_fp.get("speechRms"), _fp.get("bargeRms"))])
+               % (_fp.get("speechRms"), _fp.get("bargeRms")),
+               "口径：合成语料；真机另见 docs/16 §4.8 与 ?vadcal=1"])
 
     # ④ 前端判据与标定脚本必须同源：常量名在两边都要有，否则改一边就漂移。
     try:
@@ -2136,6 +2162,32 @@ def main():
             _html_v1 = f.read()
     except OSError:
         _html_v1 = ""
+    # 三条防回退断言：都是真实缺陷修完之后加的，改回去必须报红。
+    #   ① 端点只该看能量。用 voiced 数静音会把一句话切成两半（说到一半换字音就"静音"）。
+    #   ② 谱倾斜必须用频段均值。单点 Goertzel 等价于问"这个精确频率有没有能量"，
+    #      女声基频 200Hz、400Hz 恰是谷，真人会被判成键盘。
+    #   ③ 参数定义了就必须被用到。silenceRms 曾经只定义不用——它就是 ① 那条 bug 的痕迹。
+    import re as _re_v1
+    _i0 = _html_v1.find('if (S.phase === "user") {')
+    _i1 = _html_v1.find("if (S.silentFrames >= VAD.endpointFrames)")
+    # 注释里有 "f.voiced"（就是记录这条 bug 的那句），必须先把注释行剔掉，
+    # 否则断言会被自己的注释挡住——这种"断言看的是字面而不是代码"是假绿的另一个来源。
+    _ep_body = "\n".join(_ln for _ln in
+                          (_html_v1[_i0:_i1] if 0 <= _i0 < _i1 else "").splitlines()
+                          if not _ln.strip().startswith("//"))
+    check("V1 端点用能量判「还在说」，不用 voiced（否则一句话被切两半）",
+          "silenceRms" in _ep_body and "f.voiced" not in _ep_body,
+          ["端点分支里出现 silenceRms=%s，出现 f.voiced=%s"
+           % ("silenceRms" in _ep_body, "f.voiced" in _ep_body)])
+    check("V1 谱倾斜用三频点均值，不是单点 Goertzel",
+          "LOW_BAND" in _html_v1 and "HIGH_BAND" in _html_v1 and "bandSum" in _html_v1,
+          ["LOW_BAND/HIGH_BAND/bandSum 都在=%s"
+           % all(k in _html_v1 for k in ("LOW_BAND", "HIGH_BAND", "bandSum"))])
+    check("V1 silenceRms 不是死参数（定义了就一定被用到）",
+          len(_re_v1.findall(r"silenceRms", _html_v1)) >= 2,
+          ["silenceRms 出现 %d 次（<2 说明只定义没用）"
+           % len(_re_v1.findall(r"silenceRms", _html_v1))])
+
     check("V1 前端与仿真判据同源（analyzeFrame + zcrMax/tiltMin/onsetFrames 都在）",
           all(k in _html_v1 for k in ("analyzeFrame", "zcrMax", "tiltMin",
                                       "onsetFrames")),

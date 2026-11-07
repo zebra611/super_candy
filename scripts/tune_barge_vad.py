@@ -110,11 +110,25 @@ def goertzel(pcm, freq, sr=16000):
     return max(0.0, s1 * s1 + s2 * s2 - coeff * s1 * s2)
 
 
+LOW_BAND = (300, 500, 700)
+HIGH_BAND = (1800, 2400, 3000)
+
+
+def band_sum(pcm, freqs):
+    return sum(goertzel(pcm, f) for f in freqs) / float(len(freqs))
+
+
 def analyze_frame(pcm, p):
-    """前端 analyzeFrame() 的等价实现：返回 (voiced, rms, zcr, tilt)。"""
+    """前端 analyzeFrame() 的等价实现：返回 (voiced, rms, zcr, tilt)。
+
+    tilt 用**频段均值**而不是单点：之前用 goertzel(400)/goertzel(2000) 两个单点，
+    20ms 窗分辨率只有 50Hz，等价于问"400Hz 这个精确频率上有没有能量"。
+    女声基频在 200Hz 附近、400Hz 恰是谷，tilt 掉到 0.1 以下，真人被判成键盘。
+    前端同步改成了三频点均值，这里必须一致，否则标定的和跑的不是一套判据。
+    """
     rms = frame_rms(pcm)
     zcr = frame_zcr(pcm)
-    tilt = goertzel(pcm, 400) / (goertzel(pcm, 2000) + 1e-12)
+    tilt = band_sum(pcm, LOW_BAND) / (band_sum(pcm, HIGH_BAND) + 1e-12)
     # 位移门（onset）：起音那 20ms 常常只有半帧能量，光看 rms 会漏掉"停"这种单字。
     voiced = (rms >= p["speechRms"] and zcr <= p.get("zcrMax", 1.0)
               and tilt >= p.get("tiltMin", 0.0))
@@ -188,8 +202,10 @@ class Sim:
                 self.onset = 0
                 self.events.append((t_ms, "user_start"))
             return
-        # user：等端点
-        if voiced:
+        # user：等端点。用**能量**判"还在说"，不能用 voiced——
+        # voiced 含过零率与谱倾斜两个门，说到一半侧头/换字音就被当静音，
+        # 700ms 一到把一句话切成两半。这句之前写成 `if voiced:`，是真 bug。
+        if rms >= p.get("silenceRms", 0.010):
             self.silent = 0
         else:
             self.silent += 1
