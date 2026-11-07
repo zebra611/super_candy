@@ -61,6 +61,15 @@ config_loader.tts_config = lambda: {
 config_loader.nlg_config = lambda: {**config_loader.load().get("nlg", {}), "provider": "template"}
 
 results = []
+# "没被验证"的项单独记账：语料/密钥缺失时**不能**记成 PASS（那是假绿），
+# 也不能让队友的 verify 直接红掉（他可能只是没跑生成器）。
+# 所以列出来、不算进通过数，最后单独打印——看得见，就不算糊过去。
+uncovered = []
+
+
+def mark_uncovered(name, reason):
+    uncovered.append((name, reason))
+    print("  [未覆盖] %s —— %s" % (name, reason))
 
 # 让"用户报尾号"这类剧本可以反复跑：工单是内存态的，每次自检从头开始
 tools._reset_for_test()
@@ -878,9 +887,13 @@ def main():
     check("turn_start 记下了真实音频字节数（不再是 0）",
           turn_start_i["audio_bytes"] > 0 and turn_start_i["audio_streamed"] is True,
           ["turn_start.payload = %s" % json.dumps(turn_start_i, ensure_ascii=False)])
-    check("VAD 用的是真采样数，不是字节数拍脑袋",
-          vad_i["samples"] == stat["samples"] and vad_i["speech_ms"] == int(stat["duration_ms"]),
-          ["vad_result.payload = %s" % json.dumps(vad_i, ensure_ascii=False)])
+    check("VAD 的采样数取自真实字节，且静音不再被算成人声",
+          vad_i["samples"] == stat["samples"] and vad_i["started"] is False
+          and vad_i["speech_ms"] == 0,
+          ["audio_stream.samples = %d" % stat["samples"],
+           "vad_result.payload = %s" % json.dumps(vad_i, ensure_ascii=False),
+           "这 10.2 秒全是静音帧：改造前 speech_ms=10240（有字节就算说了话），"
+           "现在 0 —— Z6 换掉的就是这个假判定"])
     check("这一轮的识别来源标 source=asr（音频确实进了识别）",
           (payload_of(sid_i, "asr_result") or {}).get("source") == "asr",
           ["asr_result.payload = %s"
@@ -1848,23 +1861,315 @@ def main():
 
     print()
     print("=" * 74)
+    print("证据 27：Z6 端点检测——噪声不再触发 vad_result")
+    print("=" * 74)
+
+    from modules import silero_vad, vad_gate
+
+    corpus = os.path.join(ROOT, "data", "vad_corpus")
+
+    def _corpus_pcm(path):
+        import wave
+        with wave.open(path) as w:
+            return w.readframes(w.getnframes())
+
+    def _corpus_files(kind):
+        d = os.path.join(corpus, kind)
+        if not os.path.isdir(d):
+            return []
+        return sorted(os.path.join(d, f) for f in os.listdir(d) if f.endswith(".wav"))
+
+    noise_files = _corpus_files("noise")
+    speech_files = _corpus_files("speech")
+
+    # ① 噪声侧：九类都必须判成"没人说话"。
+    #    这是 Z6 的核心验收——改造前 vad_detect 是 bool(audio_bytes)，
+    #    噪声 9/9 全部 started=True（见 scripts/bench_vad.py 的 bytes 行）。
+    if not noise_files:
+        mark_uncovered("Z6 噪声不误触",
+                       "语料缺失，跑 python scripts/gen_vad_corpus.py --noise-only")
+    else:
+        default_engine = vad_gate.analyze(_corpus_pcm(noise_files[0]))["engine"]
+        hits = []
+        for p in noise_files:
+            out = vad_gate.analyze(_corpus_pcm(p))
+            if out["started"]:
+                hits.append("%s(speech_ms=%d)" % (os.path.basename(p), out["speech_ms"]))
+        check("Z6 九类噪声片段全部不判为人声（默认引擎=%s）" % default_engine,
+              not hits,
+              ["命中（不该）：%s" % ", ".join(hits) if hits else "9/9 未触发",
+               "对照：改造前 bool(audio_bytes) 是 9/9 全触发"])
+
+        # ② 纯标准库引擎单独再验一遍：干净机器没装 onnxruntime 时走的就是它。
+        sp_hits = []
+        for p in noise_files:
+            out = vad_gate.analyze(_corpus_pcm(p), prefer="spectral")
+            if out["started"]:
+                sp_hits.append(os.path.basename(p))
+        check("Z6 降级引擎（spectral，零依赖）同样挡得住九类噪声",
+              not sp_hits,
+              ["误触：%s" % ", ".join(sp_hits) if sp_hits else "9/9 未触发",
+               "这一条保证没装 onnxruntime 的机器也不会把噪声当人声"])
+
+    # ③ 人声侧：真人声必须判出来，否则"不误触"可以靠"永远说没人"作弊。
+    if not speech_files:
+        mark_uncovered("Z6 人声召回",
+                       "人声语料缺失（合成需要 dashscope_api_key）："
+                       "python scripts/gen_vad_corpus.py")
+    else:
+        miss = []
+        for p in speech_files:
+            out = vad_gate.analyze(_corpus_pcm(p), prefer="spectral")
+            if not out["started"]:
+                miss.append(os.path.basename(p))
+        check("Z6 真人声 %d 条全部判出人声（spectral 引擎）"
+              % len(speech_files), not miss,
+              ["漏判：%s" % ", ".join(miss) if miss else "全中",
+               "语料含 6 条长句客服话术 + 6 条口语短句（含「嗯，我知道了」这种短应答）"])
+
+    # ④ 降级必须如实标注：不能在没装模型时装成 Silero。
+    _orig_avail = silero_vad.available
+    silero_vad.available = lambda: False
+    silero_vad.reset_cache()
+    try:
+        sample = noise_files[0] if noise_files else speech_files[0] if speech_files else None
+        if sample:
+            down = vad_gate.analyze(_corpus_pcm(sample), prefer="silero")
+        else:
+            down = vad_gate.analyze(b"\x00\x00" * 8000, prefer="silero")
+    finally:
+        silero_vad.available = _orig_avail
+        silero_vad.reset_cache()
+    check("Z6 引擎降级如实标注（不装模型时不冒充 Silero）",
+          down["engine"] == "spectral" and bool(down["engine_note"]),
+          ["engine=%s note=%s" % (down["engine"], down["engine_note"][:60])])
+
+    # ⑤ 变异：把谱判据整条换成"能量门"（等于退回改造前的行为），噪声必须被误触。
+    #    为什么不用"把某个阈值改小"来变异：单条阈值放松后被别的判据挡住了（实测 0/9），
+    #    那只能证明"多重判据有冗余"，不能证明"这条断言抓得住退化"。
+    #    整条换掉才等价于"有人把 Z6 改回去了"。
+    if noise_files:
+        _orig_frames = vad_gate._spectral_frames
+
+        def _energy_only(pcm, sr):
+            ints = vad_gate._to_ints(pcm)
+            n = (len(ints) + vad_gate.FRAME_SAMPLES - 1) // vad_gate.FRAME_SAMPLES
+            out = []
+            for i in range(n):
+                seg = ints[i * vad_gate.FRAME_SAMPLES:(i + 1) * vad_gate.FRAME_SAMPLES]
+                out.append((int((i + 1) * vad_gate.FRAME_MS),
+                            vad_gate._rms(seg) >= 0.004))
+            return out
+
+        vad_gate._spectral_frames = _energy_only
+        try:
+            broken = [os.path.basename(p) for p in noise_files
+                      if vad_gate.analyze(_corpus_pcm(p), prefer="spectral")["started"]]
+        finally:
+            vad_gate._spectral_frames = _orig_frames
+        check("Z6 变异验证：把谱判据换回能量门后噪声必须被误触（否则前面的全绿是假绿）",
+              len(broken) >= 3,
+              ["换成能量门后误触 %d/%d 类：%s"
+               % (len(broken), len(noise_files), ", ".join(broken[:6]))])
+
+    # ⑥ 参数口径一致：docs/16 表里的"开口/说完"毫秒数必须等于代码常量。
+    #    这条专门防"改了代码没改文档"——答辩时念的是文档。
+    try:
+        with open(os.path.join(ROOT, "docs", "16_实时通话与打断.md"),
+                  encoding="utf-8") as f:
+            _d16 = f.read()
+    except OSError:
+        _d16 = ""
+    check("Z6 文档参数与代码常量一致（开口 %dms / 说完 %dms）"
+          % (vad_gate.MIN_SPEECH_MS, vad_gate.END_SILENCE_MS),
+          ("%dms" % vad_gate.MIN_SPEECH_MS) in _d16
+          and ("%dms" % vad_gate.END_SILENCE_MS) in _d16,
+          ["docs/16 里能找到对应数字=%s（改了常量不改文档，这条会红）"
+           % bool(_d16)])
+
+    print()
+    print("=" * 74)
+    print("证据 28：Z7 实时字幕——默认开启 + 去重 + 端到端")
+    print("=" * 74)
+
+    # ① 两个场景包都要开：pop_reject 是演示默认场景，它整体覆盖 asr 段。
+    #    实测踩过：只改 config/scene.json 时 ready.realtime 仍是 false，字幕一条不出，
+    #    而 health 看起来一切正常——这种"配置看起来开了实际没开"必须由断言兜住。
+    _rt_flags = {}
+    for rel in ("config/scene.json",
+                os.path.join("config", "scenes", "pop_reject.json")):
+        try:
+            with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
+                _rt_flags[rel] = bool((json.load(f).get("asr") or {}).get("realtime"))
+        except Exception:
+            _rt_flags[rel] = False
+    check("Z7 主配置与 pop 场景包都开了流式识别（场景包覆盖 asr 段，漏一个就没字幕）",
+          all(_rt_flags.values()),
+          [json.dumps(_rt_flags, ensure_ascii=False)])
+
+    # ② 半句去重：同一段文本只推一次，正常增长照常推。离线断言，不花钱。
+    from modules import realtime_asr as _rtmod
+
+    _inst = _rtmod.RealtimeAsr(None, "t")
+
+    def _push_sentence(text, end=False, sid=1):
+        _inst._on_result({"payload": {"output": {"sentence": {
+            "sentence_id": sid, "text": text, "sentence_end": end}}}})
+
+    _push_sentence("你好")
+    _p1 = _inst.poll_partial()
+    _p2 = _inst.poll_partial()           # 云端把同一句又推了一次
+    _push_sentence("你好，我是")
+    _p3 = _inst.poll_partial()
+    check("Z7 半句字幕不重复推送（同一文本只给一次，增长照常给）",
+          _p1 == "你好" and _p2 == "" and _p3 == "你好，我是",
+          ["第 1 次=%r 第 2 次（重复）=%r 增长后=%r" % (_p1, _p2, _p3)])
+
+    # ③ 前端在落 turn 后要清空字幕，否则同一句会在日志与字幕上各出现一次
+    try:
+        with open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8") as f:
+            _html = f.read()
+    except OSError:
+        _html = ""
+    check("Z7 落 turn 后清空半句字幕（同一句不出现两遍）",
+          'liveSubtitle").textContent = ""' in _html,
+          ["web/index.html 命中=%s" % bool(_html)])
+
+    # ④ 端到端：真起服务 + 真 WS + 真流式。没有语料或密钥就明说"没验"，不装绿。
+    _z7_wav = os.path.join(ROOT, "data", "vad_corpus", "speech", "s07.wav")
+
+    def _real_dashscope_key():
+        """拿真实密钥，**跳过本进程里的测试注入值**。
+
+        前面几条断言为了离线跑，把 DASHSCOPE_API_KEY 设成 "test-key-not-used"
+        并且没有恢复（它只影响本进程）。这里如果直接读环境变量，就会拿着这个
+        假密钥去连云端，得到 401，然后误判成"流式链路坏了"——
+        实测踩过一次：verify 里红，单独跑脚本绿，差的就是这个注入值。
+        """
+        env_val = (os.environ.get("DASHSCOPE_API_KEY") or "").strip()
+        if env_val and env_val != "test-key-not-used":
+            return env_val
+        try:
+            with open(os.path.join(ROOT, "config", "secrets.json"),
+                      encoding="utf-8") as f:
+                return (json.load(f).get("dashscope_api_key") or "").strip()
+        except Exception:
+            return ""
+
+    _z7_env = {k: v for k, v in _ENV.items()
+               if k not in ("DASHSCOPE_API_KEY", "SC_DASHSCOPE_API_KEY")}
+    if not os.path.exists(_z7_wav) or not _real_dashscope_key():
+        mark_uncovered("Z7 端到端（WS → 流式字幕 → 落 turn）",
+                       "需要 data/vad_corpus/speech/s07.wav 与 dashscope_api_key")
+    else:
+        _z7 = subprocess.run([sys.executable,
+                              os.path.join(ROOT, "scripts", "check_ws_realtime.py"),
+                              "--wav", _z7_wav, "--port", "8807"],
+                             cwd=ROOT, capture_output=True, text=True, timeout=180,
+                             env=_z7_env)
+        _z7_out = ((_z7.stdout or "") + (_z7.stderr or "")).strip().splitlines()
+        _z7_txt = "\n".join(_z7_out)
+        check("Z7 端到端：流式字幕 ≥3 条、无重复、终句连贯、有回复",
+              _z7.returncode == 0 and "Z7 端到端通过" in _z7_txt,
+              ["退出码 %d" % _z7.returncode]
+              + [l for l in _z7_out if "字幕" in l or "realtime" in l
+                 or "原因" in l][:5])
+
+    print()
+    print("=" * 74)
+    print("证据 29：V1 打断/端点参数——前端与仿真同源，场景全过，边界有据")
+    print("=" * 74)
+
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    import tune_barge_vad as _tune
+
+    # ① 仿真必须"从 index.html 读参数"，不能自己存一份。读不到就报错不跑——
+    #    这是防"前端改了、标定脚本没跟"的唯一办法。
+    try:
+        _fp = _tune.load_front_params()
+        _fp_ok, _fp_err = True, ""
+    except Exception as exc:
+        _fp = {}
+        _fp_ok, _fp_err = False, str(exc)[:120]
+    check("V1 标定脚本能从前端解析 const VAD（参数不另存一份）",
+          _fp_ok and _fp.get("speechRms") and _fp.get("bargeRms"),
+          ["解析到 %s" % json.dumps({k: _fp.get(k) for k in
+                                     ("speechRms", "bargeRms", "endpointFrames",
+                                      "zcrMax", "tiltMin", "onsetFrames")},
+                                    ensure_ascii=False) if _fp_ok else _fp_err])
+
+    # ② 15 个场景全过（正常插话/外放回声/弱 AEC/键盘/清嗓/小声/停顿/长说/静音/
+    #    说话含敲击/极小声/强回声/爆响键盘）。这是"打断不会误伤自己、也不会漏人"的直接证据。
+    if _fp_ok and os.path.isdir(os.path.join(ROOT, "data", "vad_corpus")):
+        _v1 = subprocess.run([sys.executable,
+                              os.path.join(ROOT, "scripts", "tune_barge_vad.py"),
+                              "--json"],
+                             cwd=ROOT, capture_output=True, text=True, timeout=600,
+                             env=_ENV)
+        try:
+            _v1j = json.loads((_v1.stdout or "").strip().splitlines()[-1])
+        except Exception:
+            _v1j = {}
+        _tot = _v1j.get("total", 0)
+        _pass = _v1j.get("pass", 0)
+        check("V1 十五个场景全部符合预期（外放不自打断、真人能打断、小声能切句）",
+              _tot >= 15 and _pass == _tot,
+              ["%d/%d 通过；退出码 %d" % (_pass, _tot, _v1.returncode),
+               "场景含：A正常插话 B外放回声 C键盘 D清嗓 E句中停顿 F连续长说 "
+               "G静音 H说话含敲击 I弱AEC L弱AEC插话 M极小声 N强回声 O爆响键盘"])
+    else:
+        mark_uncovered("V1 十五场景（打断/端点）", "缺前端参数或语料")
+
+    # ③ 参数边界：栅格扫描的结论要能被钉住。
+    #    speechRms 调到 0.024 时极小声场景整段漏判（扫描 96 组里 32 组失败）；
+    #    bargeRms 调到 0.025 时强回声场景自己打断自己（128 组里 32 组失败）。
+    #    这条断言不是"禁止改参数"，而是"改了要重跑扫描并把数字更新到 docs/16"。
+    if _fp_ok:
+        check("V1 参数落在实测安全区内（speechRms ≤0.020、bargeRms ≥0.035）",
+              _fp.get("speechRms", 1) <= 0.020 and _fp.get("bargeRms", 0) >= 0.035,
+              ["speechRms=%s（>0.020 漏极小声） bargeRms=%s（<0.035 强回声自打断）"
+               % (_fp.get("speechRms"), _fp.get("bargeRms"))])
+
+    # ④ 前端判据与标定脚本必须同源：常量名在两边都要有，否则改一边就漂移。
+    try:
+        with open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8") as f:
+            _html_v1 = f.read()
+    except OSError:
+        _html_v1 = ""
+    check("V1 前端与仿真判据同源（analyzeFrame + zcrMax/tiltMin/onsetFrames 都在）",
+          all(k in _html_v1 for k in ("analyzeFrame", "zcrMax", "tiltMin",
+                                      "onsetFrames")),
+          ["web/index.html 命中四项=%s"
+           % all(k in _html_v1 for k in ("analyzeFrame", "zcrMax", "tiltMin",
+                                         "onsetFrames"))])
+
+    print()
+    print("=" * 74)
     total = len(results)
     passed = sum(1 for _, ok in results if ok)
     print("结果：%d/%d 通过" % (passed, total))
+    if uncovered:
+        # 未覆盖不是通过。单独打出来，避免"没验"被读成"验过了"。
+        print("另：%d 项**未被验证**（不计入通过数，也不算失败）：" % len(uncovered))
+        for _n, _r in uncovered:
+            print("    - %s：%s" % (_n, _r))
     if passed != total:
         print("有断言失败，说明代码与预期不符 —— 以这里为准，不要信文档。")
         return 1
     print("全部通过。这只证明上面这些行为是真的，不代表整个系统都完成了：")
     print("  已经是真的：云端识别（qwen3-asr-flash）、云端合成（qwen3-tts-flash）、")
-    print("            采集分帧上传、静音闸门、墙钟闸门、断连/429 重试、合成失败回落、")
-    print("            长句切段只等首段、前端能量 VAD 自动提交、")
-    print("            三段式打断（疑似压低音量→探针识别→认出文字才停）、LLM 改写接缝、")
-    print("            S2 WebSocket 双向通道（音频帧上行 + TTS 分段主动下发 + barge_in 协议事件）、")
+    print("            采集分帧上传、墙钟闸门、断连/429 重试、合成失败回落、")
+    print("            长句切段只等首段、三段式打断（疑似压低音量→探针识别→认出文字才停）、")
+    print("            服务端端点检测（Z6：Silero / 谱特征双引擎，九类噪声 0/9 触发）、")
+    print("            实时字幕（Z7：paraformer-realtime-v2 默认开启，半句覆盖不重复）、")
+    print("            前端谱特征 VAD + 40ms 开口确认（V1 参数在 15 场景上标定）、")
+    print("            LLM 改写接缝、S2 WebSocket 双向通道、")
     print("            任务2 七项（知识库检索/兜底细分/置信度分级/槽位追问/改口/记忆/T17 指标）。")
-    print("  仍然是占位的：语义级合规、说话人分离（音频层分不清旁人声与用户声；")
+    print("  仍然是占位的：语义级合规（S3 能力已接、默认关闭）、")
+    print("            说话人分离（音频层分不清旁人声与用户声；")
     print("            文本层 C6 已做到不误伤——噪声不烧核身次数、不挂断，但做不到\"听清\"）、")
     print("            nlg 改写默认关闭（provider=template；开启后受账号配额与\"期限表述\"规则影响）、")
-    print("            流式识别默认关闭（asr.realtime=true 才启用，需真密钥验证连通）。")
+    print("            真流式 TTS（现在是分段合成，不是首包流式）。")
     return 0
 
 

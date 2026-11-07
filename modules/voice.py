@@ -1,4 +1,4 @@
-"""M2 实时语音网关 —— 采集、识别、合成都是真的；VAD 与打断仍是缺口。
+"""M2 实时语音网关 —— 采集、识别、合成、端点检测都是真的。
 
 职责（真实形态）：
     音频帧进来 → VAD 判断端点 → 流式 ASR 出文本；文本出去 → 流式 TTS 出音频；
@@ -6,12 +6,13 @@
 
 当前状态（每一条都经实测，不是照设计写的）：
     asr()        真识别，走 qwen3-asr-flash 的 HTTP 接口（整段上传，非流式）；
-                 送识别前有 RMS 静音闸门，避免把静音识别成「嗯。」；
+                 送识别前过 VAD（见 vad_detect），噪声不当人话送模型；
     tts()        真合成，走 qwen3-tts-flash，返回 OSS 音频链接给前端播；
                  合成失败回落到浏览器播报，不允许静默；
-    vad_detect() 仍是占位：只判"有没有声音"，不判"说到哪算结束"，
-                 所以现在是"松手即视为说完"；
-    barge_in     做不到，原因见下面第 4 条，不是忘了写。
+    vad_detect() Z6 已换掉"有字节就算说完"：逐帧判定 + 起止聚合，
+                 引擎优先 Silero（装了 onnxruntime + 模型），否则纯标准库谱特征；
+                 12 条真人声 / 9 类噪声 / 3 条混合语料上实测见 scripts/bench_vad.py；
+    barge_in     前端三段式（疑似→识别→确认）已落地，服务端只记账。
 
 负责人：角色 1（实时语音与终端）
 
@@ -19,15 +20,12 @@ S2 已落地（2026-11-05，本文件保留批式链路作为兜底）：
     - WS 双向通道见 ws_channel.py 与 /ws/call；音频帧不再走 HTTP 分片；
     - TTS 分段"就绪即推"替代前端轮询 /api/tts/rest（见 ws_channel._push_rest）；
     - 流式识别适配层 modules/realtime_asr.py（paraformer-realtime-v2），
-      realtime_enabled() 默认 False，批式兜底仍是 asr() 本身——
-      没验证过密钥与网络前不动默认值。
+      连通已实测通过（scripts/check_realtime_asr.py），默认由配置决定。
 
 后续待补充（按优先级）：
-    1. 流式识别真密钥连通验证（开 asr.realtime 前必做）；
-    2. VAD 换成 Silero 逐帧判定，替代现在的"有字节就算说完"；
-    3. 说话人分离（环境里别人说话会被当成用户）。
-    （打断的协议事件已就位：barge_in 由前端确认后经 WS 上行，
-    服务端记账并清缓冲，见 ws_channel._on_barge_in。）
+    1. 说话人分离（环境里别人说话会被当成用户）——VAD 只能判"有没有人声"，
+       判不出"是不是本人在说"，这一层现在没有；
+    2. 真流式 TTS（现在是分段合成，不是首包流式）。
 """
 
 import base64
@@ -109,29 +107,24 @@ def pcm_duration_ms(audio_bytes):
 def vad_detect(audio_bytes, sample_rate=contracts.PCM_SAMPLE_RATE):
     """判断这段音频里有没有人说话（端点检测）。
 
-    **这个函数现在是服务端的粗判，不是主判定。** 真正的端点在浏览器端：
-    `web/index.html` 逐帧（20ms）算 RMS，静音 700ms 判"说完了"并自动提交；
-    打断也是前端做的（能量只当疑似，送出 `/api/asr/probe` 认出文字才真停）。
-    这一层保留是为了给事件链留一条 `vad_result`，以及文字输入时不做判定。
+    两层结构（细节在 modules/vad_gate.py）：
+        前端  `web/index.html` 逐帧（20ms）判定 + 静音 700ms 判"说完了"，
+              它决定了"什么时候提交"，必须零延迟，所以在浏览器里做；
+        服务端 本函数。它不参与节奏，负责两件事：
+              ① 给事件链留一条可信的 `vad_result`（谁判的、判成什么）；
+              ② 决定这段音频要不要送识别——噪声送进 ASR 会吐乱码，
+                 乱码进核身失败计数会把在线用户挂断（C6-09 的真实事故）。
 
-    所以"只要有字节就算说了话"在这里是可接受的：能进到这个函数的音频，
-    已经过前端端点和 `asr()` 里的 RMS 静音闸门。
+    为什么不能只判"有没有声音"（改造前的实现就是这样）：
+        有字节就 started=True，等于没判。演示现场风扇、键盘、椅子都会触发，
+        识别层再拿噪声去识别，整条链路看起来"在工作"，其实在制造错误。
 
-    仍然没解决、也不打算在这一层解决的（S3）：
-        - 逐帧 Silero VAD，返回"起始帧 / 结束帧"而不只是布尔；
-        - **说话人分离**：环境里别人说话会被当成用户说的话，这才是真痛点。
-
-    返回：dict(started, ended, speech_ms, samples, sample_rate)
+    返回：dict(started, ended, speech_ms, samples, sample_rate,
+               engine, engine_note, speech_ratio, frames)
+        engine 如实标注是 silero 还是 spectral —— 降级了就要在事件里看得见。
     """
-    has_audio = bool(audio_bytes)
-    samples = len(audio_bytes) // contracts.PCM_SAMPLE_WIDTH if has_audio else 0
-    return {
-        "started": has_audio,
-        "ended": has_audio,
-        "speech_ms": pcm_duration_ms(audio_bytes),
-        "samples": samples,
-        "sample_rate": sample_rate,
-    }
+    from modules import vad_gate
+    return vad_gate.analyze(audio_bytes, sample_rate=sample_rate)
 
 
 def realtime_enabled():
@@ -146,21 +139,38 @@ def realtime_enabled():
     return bool(config_loader.asr_config().get("realtime", False))
 
 
+_last_realtime_error = ""
+
+
+def last_realtime_error():
+    """最近一次流式识别建连失败的原因。空字符串表示没失败过。
+
+    为什么要暴露出来：建连失败只打一行控制台，前端与 verify 都看不见，
+    结果就是"配置开了却没字幕"，排查时只能猜。现在它进了 ready 消息，
+    演示现场一眼能看出是没密钥、模型没开通、还是公司网拦了 WSS。
+    """
+    return _last_realtime_error
+
+
 def open_realtime_asr():
     """建一条实时识别连接。失败返回 None（回落批式），不抛——
     调用方在 WS 建连路径上，抛异常会把整条通话通道带崩。"""
+    global _last_realtime_error
     from modules import realtime_asr
     try:
         inst = realtime_asr.RealtimeAsr.connect()
+        _last_realtime_error = ""
         return inst
     except Exception as exc:
         # 失败原因要能被看到：塞进事件流做不到（这里没有 session_id），
-        # 至少打到控制台，别让人以为"开了 realtime 没效果"是代码没生效。
-        print("  [realtime-asr] 流式识别建连失败，回落批式：%s" % str(exc)[:160])
+        # 至少打到控制台 + 记进 last_realtime_error（ready 消息会带出去），
+        # 别让人以为"开了 realtime 没效果"是代码没生效。
+        _last_realtime_error = str(exc)[:200]
+        print("  [realtime-asr] 流式识别建连失败，回落批式：%s" % _last_realtime_error[:160])
         return None
 
 
-def asr(audio_bytes, hints=None):
+def asr(audio_bytes, hints=None, vad=None):
     """把一段音频转成文字。**这是全链路唯一需要替换的入口。**
 
     两条实现，由配置决定，调用方不需要知道用的是哪条：
@@ -177,6 +187,10 @@ def asr(audio_bytes, hints=None):
         audio_bytes  PCM16LE / 16kHz / 单声道原始字节（格式由 contracts 固定）
         hints        领域热词。当前 qwen3-asr-flash 的 HTTP 接口没有热词字段，
                      传了也不用；保留这个参数是为了将来换 Paraformer 时不用改上层
+        vad          已经算好的 vad_detect() 结果。传了就用它判"这段有没有人声"，
+                     不再另算一次——调用方（app.handle_turn）本来就要写
+                     vad_result 事件，同一段音频算两遍纯属浪费。
+                     不传时退回到老的整段 rms 闸门（行为与改造前一致）。
     返回：dict(text, confidence, latency_ms, fake, provider)
          出错时额外带 error 字段，且 fake=True——失败结果不能被算成真实识别
     """
@@ -187,11 +201,19 @@ def asr(audio_bytes, hints=None):
     t0 = time.time()
     level = pcm_rms(audio_bytes)
     threshold = float(config_loader.asr_config().get("silence_rms", 0.003))
-    if level < threshold:
+    if vad is not None:
+        # VAD 判"没有人声"才是真的没人说话；rms 只当兜底（VAD 引擎不可用时才会没有 vad）。
+        # 这一条把风扇、键盘、椅子这类"有能量但没人说话"的片段挡在识别层之外——
+        # 送进去只会换来一句幻觉文本，然后污染核身失败计数。
+        no_speech = not vad.get("started")
+        skip_reason = "vad_no_speech"
+    else:
+        no_speech = level < threshold
+        skip_reason = "silent"
+    if no_speech:
         # 明显是静音：不发请求，直接当"没人说话"。
         # 省一次调用是顺带的，主要是避免模型对静音幻觉出一句"嗯。"
         # （实测确实会），那会让状态机以为用户开了口。
-        # 这个门限是 S3 的临时替代品：真的 VAD 要判"说到哪结束"，不只是"有没有声"。
         return {
             "text": "",
             "confidence": None,
@@ -199,7 +221,8 @@ def asr(audio_bytes, hints=None):
             "fake": False,
             "provider": provider,
             "rms": round(level, 5),
-            "skipped": "silent",
+            "skipped": skip_reason,
+            "vad_engine": (vad or {}).get("engine", "rms"),
         }
 
     try:

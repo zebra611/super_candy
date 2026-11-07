@@ -55,7 +55,8 @@ class RealtimeAsr:
         self._sock = sock
         self._task_id = task_id
         self._lock = threading.Lock()
-        self._partials = ""       # 未取走的半句字幕
+        self._partials = ""       # 当前半句字幕（最新的那条，不取走就一直在）
+        self._last_partial = ""   # 已经推给前端的半句，用来去重（见 poll_partial）
         self._finals = []         # 未取走的整句
         self._started = False
         self.dead = False
@@ -167,11 +168,16 @@ class RealtimeAsr:
             self._last_error = str(exc)[:120]
 
     def poll_partial(self):
-        """取走半句字幕（有新内容才返回，避免前端每帧都重画）。"""
+        """取走半句字幕（有新内容才返回，避免前端每帧都重画）。
+
+        同一段文本只给一次：paraformer 在没听清新内容时会反复推当前句，
+        逐条转发到前端就是"字在闪"。这里按文本去重，前端拿到的一定是新文本。
+        """
         with self._lock:
-            if not self._partials:
+            if not self._partials or self._partials == self._last_partial:
                 return ""
-            text, self._partials = self._partials, ""
+            text = self._partials
+            self._last_partial = text
             return text
 
     def finish_and_collect(self, timeout=1.5):
@@ -196,6 +202,7 @@ class RealtimeAsr:
             if not text:
                 text = self._partials
             self._partials = ""
+            self._last_partial = ""
             # 划界：这里之后，比 boundary 老的句子（含它们的 final 闭合）
             # 都是本轮已收走内容的过期重放。
             self._max_sid = max(self._max_sid, boundary)
@@ -208,6 +215,7 @@ class RealtimeAsr:
         with self._lock:
             self._finals = []
             self._partials = ""
+            self._last_partial = ""
             self._pending = bytearray()
             self._min_sid = self._max_sid + 1
 
@@ -278,6 +286,7 @@ class RealtimeAsr:
                 if text:
                     self._finals.append(text)
                 self._partials = ""    # 整句落袋，半句自然作废
+                self._last_partial = ""
             elif text:
                 self._partials = text
 

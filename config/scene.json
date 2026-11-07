@@ -15,6 +15,8 @@
     "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
     "realtime_model": "paraformer-realtime-v2",
     "realtime_endpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+    "realtime": true,
+    "_realtime_why": "Z7 已实测连通（scripts/check_realtime_asr.py：7 次半句字幕 + 整句有内容），且过 WS 链路端到端（scripts/check_ws_realtime.py）。打开后通话页边说边出字，落 turn 时直接用流式整句，省一次整段识别。失败自动回落批式：没密钥/模型没开通/公司网拦 WSS 都只会让 ready.realtime=false，通话照常。",
     "language": "zh",
     "itn": true,
     "_timeout_why": "识别不再用单一超时值。实测两段几乎等长的音频（2080ms / 2040ms）耗时 398ms 与 5404ms，是云端长尾，与音频长度无关；而 urllib 的 timeout 只管单次 socket 操作，管不住总时长。现在改成两轮「socket 2s/墙钟 2s → socket 3s/墙钟 3s」，超时即重试，见 modules/voice.py 的 plan。",
