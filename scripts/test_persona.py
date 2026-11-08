@@ -119,9 +119,17 @@ class TestGuard(unittest.TestCase):
         self.assertIn("您慢慢看", out)
 
     def test_question_does_not_get_statement_suffix(self):
-        """问句后不许接「我就不多说了」这类陈述式引导。"""
-        out, _ = self._adapt("那方便说一下您的姓名吗？")
-        self.assertEqual(out, "那方便说一下您的姓名吗？")
+        """含问号的句子不许接「我就不多说了」这类陈述式引导。
+
+        必须覆盖「问号在中间、句尾是句号」这个真实形状——只测纯问句是假绿，
+        线上实测漏掉的就是「那方便说一下您的姓名吗？我核对一下申请单。」
+        """
+        for text in ("那方便说一下您的姓名吗？",
+                     "那方便说一下您的姓名吗？我核对一下申请单。",
+                     "您清楚了吗？还有疑问也行。"):
+            out, _ = self._adapt(text)
+            self.assertEqual(out, text, text)
+            self.assertNotIn("您慢慢看", out, text)
 
     def test_digits_cannot_disappear(self):
         out, _ = self._adapt("申请单编号 20261101001 请核对。")

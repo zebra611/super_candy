@@ -209,11 +209,12 @@ def _apply_actions(base, rule, freeze=False, repeated=False, repeat_n=0):
     for pair in (rule.get("replace") or []):
         if isinstance(pair, list) and len(pair) == 2 and pair[0] in out:
             out = out.replace(pair[0], pair[1], 1)
-    # 问句后面不许接陈述式引导：线上实测「那方便说一下您的姓名吗？…
-    # 我就不多说了」，刚问完又说不多说，自相矛盾。问句要的是等对方回答。
-    # avoid_repeat 不受影响——那是重复轮专用的换说法引导。
+    # 含问号的句子不许接陈述式引导。第一版只判「以问号结尾」，实测是假绿：
+    # 真实话术是「那方便说一下您的姓名吗？我核对一下申请单。」——问号在中间、
+    # 句尾是句号，判据没命中，线上仍念出「…我就不多说了」，刚问完又说不多说。
+    # 改成整句含问号就跳过 suffix；avoid_repeat 不受影响（重复轮专用换说法）。
     tail = rule.get("suffix") or ""
-    if out.rstrip().endswith(("？", "?")):
+    if "？" in out or "?" in out:
         tail = ""
     return _append(out, tail)
 
