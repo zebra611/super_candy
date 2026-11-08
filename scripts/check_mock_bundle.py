@@ -122,6 +122,18 @@ def validate(bundle=None):
     for q in qa:
         if not (q.get("answer") or "").strip():
             problems.append("QA %s 没有答案" % q.get("id"))
+        # 未填占位不能进可播报字段：TTS 会把 "XX" 念成"叉叉"。
+        # 原文允许留在 answer_raw/question_raw 里（那是溯源用的），
+        # 但 answer/question 必须是能直接念的句子。
+        for field in ("answer", "question"):
+            if "XX" in (q.get(field) or ""):
+                problems.append("QA %s 的 %s 还有未填占位 XX" % (q.get("id"), field))
+        if q.get("filled_placeholder") and not (q.get("answer_raw") or ""):
+            problems.append("QA %s 标了已补占位，却没留 answer_raw 原文" % q.get("id"))
+    # 补齐要"补了几条"说得清，不能悄悄变多或变少
+    _n_filled = sum(1 for q in qa if q.get("filled_placeholder"))
+    if _n_filled != 5:
+        problems.append("人工补齐占位的 QA 应为 5 条，实际 %d" % _n_filled)
 
     # ④ 申请单：覆盖 + 可回溯 + 关单方式自洽
     covered = {r.get("catalog_id") for r in newset}

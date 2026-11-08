@@ -126,16 +126,36 @@ class OfficialQaGuards(unittest.TestCase):
     """不该播的时候，一条都不能播。"""
 
     def test_placeholder_answer_is_not_read(self):
-        """答案里带 XX 的官方原话不播，且不能把 XX 念出去。"""
+        """答案里带 XX 时不许念出去，且要留下拦截记录。
+
+        11-08 之后官方 5 条 XX 已按上下文补齐（原文留在 answer_raw），
+        所以真实库里已经没有带 XX 的答案了。这条用例改用**注入**的方式守门：
+        只要上游再出现一条带占位的答案，对话层必须仍然拒播——
+        否则这次补齐就成了"以后谁再漏填都没人管"。
+        """
+        fake = {"found": True, "qid": "QA-TEST-999", "source": "注入用例",
+                "match": "注入问句", "score": 99,
+                "answer": "您可以在商标网查询，等状态变为XX后重新提交申请",
+                "_ms": 0.1}
         s = _session("OFFER")
-        out = dialogue.respond(s, Q_TS003)
+        with mock.patch.object(dialogue.tools, "lookup_qa", return_value=fake):
+            out = dialogue.respond(s, Q_TS003)
         self.assertNotIn("XX", out["reply_text"])
         self.assertNotIn("【", out["reply_text"])
         self.assertIsNone(out.get("qa"))
         reasons = [(b.get("via"), b.get("reason"), b.get("id"))
                    for b in s["answer_blocked"]]
-        self.assertIn(("qa", "placeholder", "QA-TS-003"), reasons,
+        self.assertIn(("qa", "placeholder", "QA-TEST-999"), reasons,
                       "挡住了但要留下记录，否则没法解释'为什么这句没答'")
+
+    def test_filled_answer_is_readable(self):
+        """补齐后的官方答案要能逐字播出来（这正是补 XX 的目的）。"""
+        s = _session("OFFER")
+        out = dialogue.respond(s, Q_TS003)
+        self.assertEqual(out["intent"], "qa")
+        self.assertEqual(out["qa"]["id"], "QA-TS-003")
+        self.assertIn("国家商标网", out["reply_text"])
+        self.assertNotIn("XX", out["reply_text"])
 
     def test_kb_template_with_slots_is_not_read(self):
         """kb 里带【】槽位的模板不许原样念（TTS 会念成左右括号）。"""

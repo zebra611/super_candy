@@ -2613,13 +2613,20 @@ def main():
     _dp["stage"] = "OFFER"
     _dp["slots"]["identity_confirmed"] = True
     _dph = dialogue.respond(_dp, "我在哪可以查询到这个商标状态")
-    _dpk = dialogue.respond(_dp, "你们能和品牌方确认吗")
     _bad = ("XX", "【", "】")
-    check("答案里还有没填的占位（官方 XX / kb 模板【】）一律不念，且留下拦截记录",
-          not any(m in _dph["reply_text"] for m in _bad)
-          and not any(m in _dpk["reply_text"] for m in _bad)
-          and any(b.get("reason") == "placeholder" for b in _dp["answer_blocked"]),
-          ["拦截记录=%d 条" % len(_dp["answer_blocked"])])
+    import json as _json
+    with open(os.path.join(ROOT, "config", "mock", "qa.json"), encoding="utf-8") as _f:
+        _qa_items = (_json.load(_f).get("items") or [])
+    _with_xx = [it["id"] for it in _qa_items if "XX" in (it.get("answer") or "")]
+    _filled = [it for it in _qa_items if it.get("filled_placeholder")]
+    check("官方 27 条 QA 答案里没有未填占位（5 条已补齐、原话留 answer_raw），补齐后可逐字播",
+          not _with_xx and len(_filled) == 5
+          and all(it.get("answer_raw") for it in _filled)
+          and (_dph.get("qa") or {}).get("id") == "QA-TS-003"
+          and "国家商标网" in _dph["reply_text"]
+          and not any(m in _dph["reply_text"] for m in _bad),
+          ["仍有占位=%s 补齐=%d 条 实际播报=%s"
+           % (_with_xx or "无", len(_filled), (_dph.get("qa") or {}).get("id"))])
 
     import io as _io
     import contextlib as _ctx

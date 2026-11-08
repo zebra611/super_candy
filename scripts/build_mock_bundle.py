@@ -288,6 +288,67 @@ def build_rebuttals(sheets):
 # ---------------------------------------------------------------------------
 # qa.json：高频 QA + 特殊场景
 # ---------------------------------------------------------------------------
+# 官方表里有 5 条问答带未填占位（"XX"）。11-08 由人工按上下文补齐，
+# 原文一字不删地保留在 `answer_raw` / `question_raw` 里。
+#
+# 为什么非补不可：不补就只能选择「不播」或「让 TTS 念出叉叉」。
+# 这 5 条恰好是商家问得最多的商标状态 / 授权链路问题，答不上来等于把
+# 知识问答的分全丢掉；念"叉叉"又像系统故障。补齐是唯一能用的选项，
+# 但补齐必须**可追溯**——谁都能翻到原句，判断我们补得对不对。
+#
+# 键用原句（不用 id）：id 是抽取顺序编出来的，官方表加一行就会整体挪位。
+QA_FILL = {
+    "我在哪可以查询到这个商标状态": (
+        "我在哪可以查询到这个商标状态",
+        "您可以在国家商标网中查询商标状态，等状态变为已注册之后重新提交申请，"
+        "或者提供其他已注册状态的同类有效商标",
+    ),
+    "是必须在满足XX时间才可以申请吗": (
+        "是必须等满商标审查时间才可以申请吗",
+        "您商标目前是等待实质审查状态，如果在等待期满之前，商标状态变更为"
+        "初审公告或者已注册，就可以直接申请，不用等满整段时间",
+    ),
+    "XX公司和XX公司他们是一家，怎么还需要授权书": (
+        "这两家公司他们是一家，怎么还需要授权书",
+        "这两家公司目前没有查询到有直接持股或者同一法人的关系，"
+        "是需要您补充相应的授权书的",
+    ),
+    "你们联系的谁": (
+        "你们联系的谁",
+        "我们是通过品牌方官方渠道联系到授权负责人的，如果您能联系到该联系人，"
+        "可以请他回复我们的消息或者接听我们的电话；如果您有其他的联系方式，"
+        "可以在授权书的位置上传，不过这些联系方式需要联系人协助提供"
+        "他在授权公司的工作凭证才可以",
+    ),
+    "我就要经营这些类目怎么办": (
+        "我就要经营这些类目怎么办",
+        "您可以联系品牌方给您再授权这些类目所需的对应类别商标",
+    ),
+}
+
+
+def fill_placeholders(items):
+    """把 QA 里的未填占位按 QA_FILL 补齐，原文存进 *_raw。
+
+    返回补过的条目 id 列表（写进 _meta，供校验与答辩追溯）。
+    """
+    filled = []
+    for it in items:
+        hit = QA_FILL.get(it.get("question"))
+        if not hit:
+            continue
+        new_q, new_a = hit
+        if new_q != it.get("question"):
+            it["question_raw"] = it["question"]
+            it["question"] = new_q
+        if new_a != it.get("answer"):
+            it["answer_raw"] = it["answer"]
+            it["answer"] = new_a
+        it["filled_placeholder"] = True
+        filled.append(it["id"])
+    return filled
+
+
 def build_qa(sheets):
     items = []
 
@@ -337,6 +398,7 @@ def build_qa(sheets):
                 "context_script": _norm(r.get("B"))[:200],
             })
 
+    fill_placeholders(items)
     return items
 
 
@@ -374,6 +436,13 @@ def build(source_dir=OFFICIAL_DIR):
                    "qa": len(qa_items)},
         "notice": "话术与 QA 原文来自官方资料包，逐字保留；结构化字段（domain/materials/"
                   "placeholders）由本脚本按规则派生，不对原文做改写。",
+        # 唯一一处例外要说清楚：5 条带 XX 占位的 QA 由人工补齐（原文留在
+        # 条目的 answer_raw / question_raw），否则 TTS 会把"XX"念成"叉叉"。
+        "qa_filled": {
+            "count": len([it for it in qa_items if it.get("filled_placeholder")]),
+            "ids": [it["id"] for it in qa_items if it.get("filled_placeholder")],
+            "policy": "占位符按上下文人工补齐，原文存 answer_raw/question_raw，不改官方口径",
+        },
     }
     return meta, catalog, rebuttals, qa_items
 
@@ -416,7 +485,11 @@ def main(argv=None):
 
     os.makedirs(OUT_DIR, exist_ok=True)
     for fname, items in targets.items():
-        _dump(os.path.join(OUT_DIR, fname), meta, items)
+        # qa_filled 只对 qa.json 有意义，别写进 catalog / rebuttals 的 _meta——
+        # 那两份文件不需要重建，多一行 diff 只会让"这次到底改了什么"变模糊。
+        m = meta if fname == "qa.json" else {
+            k: v for k, v in meta.items() if k != "qa_filled"}
+        _dump(os.path.join(OUT_DIR, fname), m, items)
         print("wrote %-15s %3d 条" % (fname, len(items)))
     print("catalog 关单方式：电话 %d / 京麦 %d" % (
         sum(1 for c in catalog if c["close_mode"] == "电话"),

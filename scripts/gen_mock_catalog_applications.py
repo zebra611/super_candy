@@ -35,6 +35,7 @@ from scripts.gen_mock_applications import (  # noqa: E402
     CAT_L1, CAT_L2, CAT_L3, CONTACT_ROLES, GIVEN_NAMES, REGION_CODE, REGIONS,
     SHOP_TYPES, COMPANY_TYPES, APPLICATION_TYPES, CALL_STATUSES,
     APP_STATUSES, make_credit_code, make_id_card, build_records,
+    address_of, branch_city, LEGAL_SUFFIX,
     SIZI as LEGACY_SIZI, BRANDS as LEGACY_BRANDS,
 )
 
@@ -172,20 +173,25 @@ def build_catalog_records():
         short = CATALOG_SIZI[i % len(CATALOG_SIZI)]
         region = REGIONS[(i * 3) % len(REGIONS)]
         ctype = COMPANY_TYPES[(i * 5) % len(COMPANY_TYPES)]
+        # 公司名要像真名：字号 + 行业 + 组织形式。**不把场景序号写进名字**——
+        # 之前是「…百货经营部（场景07）」，预览卡上"公司名称"一栏直接显示"场景07"，
+        # 看上去像测试夹具，不像一家公司。68 条的字号池本来就互不重复，
+        # 不靠序号也保得住全局唯一。
         if "个体" in ctype:
-            company = "%s%s百货经营部（场景%02d）" % (region, short, seq)
+            company = "%s%s百货经营部" % (region, short)
         elif "分公司" in ctype:
-            company = "%s%s云启科技有限公司场景%02d分公司" % (region, short, seq)
+            company = "%s%s云启科技有限公司%s分公司" % (
+                region, short, branch_city(region, seq))
         else:
-            company = "%s%s商贸%s" % (region, short, ctype)
-        # 兜底：万一与历史重名（同字号同地区同类型），补场景号
+            company = "%s%s商贸%s" % (region, short, LEGAL_SUFFIX.get(ctype, "有限公司"))
+        # 兜底：万一与历史重名（同字号同地区同类型），加一个分公司后缀区分
         if company in used_companies:
-            company = "%s（场景%02d）" % (company, seq)
+            company = "%s%s分公司" % (company, branch_city(region, seq))
         used_companies.add(company)
 
-        shop = "%s官方旗舰店场景%02d" % (short, seq)
+        shop = "%s官方旗舰店" % short
         if shop in used_shops:
-            shop = "%s官方旗舰店场景%02dA" % (short, seq)
+            shop = "%s官方旗舰店（二店）" % short
         used_shops.add(shop)
 
         tail = tails[i]
@@ -236,7 +242,7 @@ def build_catalog_records():
             "credit_code": credit_code,
             "credit_code_tail": credit_code[-4:],
             "bank_account_tail": "%04d" % bat,
-            "registered_address": "%s云启大道%d号%d层" % (region, 21 + (seq * 13) % 800, 1 + seq % 18),
+            "registered_address": address_of(region, seq),
             "contact_name": names[100 + i],
             "contact_role": CONTACT_ROLES[i % len(CONTACT_ROLES)],
             "contact_phone": "1990000" + tail,
@@ -248,7 +254,7 @@ def build_catalog_records():
             "submitted_at": submitted.isoformat(),
             "application_type": APPLICATION_TYPES[i % len(APPLICATION_TYPES)],
             "brand_name": CATALOG_BRANDS[i % len(CATALOG_BRANDS)],
-            "brand_registration_no": "TM%08d" % (95000000 + seq * 6151),
+            "brand_registration_no": "%08d" % (95000000 + seq * 6151),
             "category_l1": CAT_L1[i % len(CAT_L1)],
             "category_l2": CAT_L2[i % len(CAT_L2)],
             "category_l3": CAT_L3[i % len(CAT_L3)],
