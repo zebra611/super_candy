@@ -62,6 +62,9 @@ class WsCallSession:
         self._backend = backend
         self._send_text = send_text          # str -> None，调用方保证线程安全
         self._close = close or (lambda: None)
+        # 服务端主动收线的定时器：说完结束语后等一小段（留出打断/改口的窗口），
+        # 期间用户再说话就取消（新一轮 _run_turn 会 cancel）。
+        self._hangup_timer = None
         self._lock = threading.Lock()        # 下行串行化：读线程与推送线程共用
         self.sess = None
         self.session_id = None
@@ -194,6 +197,7 @@ class WsCallSession:
 
     def _run_turn(self):
         """跑一轮并把结果按协议推下去。TTS 分段是"就绪即推"，不再让前端来轮询。"""
+        self._cancel_hangup()      # 用户又说话了：刚才的收线计划作废
         sid = self.session_id
         override = None
         if self._rt is not None:
@@ -237,6 +241,48 @@ class WsCallSession:
                              daemon=True).start()
         else:
             self.send_json({"type": "tts_done", "turn_id": turn_id})
+
+        # 这一轮是"说完就结束"（终态/拒绝/挂断）：给一小段缓冲后主动收线。
+        # 没有这一步，通话会一直挂着——前端不点挂断就永远不结束。
+        if out.get("hangup"):
+            self._schedule_hangup(out.get("end_reason") or "done")
+
+    # ---- 服务端主动收线 ---------------------------------------------------
+    AUTO_HANGUP_GRACE_S = 2.5      # 结束语说完到收线的缓冲，留出"等等我改一下"的窗口
+
+    def _schedule_hangup(self, reason):
+        self._cancel_hangup()
+        timer = threading.Timer(self.AUTO_HANGUP_GRACE_S, self._auto_hangup, args=(reason,))
+        timer.daemon = True
+        self._hangup_timer = timer
+        timer.start()
+
+    def _cancel_hangup(self):
+        if self._hangup_timer is not None:
+            try:
+                self._hangup_timer.cancel()
+            except Exception:
+                pass
+            self._hangup_timer = None
+
+    def _auto_hangup(self, reason):
+        """到点收线：记一条 call_ended → 通知前端 → 关连接。
+
+        顺序不能反：先记事件再关 socket，否则前端收到 call_ended 时
+        服务端可能已经把会话清了，事后查不到这通电话怎么结束的。
+        """
+        try:
+            self._backend.end_call(self.session_id)
+        except Exception:
+            pass
+        try:
+            self.send_json({"type": "call_ended", "reason": reason})
+        except Exception:
+            pass
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _push_tts(self, turn_id, tts):
         """把 tts 结果转成协议消息。browser 回落也推——前端要的是"知道该播什么"。"""

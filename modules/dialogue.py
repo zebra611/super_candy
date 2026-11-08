@@ -2383,7 +2383,21 @@ def _stage_done(session, text, flags):
                           qa_hit=_qa_hit, kb_hit=_kb_hit)
         return _reply(session, cfg.get("reply_ask") or cfg.get("reply", ""), intent="ask")
 
-    return _reply(session, cfg.get("reply", "感谢您的接听，再见。"), intent="done")
+    # 已经说过再见了：用户这句只是"再见""嗯""一个字"这种收尾词，不再重复整段。
+    # 旧行为是每来一句就把整段结束语再念一遍（线上实测：说"再见"重复一次，
+    # 说"一个字"又重复一次），用户会以为电话卡住了，而且永远挂不掉。
+    if session.get("done_announced"):
+        out = _reply(session, cfg.get("reply_short") or "好的，再见。",
+                     intent="done", end_reason="done")
+        out["hangup"] = True
+        return out
+
+    # 第一次进终态：说结束语，并标记"已告别"，同时请求服务端收线。
+    session["done_announced"] = True
+    out = _reply(session, cfg.get("reply", "感谢您的接听，再见。"),
+                 intent="done", end_reason="done")
+    out["hangup"] = True
+    return out
 
 
 _HANDLERS = {
