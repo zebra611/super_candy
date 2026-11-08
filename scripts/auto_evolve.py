@@ -148,7 +148,11 @@ def main():
         if l2_cand and _l2_ready(l2_cand):
             rc = _run("L2 闸门", [_PY, "scripts/evolve.py", "gate", _rel(l2_path)],
                       allow_fail=True)
-            print("  [结果] %s" % ("通过，进第 5 步" if rc == 0 else "未通过，版本只留档"))
+            after = _read(l2_path) if os.path.exists(l2_path) else {}
+            if (after.get("gate") or {}).get("result") == "rejected_static":
+                print("  [结果] 候选不合规，静态拒绝；没有生成版本，线上话术未动")
+            else:
+                print("  [结果] %s" % ("通过，进第 5 步" if rc == 0 else "未通过，版本只留档"))
         elif l2_cand:
             print("  [待填] L2 草稿的话术还空着：%s" % _rel(l2_path))
             print("         填 patches[].value 后再跑一次本命令；或加 --llm 自动起草")
