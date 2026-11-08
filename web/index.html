@@ -1113,8 +1113,9 @@ async function reportMetric(turnId, ms, estimate) {
   refreshMetrics();
 }
 
-async function endCall() {
+async function endCall(opts) {
   if (!S.sessionId) return;
+  const silent = !!(opts && opts.silent);   // 服务端已收线时不重复 POST
   // 挂断时先把状态机停掉，再关麦克风：否则正在播的声音会继续，
   // 而 VAD 还在拿"已结束会话"的音频做判定。
   S.autoMode = false;
@@ -1127,10 +1128,12 @@ async function endCall() {
     $("audioLine").textContent = "麦克风已关闭。";
   }
   $("btnRec").textContent = "暂停聆听";
-  await fetch("/api/call/end", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: S.sessionId, token: S.token })
-  });
+  if (!silent) {
+    await fetch("/api/call/end", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: S.sessionId, token: S.token })
+    });
+  }
   log("系统", "通话已结束。");
   $("btnStart").disabled = false;
   $("btnRandom").disabled = false;
@@ -1234,6 +1237,12 @@ function wsOnMessage(m) {
     case "turn_end":
       if (m.latency) $("mTotal").textContent = Math.round(m.latency.total_ms) + " ms";
       refreshMetrics(); refreshEvents();
+      return;
+    case "call_ended":
+      // 服务端说完结束语后主动收线。这里不能直接调 endCall()：
+      // 它还会 POST /api/call/end，服务端已经记过一次，会重复记账。
+      log("系统", "通话已结束（" + (m.reason || "done") + "），服务端已收线。");
+      endCall({ silent: true });
       return;
     case "barge_ack":
       return;                       // 服务端已记账；停播在前端早已完成
