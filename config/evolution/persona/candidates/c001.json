@@ -1,0 +1,78 @@
+{
+ "id": "c001",
+ "created": "2026-11-08 18:30:33",
+ "base_version": "p1",
+ "from_baseline": "eval/reports/sim_persona_baseline.json",
+ "targets": [
+  "forgetful",
+  "skeptical"
+ ],
+ "rationale": "基线里这几类性格存在「同一句连念多遍 → 耐心耗尽」；只在重复轮追加轮换引导语，官方原句一字不动。",
+ "rules": {
+  "forgetful": {
+   "IDENTITY": {
+    "avoid_repeat": [
+     "您慢慢想，我这边等着。",
+     "说联系人姓名或者单号后六位也行。"
+    ]
+   },
+   "NEED": {
+    "avoid_repeat": [
+     "您慢慢想，我这边等着。",
+     "说联系人姓名或者单号后六位也行。"
+    ]
+   }
+  },
+  "skeptical": {
+   "IDENTITY": {
+    "avoid_repeat": [
+     "您也可以对照申请单编号核实一下。",
+     "刚才这段是官方口径，您可以再核一遍。"
+    ]
+   },
+   "NEED": {
+    "avoid_repeat": [
+     "您也可以对照申请单编号核实一下。",
+     "刚才这段是官方口径，您可以再核一遍。"
+    ]
+   }
+  }
+ },
+ "gate": {
+  "result": "rejected",
+  "version": "p2",
+  "checks": [
+   {
+    "check": "train 不降",
+    "pass": true,
+    "detail": "7 → 7"
+   },
+   {
+    "check": "holdout 不降",
+    "pass": true,
+    "detail": "3 → 3"
+   },
+   {
+    "check": "有实际收益",
+    "pass": false,
+    "detail": "总通过 10→10，系统缺陷会话 3→3"
+   },
+   {
+    "check": "无个体回退",
+    "pass": true,
+    "detail": "无"
+   },
+   {
+    "check": "缺陷总数不增",
+    "pass": true,
+    "detail": "7 → 7"
+   },
+   {
+    "check": "按性格分组无回退",
+    "pass": true,
+    "detail": "cooperative 1→1  forgetful 1→1  hard_of_hearing 1→1  impatient 2→2  neutral 1→1  quiet 2→2  skeptical 1→1  talkative 1→1"
+   }
+  ],
+  "at": "2026-11-08 18:30:41"
+ }
+}

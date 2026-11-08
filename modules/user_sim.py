@@ -324,9 +324,16 @@ class UserSim(object):
         """把动作说成人话。**只有这里能产出事实值**，别的分支一律不碰 self.facts。"""
         style = self.p.get("style") or []
         pre = self._pick(style) if style else ""
+        catch = self.p.get("catchphrases") or []
 
         def wrap(s):
-            return (pre + "，" + s) if pre else s
+            out = (pre + "，" + s) if pre else s
+            # 性格口头禅：只有**显式性格画像**带这个字段时才多取一次随机数。
+            # 既有 10 类画像没有它，随机序列一个字节都不能变——否则 L2 的
+            # 8/10 基线会被"顺手加个功能"悄悄改写，闸门就失去意义了。
+            if catch and self.rng_float() < float(self.p.get("catchphrase_rate", 0.6)):
+                out = self._pick(catch) + "，" + out
+            return out
 
         if action == ANSWER_TAIL:
             v = self.facts["phone_tail"]

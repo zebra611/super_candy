@@ -211,19 +211,36 @@ def main(argv=None):
     mut = None
     if args.self_test:
         from modules import dialogue as D
-        orig = D._refuse_identity
-        D._refuse_identity = lambda t: False      # 拒绝核身识别失效
+        # 主注入换成「核身校验恒失败」。为什么换：11-08 修好姓名槽位与
+        # NEED 推进之后，原注入 `_refuse_identity 恒 False` 在这 24 条上
+        # 实测仍是 24/24——用例已不经过那个分支，等于往一条不通电的线上
+        # 注入缺陷。继续拿它当灵敏度判据，会把"注入失效"误报成"课程无效"，
+        # 也会逼着后人去放宽断言，那才是真的把闸门拆了。
+        orig = D._verify_identity
+        D._verify_identity = lambda s: False
         try:
             m2 = _run(g2_cases)
         finally:
-            D._refuse_identity = orig
+            D._verify_identity = orig
         mp, mn, mr = _rate(m2)
         caught = mp < p2 or any(not v["ok"] for v in m2.values())
-        mut = {"injected": "_refuse_identity 恒 False", "passed": mp,
-               "cases": mn, "rate": mr, "caught": caught,
-               "delta": mp - p2}
-        print("变异：注入「拒绝核身识别失效」→ Gen2 %d/%d（原 %d/%d），%s"
+        # 旧注入留作对照：它现在确实抓不到，这个事实要写在报告里，
+        # 而不是悄悄换掉让人以为课程一直很灵。
+        old_orig = D._refuse_identity
+        D._refuse_identity = lambda t: False
+        try:
+            lp, ln, _ = _rate(_run(g2_cases))
+        finally:
+            D._refuse_identity = old_orig
+        mut = {"injected": "_verify_identity 恒 False", "passed": mp,
+               "cases": mn, "rate": mr, "caught": caught, "delta": mp - p2,
+               "legacy_probe": {"injected": "_refuse_identity 恒 False",
+                                "passed": lp, "cases": ln,
+                                "note": "该分支已被流程修复绕过，注入后无变化；"
+                                        "仅作对照，不作为课程灵敏度判据"}}
+        print("变异：注入「核身校验失效」→ Gen2 %d/%d（原 %d/%d），%s"
               % (mp, mn, p2, n2, "已抓到" if caught else "没抓到（课程无效）"))
+        print("对照：旧注入「拒绝核身识别失效」→ Gen2 %d/%d（分支已不通电）" % (lp, ln))
 
     # ---- 报告 ----
     os.makedirs(os.path.join(ROOT, "eval", "reports"), exist_ok=True)
@@ -268,6 +285,13 @@ def main(argv=None):
     if mut:
         md.append("- 变异验证：注入「%s」后 Gen2 从 %d/%d 降到 %d/%d，课程**能发现**注入缺陷。"
                   % (mut["injected"], p2, n2, mut["passed"], mut["cases"]))
+        if mut.get("legacy_probe"):
+            lp = mut["legacy_probe"]
+            md.append("- 旧注入对照：「%s」现在仍是 %d/%d——姓名槽位与 NEED 推进修好后，"
+                      "这些用例不再经过该分支，注入的是一条不通电的线。"
+                      "**注入失效不等于课程失效**，故主注入改为核身校验；"
+                      "此处保留对照，不悄悄换掉。"
+                      % (lp["injected"], lp["passed"], lp["cases"]))
     md.append("- 课程不改生产代码/配置，无需回滚；`regressed` 只作报警，"
               "不自动判「系统退化」——难度变了也会降分，要人看 transcript。")
     md.append("- 样本是 10 个自拟 persona × 4 个场景，覆盖矩阵不是随机抽样，"

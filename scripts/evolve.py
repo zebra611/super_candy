@@ -483,6 +483,19 @@ def cmd_gate(args):
     scene_file = vd.get("scene_file") or "config/scenes/pop_reject.json"
     base_cfg = _read_json(os.path.join(_ROOT, scene_file))
 
+    # 线上场景被人手改过、版本库还是旧快照时，闸门跑出来的"收益"没有意义：
+    # 候选是在旧话术上叠加的，线上跑的却是新话术。11-08 实测——L2 建库后
+    # 又给 CONFIRM 加了 reply_after_ask，三个哈希两两不同，却没有任何一处报错。
+    # 这里直接拒绝，让 doctor/rebase 先把地基对齐。
+    _live = _sha(os.path.join(_ROOT, scene_file))
+    _snap = _sha(_snapshot_path(active)) if os.path.exists(_snapshot_path(active)) else ""
+    if _snap and _live != _snap:
+        raise SystemExit(
+            "线上场景内容与 active 版本快照不一致，拒绝闸门：\n"
+            "  线上 %s（sha=%s）\n  快照 %s（sha=%s）\n"
+            "先跑 `python scripts/evolve.py doctor` 看差异，再 `rebase` 重定基线。"
+            % (scene_file, _live, os.path.relpath(_snapshot_path(active), _ROOT), _snap))
+
     # 基线指标：优先用 active 版本登记过的；没有就现跑一次
     active_rec = next((h for h in vd["history"] if h["version"] == active), {})
     base_m = active_rec.get("metrics")
@@ -677,6 +690,117 @@ def cmd_rollback(args):
     return 0
 
 
+def cmd_doctor(args):
+    """体检：三个哈希必须一致，否则自进化的结论不可信。
+
+    三个哈希分别是：
+        live     线上场景文件当前内容
+        snapshot active 版本登记时的内容
+        baseline 基线跑批结果自称对应的内容
+    两两不等最常见的成因是"建库之后又有人改了话术但没重定基线"。
+    """
+    vd = _versions()
+    if not vd.get("history"):
+        print("还没有版本库。先跑 evolve.py init")
+        return 1
+    active = vd["active"]
+    scene_file = vd.get("scene_file") or "config/scenes/pop_reject.json"
+    live = _sha(os.path.join(_ROOT, scene_file))
+    snap = _sha(_snapshot_path(active)) if os.path.exists(_snapshot_path(active)) else ""
+    bj = vd.get("baseline_json") or ""
+    bp = bj if os.path.isabs(bj) else os.path.join(_ROOT, bj)
+    base = _read_json(bp).get("scene_sha", "") if bj and os.path.exists(bp) else ""
+
+    print("active        : %s" % active)
+    print("线上场景      : %s  sha=%s" % (scene_file, live))
+    print("active 快照   : sha=%s" % (snap or "(缺失)"))
+    print("基线结果      : %s  sha=%s" % (bj or "(未登记)", base or "(缺失)"))
+
+    problems = []
+    if not snap:
+        problems.append("active 版本没有快照，无法证明线上跑的是哪一版")
+    elif live != snap:
+        problems.append("线上场景已被改动，与 active 快照不是同一份话术")
+    if not base:
+        problems.append("基线结果没有内容哈希，无法证明它对应哪份话术")
+    elif snap and base != snap:
+        problems.append("基线结果不是用 active 版本跑出来的（可能是升级后的场景重跑过）")
+
+    # --deep：内容哈希只能证明"话术没变"，证明不了"代码没变"。
+    # 11-08 修了两个流程缺陷（姓名槽位 / NEED 不复读），场景一个字没动，
+    # 但跑批从 8/10 变成 9/10——这种漂移三个哈希全绿也照不出来。
+    # 所以深度体检直接重跑一遍 active 场景，比对登记的分数。
+    if args.get("deep") and not problems:
+        active_rec = next((h for h in vd["history"] if h["version"] == active), {})
+        want = (active_rec.get("metrics") or {}).get("all_ok")
+        tmp = os.path.join(_ROOT, "eval", "reports", "_doctor_recheck.json")
+        got = _metrics(run_sim(scene_file, tmp, tag="doctor_" + active))["all_ok"]
+        print("深度复算：登记 %s/10，重跑 %s/10" % (want, got))
+        if want is not None and got != want:
+            problems.append("基线分数已失真（%s → %s）：代码变过，先跑 rebase" % (want, got))
+
+    if problems:
+        print("\n体检不通过：")
+        for x in problems:
+            print("  - %s" % x)
+        print("修法：python scripts/evolve.py rebase（用当前线上话术重定基线）")
+        return 1
+    print("\n体检通过：三处内容一致，可以跑闸门。")
+    return 0
+
+
+def cmd_rebase(args):
+    """用**当前线上场景**重定基线，登记为一个新版本。
+
+    场景配置在版本库建成之后被人为改动（加话术、改口径）是正常的产品迭代，
+    不该要求把改动退回去；但也绝不能假装基线还是那个基线。做法是把当前内容
+    原样登记成新版本、用这同一份内容重跑跑批，让三个哈希重新对齐。
+    历史版本全部保留，随时可以 rollback 回去。
+    """
+    vd = _versions()
+    if not vd.get("history"):
+        raise SystemExit("还没有版本库。先跑 evolve.py init")
+    active = vd["active"]
+    scene_file = vd.get("scene_file") or "config/scenes/pop_reject.json"
+    live_path = os.path.join(_ROOT, scene_file)
+    new_ver = "v%d" % (len(vd["history"]) + 1)
+
+    os.makedirs(_ver_dir(new_ver), exist_ok=True)
+    _write_json(_snapshot_path(new_ver), _read_json(live_path))
+
+    out_json = os.path.join(_ROOT, "eval", "reports", "sim_baseline_%s.json" % new_ver)
+    payload = run_sim(scene_file, out_json, tag="base_" + new_ver)
+    m = _metrics(payload)
+
+    # 重跑出来的跑批文件，其 scene_sha 必须就是这份线上内容的哈希；
+    # 不是就说明子进程拿到了别的场景（环境注入失效），不能登记。
+    got = payload.get("scene_sha") or ""
+    want = _sha(_snapshot_path(new_ver))
+    if got != want:
+        raise SystemExit("重定基线失败：跑批结果 sha=%s，但新快照 sha=%s，"
+                         "子进程没跑在目标场景上" % (got, want))
+
+    rec = {
+        "version": new_ver, "parent": active, "created": _now(), "status": "active",
+        "source": "rebase：线上场景内容变更，重定基线", "candidate": None,
+        "metrics": m, "scene_sha": want,
+    }
+    for h in vd["history"]:
+        if h["version"] == active and h.get("status") == "active":
+            h["status"] = "superseded"
+            h["superseded_at"] = _now()
+    vd["history"].append(rec)
+    vd["active"] = new_ver
+    vd["baseline_json"] = os.path.relpath(out_json, _ROOT).replace("\\", "/")
+    _write_json(VERSIONS_PATH, vd)
+
+    print("已重定基线：%s → %s" % (active, new_ver))
+    print("线上场景 sha=%s，快照 sha=%s，跑批 sha=%s（三者一致）" % (want, want, got))
+    print("基线指标：%s" % _fmt(m))
+    print("回滚命令：python scripts/evolve.py rollback")
+    return 0
+
+
 def cmd_status(args):
     vd = _versions()
     if not vd.get("history"):
@@ -729,6 +853,7 @@ def main(argv):
     table = {
         "init": cmd_init, "propose": cmd_propose, "gate": cmd_gate,
         "promote": cmd_promote, "rollback": cmd_rollback, "status": cmd_status,
+        "doctor": cmd_doctor, "rebase": cmd_rebase,
     }
     fn = table.get(cmd)
     if not fn:

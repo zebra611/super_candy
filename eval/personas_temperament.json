@@ -1,0 +1,118 @@
+{
+ "_comment": "显式性格画像集：给「扮演不同性格的客户」用。与 eval/personas_sim.json 完全分开，那份是 L2 的 10 类基线画像，一个字段都不能动——往里加画像会改变评测分母，8/10 的基线立刻失真。",
+ "_schema": {
+  "temper": "显式性格码，与 modules/persona.TEMPERAMENT_MARKS 一致；客服侧只能从用户字面推断，读不到这个字段",
+  "catchphrases": "按性格插入用户话的口头禅，让「扮演」落到可听见的话上（而不是只写在标签里）",
+  "catchphrase_rate": "口头禅出现概率阈值；确定性按 (画像 id, 轮次) 播种",
+  "split": "train=调参用；holdout=只验收，不得据它改规则"
+ },
+ "personas": [
+  {
+   "id": "T01", "label": "催着要结论的老板", "temper": "impatient",
+   "goal": "confirm", "split": "train",
+   "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+   "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+   "traits": {"hearing": 1.0, "patience": 3, "trust0": 0.35, "trust_gate": 0.2, "verbosity": 0.2},
+   "style": ["哎"], "catchphrases": ["你快点说", "我没时间，说重点", "别绕弯子"],
+   "catchphrase_rate": 0.7, "expect": {"closed": true}
+  },
+  {
+   "id": "T02", "label": "质疑来电来源的店长", "temper": "skeptical",
+   "goal": "confirm", "split": "train",
+   "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+   "willing": {"phone_tail": "refuse", "contact_name": "on_ask"},
+   "traits": {"hearing": 1.0, "patience": 5, "trust0": 0.05, "trust_gate": 0.6, "verbosity": 0.45},
+   "style": ["我说"], "catchphrases": ["你哪来的我号码", "凭什么信你", "先说你是哪个部门的"],
+   "catchphrase_rate": 0.75, "expect": {"closed": true}
+  },
+  {
+   "id": "T03", "label": "只回单字的经办人", "temper": "quiet",
+   "goal": "confirm", "split": "train",
+   "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+   "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+   "traits": {"hearing": 1.0, "patience": 6, "trust0": 0.45, "trust_gate": 0.2, "verbosity": 0.1},
+   "style": ["嗯"], "catchphrases": ["嗯", "好", "是"],
+   "catchphrase_rate": 0.85, "expect": {"closed": true}
+  },
+  {
+   "id": "T04", "label": "爱扯闲篇的店主", "temper": "talkative",
+   "goal": "offtopic", "split": "train",
+   "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+   "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+   "traits": {"hearing": 1.0, "patience": 7, "trust0": 0.5, "trust_gate": 0.2, "verbosity": 1.0},
+   "style": ["哎呀"], "catchphrases": ["我跟你说啊，上次那个审核也拖了半个月", "对了还有，这两天后台老卡"],
+   "catchphrase_rate": 0.65, "expect": {"closed": true}
+  },
+  {
+   "id": "T05", "label": "听不清要重说的老师傅", "temper": "hard_of_hearing",
+   "goal": "confirm", "split": "train",
+   "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+   "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+   "traits": {"hearing": 0.5, "patience": 8, "trust0": 0.4, "trust_gate": 0.25, "verbosity": 0.6},
+   "style": ["啊"], "catchphrases": ["信号不好，你再说一遍", "啊？你说啥"],
+   "catchphrase_rate": 0.7, "expect": {"closed": true}
+  },
+  {
+   "id": "T06", "label": "记不住尾号的老板娘", "temper": "forgetful",
+   "goal": "confirm", "split": "train",
+   "knows": {"phone_tail": false, "contact_name": true, "company_name": true},
+   "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+   "traits": {"hearing": 1.0, "patience": 6, "trust0": 0.4, "trust_gate": 0.2, "verbosity": 0.5},
+   "style": ["唉"], "catchphrases": ["我记不住那几个数", "那号我一时真想不起来"],
+   "catchphrase_rate": 0.7, "expect": {"closed": true}
+  },
+  {
+   "id": "T07", "label": "一路配合的专员", "temper": "cooperative",
+   "goal": "confirm", "split": "train",
+   "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+   "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+   "traits": {"hearing": 1.0, "patience": 8, "trust0": 0.65, "trust_gate": 0.15, "verbosity": 0.35},
+   "style": ["好的"], "catchphrases": ["没问题，我配合", "好的我报"],
+   "catchphrase_rate": 0.6, "expect": {"closed": true}
+  },
+  {
+   "id": "T08", "label": "平常语气的经办人", "temper": "neutral",
+   "goal": "confirm", "split": "train",
+   "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+   "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+   "traits": {"hearing": 1.0, "patience": 6, "trust0": 0.4, "trust_gate": 0.2, "verbosity": 0.4},
+   "style": ["我这边看一下"], "expect": {"closed": true}
+  },
+  {
+   "id": "T09", "label": "急性子（留出集）", "temper": "impatient",
+   "goal": "confirm", "split": "holdout",
+   "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+   "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+   "traits": {"hearing": 1.0, "patience": 4, "trust0": 0.3, "trust_gate": 0.2, "verbosity": 0.25},
+   "style": ["哎"], "catchphrases": ["赶紧说", "别废话"],
+   "catchphrase_rate": 0.7, "expect": {"closed": true}
+  },
+  {
+   "id": "T10", "label": "多疑（留出集）", "temper": "skeptical",
+   "goal": "confirm", "split": "holdout",
+   "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+   "willing": {"phone_tail": "refuse", "contact_name": "on_ask"},
+   "traits": {"hearing": 1.0, "patience": 5, "trust0": 0.08, "trust_gate": 0.55, "verbosity": 0.45},
+   "style": ["我说"], "catchphrases": ["这不会是推销吧", "怎么信你"],
+   "catchphrase_rate": 0.75, "expect": {"closed": true}
+  },
+  {
+   "id": "T11", "label": "记不住（留出集）", "temper": "forgetful",
+   "goal": "confirm", "split": "holdout",
+   "knows": {"phone_tail": false, "contact_name": true, "company_name": true},
+   "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+   "traits": {"hearing": 1.0, "patience": 7, "trust0": 0.4, "trust_gate": 0.2, "verbosity": 0.5},
+   "style": ["唉"], "catchphrases": ["忘了，想不起来", "我记不得那几个数"],
+   "catchphrase_rate": 0.7, "expect": {"closed": true}
+  },
+  {
+   "id": "T12", "label": "话少（留出集）", "temper": "quiet",
+   "goal": "confirm", "split": "holdout",
+   "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+   "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+   "traits": {"hearing": 1.0, "patience": 6, "trust0": 0.45, "trust_gate": 0.2, "verbosity": 0.1},
+   "style": ["嗯"], "catchphrases": ["嗯", "好"],
+   "catchphrase_rate": 0.85, "expect": {"closed": true}
+  }
+ ]
+}

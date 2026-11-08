@@ -683,6 +683,8 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
     for _k in ("qa", "kb"):
         if agent_out.get(_k):
             _reply_payload[_k] = agent_out[_k]
+    if agent_out.get("persona"):
+        _reply_payload["persona"] = agent_out["persona"]
     events.write_event(session_id, "agent_reply", _reply_payload,
                        turn_id=turn_id, latency_ms=llm_ms)
 
@@ -734,6 +736,7 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
         # 演示时"官方原话"四个字才有依据；没引资料时字段不出现，不写空壳。
         "qa": agent_out.get("qa"),
         "kb": agent_out.get("kb"),
+        "persona": agent_out.get("persona"),
         "tool_result": tool_result,
         "closed": sess["closed"],
         "slots": dict(sess["slots"]),

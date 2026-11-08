@@ -35,11 +35,11 @@ sys.path.insert(0, _ROOT)
 # ---- 参数必须在 import app 之前定下来（app 启动期会缓存配置）-----------------
 def _scan_argv(argv):
     opts = {"scene": "", "json": "", "report": "", "tag": "", "ids": [],
-            "max_turns": 14, "verbose": True}
+            "max_turns": 14, "verbose": True, "personas": ""}
     i = 0
     while i < len(argv):
         a = argv[i]
-        if a in ("--scene", "--json", "--report", "--tag", "--max-turns"):
+        if a in ("--scene", "--json", "--report", "--tag", "--max-turns", "--personas"):
             if i + 1 >= len(argv):
                 raise SystemExit("%s 缺少参数" % a)
             key = a.lstrip("-").replace("-", "_")
@@ -91,7 +91,11 @@ config_loader.nlg_config = lambda: {**config_loader.load().get("nlg", {}),
 
 from app import end_call, handle_turn, start_call   # noqa: E402
 
-PERSONAS_PATH = os.path.join(_ROOT, "eval", "personas_sim.json")
+# 画像集可注入：性格维度用 eval/personas_temperament.json，
+# 原有的 10 类基线画像保持默认，一个字段都不动。
+PERSONAS_PATH = _OPTS["personas"] or os.path.join(_ROOT, "eval", "personas_sim.json")
+if not os.path.isabs(PERSONAS_PATH):
+    PERSONAS_PATH = os.path.join(_ROOT, PERSONAS_PATH)
 
 
 def _scene_sha(path):
@@ -103,6 +107,24 @@ def _scene_sha(path):
     import hashlib
     try:
         with open(path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        canon = json.dumps(obj, sort_keys=True, ensure_ascii=False,
+                           separators=(",", ":"))
+        return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        return ""
+
+
+def _rules_sha():
+    """当前实际生效的性格规则表内容哈希（含候选注入）。"""
+    import hashlib
+    from modules import persona
+    p = os.environ.get(persona.ENV_RULES) or os.path.join(
+        _ROOT, "config", "persona_adapt.json")
+    if not os.path.isabs(p):
+        p = os.path.join(_ROOT, p)
+    try:
+        with open(p, encoding="utf-8") as f:
             obj = json.load(f)
         canon = json.dumps(obj, sort_keys=True, ensure_ascii=False,
                            separators=(",", ":"))
@@ -148,6 +170,7 @@ def run_persona(persona, max_turns=14):
                 "next_stage": res.get("next_stage", ""),
                 "intent": res.get("intent", ""),
                 "end_reason": res.get("end_reason", ""),
+                "persona": res.get("persona") or {},
                 "slots": res.get("slots") or {},
             },
         })
@@ -256,6 +279,22 @@ def main():
     else:
         print("\n没有可归因到系统的缺陷簇。")
 
+    by_temper = {}
+    for r in summary["rows"]:
+        code = by_id[r["id"]].get("temper", "neutral")
+        g = by_temper.setdefault(code, {"total": 0, "ok": 0, "ids": [],
+                                        "train_ok": 0, "holdout_ok": 0})
+        g["total"] += 1
+        g["ok"] += 1 if r["ok"] else 0
+        g["ids"].append(r["id"])
+        if r.get("split") == "holdout":
+            g["holdout_ok"] += 1 if r["ok"] else 0
+        else:
+            g["train_ok"] += 1 if r["ok"] else 0
+    if by_temper:
+        print("按性格：%s" % "  ".join(
+            "%s %d/%d" % (k, v["ok"], v["total"]) for k, v in sorted(by_temper.items())))
+
     payload = {
         "tag": _OPTS["tag"] or datetime.now().strftime("%m%d_%H%M"),
         "scene": config_loader.scene_name(),
@@ -270,7 +309,13 @@ def main():
         "clusters": clusters,
         "sessions": sessions,
         "personas": [{"id": p["id"], "split": p.get("split", "train"),
-                      "goal": p.get("goal"), "expect": p.get("expect")} for p in personas],
+                      "goal": p.get("goal"), "expect": p.get("expect"),
+                      "temper": p.get("temper", "neutral")} for p in personas],
+        "personas_path": os.path.relpath(PERSONAS_PATH, _ROOT).replace("\\", "/"),
+        # 规则表内容哈希：和 scene_sha 同一个道理。换了规则表却拿旧分数当基线，
+        # 性格维度的闸门就全废了。
+        "rules_sha": _rules_sha(),
+        "by_temper": by_temper,
     }
 
     if _OPTS["json"]:

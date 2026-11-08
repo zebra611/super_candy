@@ -24,7 +24,7 @@
 import re
 
 import config_loader
-from modules import intent, kb, nlg, official_script, tools
+from modules import intent, kb, nlg, official_script, persona, tools
 
 # ---------------------------------------------------------------------------
 # 意图关键词表
@@ -649,6 +649,19 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
         # 挂断/拒绝/出错话术不走改写，但占位符仍要填（C5 统一兜底）。
         text = _fill_application(text, session["slots"].get("application"))
 
+    # 性格适配放在措辞层**之后**：它只调形式（客套前缀/引导句），
+    # 官方原话、核身问句、挂断话术一个字都不动——那三类要么必须逐字复述，
+    # 要么指代必须固定，改写与细化都会把依据改没。
+    # 核身问句不整体冻结：它要冻结的是**措辞层改写**（nlg，见上），
+    # 而性格层只删句首"好的，"这类客套、不动指代与事实。
+    # 官方原话 / 挂断 / 出错话术则全冻结，连形式都不动。
+    _persona_freeze = (bool(end_reason) or intent in ("error", "empty")
+                       or _freeze_official)
+    text, _persona_applied = persona.adapt(
+        session, text, stage_now, freeze=_persona_freeze)
+    # 记的是**实际播出去**的那句（含适配后的引导语），下一轮判重复才准。
+    session["last_reply_text"] = text
+
     if next_stage:
         session["stage"] = next_stage
     # 置信度默认取"这一轮用户话的识别置信度"（respond 里算好放进 session）。
@@ -663,6 +676,10 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
         "tool_call": tool_call,
         "intent": intent,
         "intent_conf": round(float(intent_conf or 0.0), 2),
+        # 本通客户被听成什么性格、这一句有没有真的按性格调过形式。
+        # applied=False 是常态（规则表初始为空/中性客户/守卫拦下），
+        # 记下来才能回答"为什么这句没做针对性处理"。
+        "persona": dict(persona.summary(session), applied_this_turn=_persona_applied),
     }
     if end_reason:
         out["end_reason"] = end_reason
@@ -1151,6 +1168,11 @@ _NAME_PATTERNS = (
     re.compile(r"我姓([\u4e00-\u9fa5])"),
     re.compile(r"我叫([\u4e00-\u9fa5]{2,4})"),
     re.compile(r"我是([\u4e00-\u9fa5]{2,3})"),
+    # 「就是晏青梧」是真人报姓名最常见的说法之一（前面常带"唉"等语气词）。
+    # 11-08 性格跑批里 T06 连报两次都没被收进槽位，客服于是把同一句
+    # 「您说个联系人姓名」念了三遍，耐心耗尽挂断——不是话术不好，是没听见。
+    # 限定 2~4 字纯中文，且沿用 _NAME_BLOCK：像「就是不清楚」会被挡掉。
+    re.compile(r"就是([\u4e00-\u9fa5]{2,4})"),
     re.compile(r"([\u4e00-\u9fa5]{1,3})(?:先生|女士)"),
 )
 
@@ -2129,6 +2151,16 @@ def _stage_need(session, text, flags):
         if app:
             _off = _official_line(session)
             if _off:
+                # 官方原话说一次就够。第二遍再逐字复读，客户只会听到卡带：
+                # 11-08 性格跑批 T10 在 NEED 连听三遍同一句，第 9 轮直接挂断。
+                # 这时没有新的具体问题可答，正确动作是**推进到确认**，
+                # 而不是用"换个语气再念一遍"制造进展的假象。
+                if session.get("official_line_spoken"):
+                    _cc = config_loader.stage_config("CONFIRM")
+                    _after = _cc.get("reply_after_ask") or "您看这样解释清楚了吗？"
+                    return _reply(session, _soothe(_after, flags),
+                                  next_stage="CONFIRM", intent="confirm_after_ask")
+                session["official_line_spoken"] = True
                 return _reply(session, _soothe(_off, flags), intent="official_script")
             return _reply(session,
                           _fill_application(_soothe(cfg.get("reply_application_detail",
@@ -2573,6 +2605,9 @@ def respond(session, user_text):
     text = (user_text or "").strip()
     session["turn"] += 1
     session["slots"]["last_user_text"] = text
+    # 性格证据：只看这一句用户话的字面（不读 stage / intent / 画像标签）。
+    # 放在所有分支之前，空输入与直接收尾的路径也能正确累积证据。
+    persona.observe(session, text)
 
     if not text:
         session["empty_count"] += 1

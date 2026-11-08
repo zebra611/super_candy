@@ -2628,6 +2628,47 @@ def main():
           ["仍有占位=%s 补齐=%d 条 实际播报=%s"
            % (_with_xx or "无", len(_filled), (_dph.get("qa") or {}).get("id"))])
 
+    # ---- 性格识别与针对性回复（11-08）：识别不可进化、事实不可改 ----
+    from modules import persona as _pm
+    check("性格识别：强信号一次定性、弱信号两次，报尾号不误判成话少",
+          _pm._classify("你哪来的我号码") == "skeptical"
+          and _pm._classify("你快点说") == "impatient"
+          and _pm._classify("4316") is None
+          and _pm._classify("嗯，明白了") == "quiet"
+          and (lambda x: (_pm.observe(x, "嗯"), x["persona_code"])[1] == "neutral")({})
+          and (lambda x: (_pm.observe(x, "你再说一遍"), x["persona_code"])[1]
+               == "hard_of_hearing")({}),
+          ["8 类词表 + 弱信号阈值"])
+
+    _ps = {"slots": {"application": {"company_name": "北京市柏庐商贸有限公司"}}}
+    _ps.update({"persona_code": "impatient", "persona_conf": 1.0})
+    _base = "北京市柏庐商贸有限公司的申请单编号 20261101001 请核对。"
+    _pn, _pa = _pm.adapt(_ps, _base, "NEED")
+    check("针对性回复只改形式：公司名/单号/禁语/占位一律不被改掉",
+          "北京市柏庐商贸有限公司" in _pn and "20261101001" in _pn
+          and not any(m in _pn for m in ("【", "】", "XX"))
+          and not any(w in _pn for w in config_loader.forbidden_words()),
+          ["原句=%s 适配后=%s" % (_base[:20], _pn[:34])])
+    _pf, _pfa = _pm.adapt(dict(_ps, last_reply_text=""),
+                          "好的，官方口径如下。", "NEED", freeze=True)
+    check("官方原话冻结：不删客套、不追加引导，逐字保留",
+          not _pfa and _pf == "好的，官方口径如下。",
+          ["freeze=True 时仅重复引导可用"])
+
+    _pt = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                       "test_persona.py")],
+                         cwd=ROOT, capture_output=True, text=True, timeout=240)
+    _pd1 = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                        "evolve.py"), "doctor", "--deep"],
+                          cwd=ROOT, capture_output=True, text=True, timeout=240)
+    _pd2 = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                        "evolve_persona.py"), "doctor"],
+                          cwd=ROOT, capture_output=True, text=True, timeout=180)
+    check("性格单测（含真跑识别一致率）+ 两条进化链体检全部通过",
+          _pt.returncode == 0 and _pd1.returncode == 0 and _pd2.returncode == 0,
+          ["test_persona=%d doctor(L2)=%d doctor(性格)=%d"
+           % (_pt.returncode, _pd1.returncode, _pd2.returncode)])
+
     # ---- 官方话术填槽（11-08）：模板不许把【】/XX 播出去 ----
     _osq = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
                                                        "check_official_scripts.py"),

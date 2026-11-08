@@ -37,6 +37,48 @@ GitHub 的 Contributors 只显示账号名，看不出是谁，所以这里给�
 
 > 最新在最上面。每条改动都附当时的回归结果，断言数即验收标准。
 
+**2026-11-08 · 性格自进化：扮演不同性格的客户，并针对性细化回答**：
+先回答「现在还能不能自进化」——**闭环代码还在，但直接进化会失真**：
+L2 版本库建好后场景配置又被改过，`doctor` 实测三个哈希两两不等（线上 `fab2…`、
+v2 快照 `e852…`、基线 `969f…`）。新增 `evolve.py doctor/rebase` 并给 gate 加前置拦截，
+重定 `v3`；又发现**内容哈希抓不到「场景没变、代码变了」**——修完两处流程缺陷后
+跑批从 8/10 变 9/10，三个哈希照样全绿。于是 `doctor --deep` 直接重跑 active 场景比对分数，
+当场抓到 8→9，重定 `v4`。
+
+性格成为一等公民：
+
+- **可扮演**：`eval/personas_temperament.json` 新增 8 类显式性格 × 12 个画像
+  （急性子 / 多疑 / 话少 / 絮叨 / 听不清 / 记不住 / 配合 / 中立），模拟器按性格插口头禅；
+  **原 10 类基线画像一个字段都没动**，往里加人只会让 8/10 的基线失真。
+- **可识别**：`modules/persona.py` 纯规则从用户字面推断（不读 stage / intent / 画像标签），
+  强信号（"凭什么""快点""再说一遍"）一次定性、弱信号（"嗯""好"）攒两次；
+  报尾号含数字不误判成话少。**识别词表写死在代码里、不进可进化规则表**——
+  否则优化器把所有客户判成最容易得分的性格就能刷分。
+- **可细化**：`config/persona_adapt.json` 按性格做形式层动作（去客套 / 追加引导 /
+  重复轮换说法）。事实守卫护住数字串、公司名、单号、品牌、禁语与占位符；
+  官方原话 / 挂断话术逐字冻结，核身问句只去客套不动指代。
+  实测 12 个画像里 **59 轮回复真的按性格调过**，中性客户原样不动。
+
+- **可进化**：`scripts/evolve_persona.py` 管 `init/doctor/rebase/propose/gate/promote/rollback`，
+  六道闸门 = L2 五道 + **按性格分组无回退**（平均值涨但多疑型塌了不许上线）。
+  对照实验给子进程注入**候选规则表**，不是把功能关掉测假基线；
+  候选 c001 实测「总通过 10→10、无收益」被闸门如实拒绝，版本只留档不许上线。
+
+真正带来提升的是两处**代码层**修复（按设计不交给优化器）：
+`_extract_name` 接住「就是晏青梧」（真人报姓名的高频说法，原样会连问三遍），
+NEED 阶段官方话术只播一次、第二次推进到确认（原样会连念三遍把客户念走）。
+修完 **L2 原集 8/10 → 9/10、性格集 10/12 → 12/12**。
+顺带诚实处理了一个测试有效性问题：课程自测的旧变异注入点在 24 条上已「不通电」
+（仍是 24/24），改注「核身校验失效」后 0/24，旧注入留作对照、不放宽判据。
+
+回归：`verify.py` **209/209**（+4 条性格证据）、`run_eval.py` **88/88**、
+`sim_eval` **9/10**、性格集 **12/12**、`test_persona` **23/23**、
+`test_qa_dialogue` 15/15、`test_official_script` 14/14、`test_kb` 28/28、
+`test_tools` 34/34、`test_nlg` 25/25、`test_intent` 14/14；
+三个数据校验器全过，两条进化链 `doctor`（L2 用 `--deep`）均通过。
+文档：`docs/32` §九。
+
+
 **2026-11-08 · 官方 `【】` 话术填槽：随机预览看得见场景、电话里听得见原话**：
 上一轮留下的边界是「`kb_pop.json` 的 96 条驳回话术都带 `【】` 槽位，填不满的整条不播」——
 结果商家问「为什么驳回」时，客服只能说「我这边查不到」。这轮把槽位真正填上，
@@ -675,17 +717,20 @@ web/dashboard.html  指标看板：KPI、时延双口径、事件分布、质检
 mock_business/      独立 Mock 业务服务：查客户 / 查订单 / 建工单（幂等）
 config/mock/        完整 mock 数据包：188 条档案（原集 120 + 官方场景 68）、68 条场景目录、
                     52 条驳回话术、27 条 QA、12 客户、16 订单（全部可复算，见 docs/34）
-scripts/            verify（205 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
+scripts/            verify（209 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
                     sim_eval（模拟用户跑批）/ evolve（init·propose·gate·promote·rollback）
                     bench_speaker_gate（声纹阈值标定）/ gen_speaker_corpus（多音色语料）
                     build_mock_bundle（官方 xlsx → 场景目录/话术/QA）
                     gen_mock_applications + gen_mock_catalog_applications（原集 / 官方场景档案）
+                    sim_eval（支持 --personas 注入性格集）/ evolve（doctor --deep / rebase）
                     check_mock_applications + check_mock_bundle（两套数据校验，均带反向自测）
                     task2_metrics（四项指标出数）/ check_realtime_asr（流式识别连通验证）
                     test_*（离线自测，八套已作为证据 16/30 挂进 verify；
                      test_qa_dialogue 专测官方 QA 接进对话后的边界，15 条；
-                     test_official_script 专测官方话术填槽，14 条）
+                     test_official_script 专测官方话术填槽，14 条；
+                     test_persona 专测性格识别/守卫/闸门，23 条）
                     check_official_scripts（话术填槽校验 + 3 种变异反向自测）
+                    evolve_persona（性格规则表闭环：6 道闸门 + 按性格分组无回退）
                     clean_events · archive_events（库体检/归档）/ check_key / 试听 / 录音验识别
 CODEOWNERS          谁的文件谁审（GitHub 账号对照）
 .githooks/          pre-push：禁止直接推 main（要 git config core.hooksPath .githooks）
@@ -699,7 +744,7 @@ reviews/            PR 审核记录
 ## 七、怎么验证我改的东西没坏
 
 ```bash
-python scripts/verify.py       # 205 条行为断言，用临时库，不污染 data/
+python scripts/verify.py       # 209 条行为断言，用临时库，不污染 data/
 python scripts/run_eval.py     # 30 条用例跑批（离线，不调云端）
 python scripts/sim_eval.py     # 10 类模拟用户跑完整通话 + 逐轮归因（不调云端）
 python scripts/evolve.py status            # 现在线上是哪一版话术、分数多少、能不能回滚
@@ -753,7 +798,7 @@ git config core.hooksPath .githooks
 场景路径与日志落盘（#16）、落库开关文档化（#19）、团队对照与密钥提示（#20）、
 评测与质检工具链（#17）、语音线 Z6/Z7/V1（#35–#37）、端到端跑通脚本（#38）、
 默认场景改赛题 POP（#39）、**四段式开场**（#40）、**档案补全 + 随机纯预览 + 纯文字模式 +
-macOS 启动**（#41）、**完整 mock 数据包**（官方 68 场景）、**官方 QA 接进对话**、**官方话术槽位填进随机预览与对话**，自检 **205/205**。**当前没有开着的 PR**。
+macOS 启动**（#41）、**完整 mock 数据包**（官方 68 场景）、**官方 QA 接进对话**、**官方话术槽位填进随机预览与对话**、**性格自进化**，自检 **209/209**。**当前没有开着的 PR**。
 
 2026-11-08 的 L2 自进化、说话人门、mock 数据包、官方 QA 接进对话这批改动，
 按队长要求**直接进 main**（未开 PR），

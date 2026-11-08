@@ -1,0 +1,500 @@
+{
+ "active": "p4",
+ "baseline_json": "eval/reports/sim_persona_base_p4.json",
+ "scene_sha": "fab29eaa363394f7",
+ "personas_path": "eval/personas_temperament.json",
+ "history": [
+  {
+   "version": "p1",
+   "parent": null,
+   "created": "2026-11-08 18:30:32",
+   "status": "superseded",
+   "source": "恒等规则表基线",
+   "metrics": {
+    "all_ok": 10,
+    "all_total": 12,
+    "train_ok": 7,
+    "train_total": 8,
+    "holdout_ok": 3,
+    "holdout_total": 4,
+    "agent_defect_sessions": 3,
+    "case_defect_sessions": 0,
+    "codes": {
+     "agent_premature_writeback": 1,
+     "agent_slot_loss": 3,
+     "agent_noise_on_question": 1,
+     "agent_no_progress": 1,
+     "agent_loop": 1
+    },
+    "defect_total": 7
+   },
+   "by_temper": {
+    "impatient": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T01",
+      "T09"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "skeptical": {
+     "total": 2,
+     "ok": 1,
+     "ids": [
+      "T02",
+      "T10"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "quiet": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T03",
+      "T12"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "talkative": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T04"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "hard_of_hearing": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T05"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "forgetful": {
+     "total": 2,
+     "ok": 1,
+     "ids": [
+      "T06",
+      "T11"
+     ],
+     "train_ok": 0,
+     "holdout_ok": 1
+    },
+    "cooperative": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T07"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "neutral": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T08"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    }
+   },
+   "rules_sha": "43abbe3f5e02d3c3"
+  },
+  {
+   "version": "p2",
+   "parent": "p1",
+   "created": "2026-11-08 18:30:41",
+   "status": "rejected",
+   "source": "config/evolution/persona/candidates/c001.json",
+   "candidate": {
+    "forgetful": {
+     "IDENTITY": {
+      "avoid_repeat": [
+       "您慢慢想，我这边等着。",
+       "说联系人姓名或者单号后六位也行。"
+      ]
+     },
+     "NEED": {
+      "avoid_repeat": [
+       "您慢慢想，我这边等着。",
+       "说联系人姓名或者单号后六位也行。"
+      ]
+     }
+    },
+    "skeptical": {
+     "IDENTITY": {
+      "avoid_repeat": [
+       "您也可以对照申请单编号核实一下。",
+       "刚才这段是官方口径，您可以再核一遍。"
+      ]
+     },
+     "NEED": {
+      "avoid_repeat": [
+       "您也可以对照申请单编号核实一下。",
+       "刚才这段是官方口径，您可以再核一遍。"
+      ]
+     }
+    }
+   },
+   "metrics": {
+    "all_ok": 10,
+    "all_total": 12,
+    "train_ok": 7,
+    "train_total": 8,
+    "holdout_ok": 3,
+    "holdout_total": 4,
+    "agent_defect_sessions": 3,
+    "case_defect_sessions": 0,
+    "codes": {
+     "agent_premature_writeback": 1,
+     "agent_slot_loss": 3,
+     "agent_noise_on_question": 1,
+     "agent_no_progress": 1,
+     "agent_loop": 1
+    },
+    "defect_total": 7
+   },
+   "by_temper": {
+    "impatient": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T01",
+      "T09"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "skeptical": {
+     "total": 2,
+     "ok": 1,
+     "ids": [
+      "T02",
+      "T10"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "quiet": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T03",
+      "T12"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "talkative": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T04"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "hard_of_hearing": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T05"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "forgetful": {
+     "total": 2,
+     "ok": 1,
+     "ids": [
+      "T06",
+      "T11"
+     ],
+     "train_ok": 0,
+     "holdout_ok": 1
+    },
+    "cooperative": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T07"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "neutral": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T08"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    }
+   },
+   "baseline_metrics": {
+    "all_ok": 10,
+    "all_total": 12,
+    "train_ok": 7,
+    "train_total": 8,
+    "holdout_ok": 3,
+    "holdout_total": 4,
+    "agent_defect_sessions": 3,
+    "case_defect_sessions": 0,
+    "codes": {
+     "agent_premature_writeback": 1,
+     "agent_slot_loss": 3,
+     "agent_noise_on_question": 1,
+     "agent_no_progress": 1,
+     "agent_loop": 1
+    },
+    "defect_total": 7
+   },
+   "rules_sha": "5acb365f2b3e3dda",
+   "gate": [
+    {
+     "check": "train 不降",
+     "pass": true,
+     "detail": "7 → 7"
+    },
+    {
+     "check": "holdout 不降",
+     "pass": true,
+     "detail": "3 → 3"
+    },
+    {
+     "check": "有实际收益",
+     "pass": false,
+     "detail": "总通过 10→10，系统缺陷会话 3→3"
+    },
+    {
+     "check": "无个体回退",
+     "pass": true,
+     "detail": "无"
+    },
+    {
+     "check": "缺陷总数不增",
+     "pass": true,
+     "detail": "7 → 7"
+    },
+    {
+     "check": "按性格分组无回退",
+     "pass": true,
+     "detail": "cooperative 1→1  forgetful 1→1  hard_of_hearing 1→1  impatient 2→2  neutral 1→1  quiet 2→2  skeptical 1→1  talkative 1→1"
+    }
+   ]
+  },
+  {
+   "version": "p3",
+   "parent": "p1",
+   "created": "2026-11-08 18:37:16",
+   "status": "superseded",
+   "source": "rebase：线上规则表/对话代码变更，重定基线",
+   "candidate": null,
+   "metrics": {
+    "all_ok": 12,
+    "all_total": 12,
+    "train_ok": 8,
+    "train_total": 8,
+    "holdout_ok": 4,
+    "holdout_total": 4,
+    "agent_defect_sessions": 2,
+    "case_defect_sessions": 0,
+    "codes": {
+     "agent_premature_writeback": 1,
+     "agent_slot_loss": 1
+    },
+    "defect_total": 2
+   },
+   "by_temper": {
+    "impatient": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T01",
+      "T09"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "skeptical": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T02",
+      "T10"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "quiet": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T03",
+      "T12"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "talkative": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T04"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "hard_of_hearing": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T05"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "forgetful": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T06",
+      "T11"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "cooperative": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T07"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "neutral": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T08"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    }
+   },
+   "rules_sha": "e918c70a81107986"
+  },
+  {
+   "version": "p4",
+   "parent": "p3",
+   "created": "2026-11-08 18:40:30",
+   "status": "active",
+   "source": "rebase：线上规则表/对话代码变更，重定基线",
+   "candidate": null,
+   "metrics": {
+    "all_ok": 12,
+    "all_total": 12,
+    "train_ok": 8,
+    "train_total": 8,
+    "holdout_ok": 4,
+    "holdout_total": 4,
+    "agent_defect_sessions": 4,
+    "case_defect_sessions": 0,
+    "codes": {
+     "agent_premature_writeback": 1,
+     "agent_slot_loss": 3
+    },
+    "defect_total": 4
+   },
+   "by_temper": {
+    "impatient": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T01",
+      "T09"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "skeptical": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T02",
+      "T10"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "quiet": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T03",
+      "T12"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "talkative": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T04"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "hard_of_hearing": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T05"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "forgetful": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T06",
+      "T11"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "cooperative": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T07"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "neutral": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T08"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    }
+   },
+   "rules_sha": "38f9c33ef94a83d7"
+  }
+ ]
+}
