@@ -46,6 +46,13 @@ TOOL_METHODS = {
     "create_ticket": "create_ticket",
 }
 
+#: 只读方法：出错/超时时也要返回 `found=False`，让编排层走"查不到"分支，
+#: 而不是把一次超时变成整通电话崩掉（赛题要求"失败不抛异常"）。
+READ_METHODS = {
+    "query_customer", "query_order", "query_application",
+    "reject_catalog", "reject_script", "lookup_qa",
+}
+
 _POOL = _futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="tool")
 
 
@@ -108,6 +115,20 @@ class BaseAdapter:
         """这通电话最新一版工单（没有则 None）。只读，自检用。"""
         return None
 
+    # ---- 只读的"资料类"接口：默认返回空结果，不抛异常 --------------------
+    # 这三个接口给的是**官方资料包**里的静态内容（驳回场景目录、驳回话术、高频 QA）。
+    # 默认实现放在基类：真实 provider 没接这几张表时，调用方拿到的是
+    # {"found": False} 而不是 AttributeError——线上一通电话不该因为
+    # "这版适配器还没实现某个查询"直接崩掉。
+    def reject_catalog(self):
+        return {"found": False, "items": [], "count": 0}
+
+    def reject_script(self, code):
+        return {"found": False, "scene": None}
+
+    def lookup_qa(self, question):
+        return {"found": False, "answer": "", "match": ""}
+
     # ---- 统一外壳 ---------------------------------------------------------
     def call(self, method, *args, **kwargs):
         """带超时与错误码的调用。返回 dict 必带 `_ms`。"""
@@ -116,10 +137,10 @@ class BaseAdapter:
         try:
             out = run_bounded(fn, self.timeout_ms, *args, **kwargs)
         except ToolError as exc:
-            return self._fail(exc.code, str(exc), t0, read_op=method.startswith("query"))
+            return self._fail(exc.code, str(exc), t0, read_op=method in READ_METHODS)
         except Exception as exc:  # 适配器自己没兜住的，算对端问题
             return self._fail(ERROR_UPSTREAM, str(exc)[:160], t0,
-                              read_op=method.startswith("query"))
+                              read_op=method in READ_METHODS)
         if isinstance(out, dict):
             out.setdefault("_ms", _ms(t0))
             return out

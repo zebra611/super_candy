@@ -1610,7 +1610,8 @@ def main():
     _ck = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
                                                        "check_mock_applications.py")],
                          cwd=ROOT, capture_output=True, text=True, timeout=180)
-    check("120 份虚构档案七项校验通过（挂进总闸门）", _ck.returncode == 0,
+    check("%d 份原集虚构档案七项校验通过（挂进总闸门）" % len(_apps21),
+          _ck.returncode == 0,
           ["退出码 %d；末行：%s" % (_ck.returncode,
                                     ((_ck.stdout or "").strip().splitlines() or ["无输出"])[-1][:80])])
 
@@ -2508,6 +2509,85 @@ def main():
 
     config_loader.set_scene(_spk_scene_prev)
 
+    # ---- 证据 32：mock 数据包（官方 68 场景全覆盖 / 跨文件引用自洽）----
+    # 起因：mock 原来只有 2 个客户 + 120 条自造驳回原因，与官方资料包的
+    # 68 个关单场景对不上——演示时"说商标状态不符合要求"，系统回的是另一套说法。
+    # 现在把官方表机械转成目录/话术/QA，并按目录补 68 条档案，运行时合并成 188 条。
+    print()
+    print("=" * 74)
+    print("证据 32：mock 数据包——官方 68 场景全覆盖，合并池 188 条，跨文件引用自洽")
+    print("=" * 74)
+
+    _mb = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                       "check_mock_bundle.py")],
+                         cwd=ROOT, capture_output=True, text=True, timeout=180)
+    check("mock 数据包七类校验通过（文件/目录/话术QA/覆盖回溯/唯一/引用/可复算）",
+          _mb.returncode == 0,
+          ["退出码 %d；末行：%s" % (_mb.returncode,
+                                    ((_mb.stdout or "").strip().splitlines() or ["无输出"])[-1][:80])])
+
+    _cat = tools.reject_catalog()
+    _modes = {}
+    for _it in (_cat.get("items") or []):
+        _modes[_it.get("close_mode")] = _modes.get(_it.get("close_mode"), 0) + 1
+    check("官方关单场景 68 条，电话 54 / 京麦 14（与官方表一致）",
+          _cat.get("count") == 68 and _modes == {"电话": 54, "京麦": 14},
+          ["count=%s modes=%s" % (_cat.get("count"), _modes)])
+
+    from modules.adapters.mock import _load_applications as _load_pool
+    _pool = _load_pool()
+    _legacy_ids = {r["application_id"] for r in
+                   json.load(open(os.path.join(ROOT, "config", "mock",
+                                               "applications.json"),
+                                  encoding="utf-8")).get("items") or []}
+    _catalog_ids = {r.get("catalog_id") for r in _pool if r.get("catalog_id")}
+    check("合并池 = 原集 120 + 官方场景 68 = 188，且原集顺序在前（名单取第一条不变）",
+          len(_pool) == 188 and _pool[0]["application_id"] in _legacy_ids
+          and len(_catalog_ids) == 68,
+          ["池=%d 首条=%s 覆盖场景=%d"
+           % (len(_pool), _pool[0]["application_id"], len(_catalog_ids))])
+
+    _dup = {f: len([r[f] for r in _pool]) - len({r[f] for r in _pool})
+            for f in ("application_id", "phone_tail", "company_name", "contact_phone")}
+    check("合并池四组关键字段全局唯一（单号/尾号/公司名/电话）",
+          not any(_dup.values()), ["重复计数=%s" % _dup])
+
+    _ord = tools.query_order("C1001")
+    _cus = tools.query_customer("8866")
+    check("客户/订单来自完整 mock（12 客户·16 订单），订单取最近一笔",
+          _cus.get("found") and _cus["customer"]["customer_id"] == "C1001"
+          and (_ord.get("order") or {}).get("order_id") == "O20261101001",
+          ["客户=%s 订单=%s"
+           % (_cus.get("customer", {}).get("customer_id") if _cus.get("found") else None,
+              (_ord.get("order") or {}).get("order_id"))])
+
+    _sc = tools.reject_script("KB-POP-001")
+    _qa_hit = tools.lookup_qa("我在哪可以查询到这个商标状态")
+    _qa_miss = tools.lookup_qa("今天天气不错")
+    check("驳回话术按场景 id 可取；QA 命中给官方原话，不相关就返回未找到（不编）",
+          _sc.get("found") and _sc["scene"]["id"] == "KB-POP-001"
+          and _qa_hit.get("found") and _qa_hit.get("source") == "特殊场景"
+          and not _qa_miss.get("found") and not _qa_miss.get("answer"),
+          ["script=%s QA命中=%s 未命中=%s"
+           % (_sc.get("found"), _qa_hit.get("qid"), _qa_miss.get("found"))])
+
+    from modules.adapters.real import RealAdapter as _RealAd
+    _base_default = _RealAd({})
+    check("真实适配器没接这几张表时返回默认空结果，不抛异常（不会拖垮一通电话）",
+          _base_default.reject_catalog() == {"found": False, "items": [], "count": 0}
+          and _base_default.reject_script("x")["found"] is False
+          and _base_default.lookup_qa("x")["found"] is False,
+          ["默认返回可用"])
+
+    import io as _io
+    import contextlib as _ctx
+    from scripts import check_mock_bundle as _mbmod
+    _buf = _io.StringIO()
+    with _ctx.redirect_stdout(_buf):
+        _self_ok = _mbmod.self_test()
+    check("数据包校验器的反向自测：6 种改坏都能被抓到（校验器不假绿）",
+          _self_ok, ["变异用例全部报红" if _self_ok else "有变异没被抓到"])
+
     print()
     print("=" * 74)
     total = len(results)
@@ -2531,7 +2611,9 @@ def main():
     print("            LLM 改写接缝、S2 WebSocket 双向通道、")
     print("            任务2 七项（知识库检索/兜底细分/置信度分级/槽位追问/改口/记忆/T17 指标）、")
     print("            L2 自进化（模拟用户受知/受听/受耐心、失败归因三分类、")
-    print("                     话术候选双跑闸门、版本快照与指针回滚）。")
+    print("                     话术候选双跑闸门、版本快照与指针回滚）、")
+    print("            mock 数据包（官方 68 关单场景目录/52 条话术/27 条 QA、")
+    print("                     188 条档案、12 客户/16 订单，跨文件一致性可复算）。")
     print("  仍然是占位的：语义级合规（S3 能力已接、默认关闭）、")
     print("            说话人分离（**影子模式已接**：WeSpeaker 嵌入判“是不是刚才那位”，")
     print("            只在事件里记录、不拦截；没接 enforce，因为还没有真人双人语料，见 docs/33）、")

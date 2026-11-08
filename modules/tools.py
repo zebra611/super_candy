@@ -254,6 +254,25 @@ def get_application(app_id):
     return _adapter().call("get_application", app_id)
 
 
+def reject_catalog():
+    """官方 68 个关单场景目录。返回 dict(found, items, count)。
+
+    只读资料，不参与状态机推进——给自检、看板、"这单属于哪个官方场景"的反查用。
+    provider 没接这张表时返回 found=False 与空列表（不会抛异常）。
+    """
+    return _adapter().call("reject_catalog")
+
+
+def reject_script(code):
+    """按场景 id（KB-POP-xxx）或二级分类关键词取官方驳回话术。"""
+    return _adapter().call("reject_script", code)
+
+
+def lookup_qa(question):
+    """从官方高频 QA / 特殊场景里取一条答案（找不到返回 found=False，不编）。"""
+    return _adapter().call("lookup_qa", question)
+
+
 def create_ticket(session_id, content, idempotency_key, version=1):
     """登记工单 —— 结构化结果回写。幂等语义见 adapters/mock.py。"""
     content, notes = prepare_writeback(content)

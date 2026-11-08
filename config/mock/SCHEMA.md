@@ -32,8 +32,8 @@
 
 | 文件 | 格式 | 说明 |
 |---|---|---|
-| `config/mock/applications.json` | **JSON（主数据）** | `{"_meta": {...}, "items": [...]}`；UTF-8 / LF / 2 空格缩进；120 条 × 51 字段 |
-| `config/mock/applications.csv` | **CSV（表格）** | 同样 120 行 × 51 列；UTF-8 **带 BOM**（Excel 双击不乱码）；列表字段用 `\|` 分隔；布尔写 `true/false`，`unknown` 保留字符串 |
+| `config/mock/applications.json` | **JSON（主数据）** | `{"_meta": {...}, "items": [...]}`；UTF-8 / LF / 2 空格缩进；120 条 × 62 字段 |
+| `config/mock/applications.csv` | **CSV（表格）** | 同样 120 行 × 62 列；UTF-8 **带 BOM**（Excel 双击不乱码）；列表字段用 `\|` 分隔；布尔写 `true/false`，`unknown` 保留字符串 |
 | `scripts/gen_mock_applications.py` | 生成脚本 | 固定 seed `20261106`，任何机器重跑逐字节一致 |
 | `scripts/check_mock_applications.py` | 校验脚本 | 数量/唯一性/完整性/覆盖/虚构性/独立性/可复算；`--self-test` 做 6 种变异反向测试 |
 
@@ -96,7 +96,7 @@ python scripts/check_mock_applications.py --self-test
 - `hotline` 使用赛题官方公开热线 `4006180092`，属公开号码而非个人信息；
 - 每条档案带 `fictional_marker`，下游若误把本数据当真实业务数据可直接拦下。
 
-## 七、接入 C5 的建议（本次未改代码）
+## 七、接入 C5 的方式（2026-11-07 已接线）
 
 本包只是**数据**，不改 `modules/adapters/mock.py`。C5 接线时：
 
@@ -108,3 +108,61 @@ query_application(keyword) → 按 verify_by_name / verify_by_tail /
 `reject_category` 直接喂 `pop_reject.json` 的 `reject_rules` 与回写 `writeback_template`；
 `close_mode=京麦` 或 `call_status=无需外呼` 的档案应跳过电话外呼（与 kb `no_call` 过滤同口径）。
 `call_result` / `merchant_understood` 已与 `writeback_template.required` 枚举对齐，可直接做回写断言。
+
+---
+
+## 八、2026-11-08 扩充：完整 mock 数据包
+
+原来这里只有「120 条档案 + 2 个假客户」，与官方资料包对不上：官方有 **68 个关单场景**、
+**52 条驳回话术**、**高频 QA**，而档案里的驳回原因只有 8 条自造说法。现在把官方表
+机械转成结构化数据，并按目录补一套档案，形成完整 mock 包（**原文件一个都没删**）。
+
+### 8.1 文件清单
+
+| 文件 | 条数 | 来源 / 生成方式 | 谁在用 |
+|---|---:|---|---|
+| `applications.json` / `.csv` | 120 | `scripts/gen_mock_applications.py`（结构未变；11-08 修掉 14 条「电话却标无需外呼」的自相矛盾） | 评测基线、`verify` 证据 21、C4 340 条 |
+| `applications_catalog.json` / `.csv` | 68 | `scripts/gen_mock_catalog_applications.py`（一场景一条） | 运行时合并池、证据 32 |
+| `catalog.json` | 68 | `scripts/build_mock_bundle.py` 解析官方 xlsx | `tools.reject_catalog()` / `reject_script()` |
+| `rebuttals.json` | 52 | 同上（驳回话术 sheet） | 话术对照与答辩引用 |
+| `qa.json` | 27 | 同上（高频 QA 11 + 特殊场景 16，已去重） | `tools.lookup_qa()` |
+| `customers.json` | 12 | 手写，C1001/C1002 与 `mock_business` 同值 | `query_customer` |
+| `orders.json` | 16 | 手写，`query_order` 取该客户最近一笔 | `query_order` |
+
+> 运行时申请单池 = `applications.json` **在前** + `applications_catalog.json` **在后** = 188 条。
+> 顺序固定是为了让 `next_outbound_target()`（取第一条待外呼）行为与只有原集时完全一致。
+
+### 8.2 新增字段（只在 `applications_catalog.json` 里）
+
+| 字段 | 含义 |
+|---|---|
+| `catalog_id` | 对应 `catalog.json` 的场景 id（`KB-POP-001`…`KB-POP-068`），与 `reject_code` 必须相等 |
+| `catalog_scene_key` | `一级菜单/一级分类/二级分类`，便于人读与反查 |
+| `official_script` | 官方该场景的参考话术原文（逐字，不改写） |
+| `official_close_mode` | 官方指定的关单方式（`电话` / `京麦`） |
+| `reject_source` | 固定 `官方场景目录`，标明这条不是自造原因 |
+
+原集 120 条没有这几个字段——合并池里读到的是 `None`，下游一律用 `.get()` 取，
+不要写 `r["catalog_id"]`。
+
+### 8.3 一致性约束（`check_mock_bundle.py` 会逐条查）
+
+- 68 个场景 **每个都有档案**，且 `reject_code == catalog_id`；
+- 档案的 `close_mode` 必须等于官方场景的关单方式；`京麦` → `call_status=无需外呼`，
+  `电话` → 不得标 `无需外呼`（原集有 14 条这种自相矛盾，已在生成器里修掉）；
+- `reject_category` 必须等于目录的 `domain`（业务域映射：菜单 + 关键词 → 七域枚举）；
+- 合并池的 14 组关键字段全局唯一（单号/尾号/公司名/电话/信用代码/身份证…）；
+- 订单的 `customer_id` 必须在客户表里，且每个客户至少一单；C1001 最近一笔必须是
+  `O20261101001`（`test_tools` 依赖这个值）。
+
+### 8.4 复算
+
+```bash
+python scripts/build_mock_bundle.py        # 目录/话术/QA（源：competition/官方资料包/*.xlsx）
+python scripts/gen_mock_applications.py    # 原集 120 条
+python scripts/gen_mock_catalog_applications.py   # 官方场景 68 条
+python scripts/check_mock_bundle.py --self-test   # 七类校验 + 6 种变异反向测试
+```
+
+三个生成脚本都是**固定种子**，重跑逐字节一致；`check_mock_bundle.py` 里的
+「可复算」一项就是重新生成一遍再比对 sha。

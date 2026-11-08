@@ -360,6 +360,13 @@ def build_records():
         call_status = CALL_STATUSES[idx % len(CALL_STATUSES)]
         if cat == "京麦驳回" or "jingmai_no_call" in edges:
             call_status = "无需外呼"
+        # 自相矛盾的一处，2026-11-08 修：CALL_STATUSES 轮转会把「无需外呼」发给
+        # close_mode=电话 的档案（例如 idx=6、13…），于是数据出现"关单方式是电话、
+        # 通话状态却是不用打"——外呼名单按 call_status 取，这种记录永远轮不到，
+        # 但看板上会显示成"电话单却不用打"，归因时会被当成系统漏呼。
+        if (cat != "京麦驳回" and "jingmai_no_call" not in edges
+                and call_status == "无需外呼"):
+            call_status = "待外呼"
         if "merchant_refused" in edges:
             call_status = "拒绝"
         if "no_answer" in edges:

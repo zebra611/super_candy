@@ -37,6 +37,36 @@ GitHub 的 Contributors 只显示账号名，看不出是谁，所以这里给�
 
 > 最新在最上面。每条改动都附当时的回归结果，断言数即验收标准。
 
+**2026-11-08 · mock 数据包补全（官方 68 场景全覆盖，原文件零删除）**：
+原来 mock 的驳回原因只有 **8 条自造说法**，与官方资料包对不上——商家说"商标状态不符合要求"，
+系统却回另一套原因，评委一眼能看穿。这次把两份官方 xlsx **机械转成结构化数据**：
+
+- `catalog.json` **68 个关单场景**（菜单/分类/二级分类/关单方式/参考话术/需补材料/兜底热线），
+  顺序与 `场景汇总_结构化.json` 逐条一致，关单方式 **电话 54 / 京麦 14**；
+- `rebuttals.json` **52 条驳回话术**（逐字保留原文）；`qa.json` **27 条**（高频 11 + 特殊场景 16，已去重）；
+- `applications_catalog.json` **68 条档案**（一场景一条，`reject_code == catalog_id` 可反查），
+  带 5 个溯源字段（`catalog_id`/`catalog_scene_key`/`official_script`/`official_close_mode`/`reject_source`）；
+- `customers.json` **12 个客户**、`orders.json` **16 笔订单**（覆盖金卡/钻石/新客/沉默/投诉/退货/企业采购/门店会员）；
+- 运行时申请单池 **= 原集 120 + 官方场景 68 = 188 条**，原集排在前，`next_outbound_target()`
+  取第一条待外呼的行为**完全不变**——这是刻意的：原集被 `verify` 证据 21、C4 340 条用例、
+  88 条评测用例按"尾号/单号"直接引用，整份替换等于把基线一起换掉。
+
+**「整份替换」与「并列新增」的取舍**：选了后者。代价是 188 条里有两套命名风格
+（`QZ20261106xxxx` / `QZ20261201xxxx`），换来的是**任何既有断言都不用改**。
+
+新增三个只读接口，**基类默认返回空结果、不抛异常**（真实适配器没接表时不会把
+`AttributeError` 冒到编排层）：`tools.reject_catalog()` / `reject_script(code)` / `lookup_qa(question)`。
+`lookup_qa` 必须命中至少一个 4 字片段才答，只命中"怎么/可以"这类 2 字片段宁可返回"没找到"。
+
+新增 `scripts/check_mock_bundle.py`：七类校验（文件/目录/话术QA/覆盖回溯/合并池唯一/客户订单引用/可复算）
++ `--self-test` 六种变异，全部挂进 `verify` 证据 32。**校验器当场抓出两个真问题**：
+① 原集 14 条「关单方式=电话 却标 `call_status=无需外呼`」——这类记录永远进不了外呼名单，
+看板却显示"电话单不用打"，归因时会被误判成系统漏呼（已在生成器修掉：电话单遇"无需外呼"改记"待外呼"）；
+② QA 有一条问题重复，已去重。
+
+回归：`verify.py` **200/200**（新增 8 条）、`run_eval.py` **88/88**（应闭环 56/56、误闭环 0/27、留出集 18/18）。
+文档：`docs/34_mock数据包.md`、`config/mock/SCHEMA.md` §8。
+
 **2026-11-08 · 真实用户模拟 + L2 自进化闭环 + 说话人一致性门**：三件事，都建立在实测而非推断上。
 
 **① 真实用户模拟器**（`modules/user_sim.py` + `eval/personas_sim.json` 10 类画像）。
@@ -268,8 +298,9 @@ Serena），声音不再是浏览器机械音。顺带修掉三个实测暴露�
 | **话术改写接缝** | `nlg.say()` 已接 `qwen-flash`，默认 `provider=template` 不改写（行为等于没接），超时或出错原样返回 |
 | **知识库检索** | 21 条结构化条目 + 加权检索 + 可溯源；问"多久能上门"不会答成权益有效期 |
 | **长会话记忆** | 需求与最近发言落库，到第 18 轮仍答得上"我刚才说的什么" |
-| **外呼名单 + 四段式开场** | 从名单取本通电话的真实目标（120 条档案，`close_mode=电话` 且待外呼），开场直接报"请问您是{公司名}的{联系人身份}吗"；确认前**不进核身、不说驳回原因**，短句"打错了"立即礼貌收尾 |
+| **外呼名单 + 四段式开场** | 从名单取本通电话的真实目标（188 条档案，`close_mode=电话` 且待外呼），开场直接报"请问您是{公司名}的{联系人身份}吗"；确认前**不进核身、不说驳回原因**，短句"打错了"立即礼貌收尾 |
 | **公司档案（62 字段）** | 个人/店铺/公司/对公账户四类信息齐全，含 5 类"后四位"（手机、身份证、信用代码、店铺编号、对公账户）；身份证按 GB 11643、信用代码按 GB 32100 生成校验位，`check_mock_applications` 七项（含可复算）全过 |
+| **完整 mock 数据包** | 官方 **68 个关单场景**目录 + **52 条驳回话术** + **27 条 QA** + **188 条档案**（原 120 条 + 官方场景 68 条）+ 12 客户 / 16 订单；`check_mock_bundle.py` 七类校验 + 6 种变异反向测试，挂进 `verify` 证据 32 |
 | **测试台：随机预览** | `GET /api/company/random` 抽一家公司展示在页面下方，**不建会话、不发起通话**；预览锁定的公司会被下一次会话直接当外呼目标，客服"知道"的就是它 |
 | **测试台：纯文字模式** | `textOnly`：不连麦克风、不建音频 WebSocket、不合成播放语音，只打字对话。没麦、没 key 也能复测全流程 |
 | **实体护栏（NLG）** | 改写前后公司名/简称/店铺名/申请单号/品牌/尾号必须一致——**可以换语气，不能换事实**（曾把"北京市川上商贸有限责任公司"改成"这家公司"，已拦） |
@@ -280,7 +311,7 @@ Serena），声音不再是浏览器机械音。顺带修掉三个实测暴露�
 ### 还没做的（不是忘了，是排期在后面）
 
 - **Real provider 没接真实京东接口**（`modules/adapters/real.py` 有了，但地址与鉴权没接过真环境）。
-  现在默认走 Mock 档案（120 条 CSV）+ `mock_business/` 沙箱服务，演示与评测都够用。
+  现在默认走 Mock 档案（188 条 CSV，覆盖官方 68 场景）+ `mock_business/` 沙箱服务，演示与评测都够用。
 - ~~实时字幕没做~~ **已做（Z7）**：默认开启，半句字幕 + 整句落袋，见上表与 `docs/16`。
   仍有的边界：字幕只对"正在说的这一句"负责，跨轮的整段历史在对话日志里，不在字幕条上。
 - **说话人只做到"影子模式"**：能判"像不像开场应答那位"（EER 16%），但**没有开拦截**——
@@ -501,6 +532,8 @@ python mock_business/service.py     # Mock 业务系统：http://127.0.0.1:8100/
 | [docs/14_接口与代码地图.md](docs/14_接口与代码地图.md) | 接口表与错误码、文件归属、现在哪些还是假的 | 全员 |
 | [docs/32_真实用户模拟与L2自进化.md](docs/32_真实用户模拟与L2自进化.md) | 模拟用户三条约束、四类归因、五道闸门、版本与回滚、基线哈希护栏 | 3 号、答辩 |
 | [docs/33_说话人一致性门.md](docs/33_说话人一致性门.md) | 声纹三条路实测对比、EER 与音色相似度、影子模式为何先不拦截 | 1 号、答辩 |
+| [docs/34_mock数据包.md](docs/34_mock数据包.md) | 官方 68 场景怎么转成数据、合并池 188 条为何不整份替换、三个只读接口与默认返回、七类校验 | 全员、答辩 |
+| [config/mock/SCHEMA.md](config/mock/SCHEMA.md) | 档案字段级定义、完整数据包清单、跨文件一致性约束 | 改数据前必读 |
 
 ### 平台与交付（4 号）的文档
 
@@ -543,11 +576,14 @@ wsproto.py         RFC 6455 编解码（纯标准库，可离线断言）
 web/index.html      AudioWorklet 采集、五态状态机、能量 VAD、三段式打断、双口径面板
 web/dashboard.html  指标看板：KPI、时延双口径、事件分布、质检汇总、库体检
 mock_business/      独立 Mock 业务服务：查客户 / 查订单 / 建工单（幂等）
-config/mock/        外呼档案（120 条 62 字段，生成器可复算）
-scripts/            verify（192 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
+config/mock/        完整 mock 数据包：188 条档案（原集 120 + 官方场景 68）、68 条场景目录、
+                    52 条驳回话术、27 条 QA、12 客户、16 订单（全部可复算，见 docs/34）
+scripts/            verify（200 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
                     sim_eval（模拟用户跑批）/ evolve（init·propose·gate·promote·rollback）
                     bench_speaker_gate（声纹阈值标定）/ gen_speaker_corpus（多音色语料）
-                    gen_mock_applications + check_mock_applications（档案生成与可复算校验）
+                    build_mock_bundle（官方 xlsx → 场景目录/话术/QA）
+                    gen_mock_applications + gen_mock_catalog_applications（原集 / 官方场景档案）
+                    check_mock_applications + check_mock_bundle（两套数据校验，均带反向自测）
                     task2_metrics（四项指标出数）/ check_realtime_asr（流式识别连通验证）
                     test_*（八套离线自测，已作为证据 16/30 挂进 verify）
                     clean_events · archive_events（库体检/归档）/ check_key / 试听 / 录音验识别
@@ -563,10 +599,11 @@ reviews/            PR 审核记录
 ## 七、怎么验证我改的东西没坏
 
 ```bash
-python scripts/verify.py       # 192 条行为断言，用临时库，不污染 data/
+python scripts/verify.py       # 200 条行为断言，用临时库，不污染 data/
 python scripts/run_eval.py     # 30 条用例跑批（离线，不调云端）
 python scripts/sim_eval.py     # 10 类模拟用户跑完整通话 + 逐轮归因（不调云端）
 python scripts/evolve.py status            # 现在线上是哪一版话术、分数多少、能不能回滚
+python scripts/check_mock_bundle.py --self-test   # mock 数据包七类校验 + 6 种变异反向测试
 python config_loader.py        # 配置结构与占位符校验（一秒出结果）
 python scripts/archive_events.py --stats   # 事件库体检：体积、行数、索引
 ```
@@ -616,11 +653,11 @@ git config core.hooksPath .githooks
 场景路径与日志落盘（#16）、落库开关文档化（#19）、团队对照与密钥提示（#20）、
 评测与质检工具链（#17）、语音线 Z6/Z7/V1（#35–#37）、端到端跑通脚本（#38）、
 默认场景改赛题 POP（#39）、**四段式开场**（#40）、**档案补全 + 随机纯预览 + 纯文字模式 +
-macOS 启动**（#41），自检 **192/192**。**当前没有开着的 PR**。
+macOS 启动**（#41）、**完整 mock 数据包**（官方 68 场景），自检 **200/200**。**当前没有开着的 PR**。
 
-2026-11-08 的 L2 自进化与说话人门这批改动，按队长要求**直接进 main**（未开 PR），
+2026-11-08 的 L2 自进化、说话人门、mock 数据包这批改动，按队长要求**直接进 main**（未开 PR），
 用的是 `.githooks/pre-push` 里写明的逃生舱 `ALLOW_MAIN_PUSH=1`；
-进之前跑了 `verify.py` **192/192**、`test_nlg.py` 25/25、`sim_eval` 8/10。
+进之前跑了 `verify.py` **200/200**、`test_nlg.py` 25/25、`run_eval.py` 88/88、`sim_eval` 8/10。
 规矩仍然是"改动走 PR"（见 §八），这次是明确的一次性例外，不是流程失效。
 
 > 已合并/已关闭的分支（`feat/platform-m5-m8`、`feat/task2-*`、`feat/r1-stage0-unlock`、

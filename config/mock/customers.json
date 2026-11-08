@@ -1,0 +1,144 @@
+{
+  "_meta": {
+    "title": "售后 / 召回场景客户档案（虚构模拟数据）",
+    "used_by": ["service_outbound", "retail_recall"],
+    "count": 12,
+    "fictional_notice": "全部为虚构客户，姓名不对应真实自然人，电话只保留 199-0000 号段的尾四位。",
+    "relation": "C1001/C1002 与 mock_business/data/customers.json 保持同值（两边是同一套演示数据的两个出口），其余为补齐覆盖面新增。",
+    "updated_at": "2026-11-08"
+  },
+  "items": [
+    {
+      "customer_id": "C1001",
+      "name": "张伟",
+      "phone_tail": "8866",
+      "level": "金卡",
+      "city": "北京",
+      "tags": ["延保意向", "老客户"],
+      "registered_at": "2023-04-11",
+      "note": "近一年 3 笔订单，客单价偏高；客服记录里提到过说明书看不懂",
+      "scenes": ["service_outbound"]
+    },
+    {
+      "customer_id": "C1002",
+      "name": "李娜",
+      "phone_tail": "2143",
+      "level": "普通",
+      "city": "杭州",
+      "tags": ["价格敏感"],
+      "registered_at": "2024-09-02",
+      "note": "曾咨询优惠叠加，对价格敏感；本次订单还在运输中",
+      "scenes": ["service_outbound", "retail_recall"]
+    },
+    {
+      "customer_id": "C1003",
+      "name": "王强",
+      "phone_tail": "5521",
+      "level": "银卡",
+      "city": "成都",
+      "tags": ["企业采购"],
+      "registered_at": "2022-11-30",
+      "note": "以公司名义批量采购办公家具，对发票与对公结算有要求",
+      "scenes": ["service_outbound"]
+    },
+    {
+      "customer_id": "C1004",
+      "name": "赵敏",
+      "phone_tail": "7788",
+      "level": "金卡",
+      "city": "上海",
+      "tags": ["高频复购"],
+      "registered_at": "2021-06-18",
+      "note": "复购频繁，近半年 5 单；适合做延保与耗材搭售",
+      "scenes": ["service_outbound"]
+    },
+    {
+      "customer_id": "C1005",
+      "name": "陈杰",
+      "phone_tail": "3312",
+      "level": "普通",
+      "city": "武汉",
+      "tags": ["沉默客户", "召回候选"],
+      "registered_at": "2025-02-14",
+      "note": "历史只有 1 单，近 9 个月无下单，召回优先级高",
+      "scenes": ["retail_recall"]
+    },
+    {
+      "customer_id": "C1006",
+      "name": "刘洋",
+      "phone_tail": "9042",
+      "level": "银卡",
+      "city": "深圳",
+      "tags": ["情绪敏感", "退货中"],
+      "registered_at": "2023-08-07",
+      "note": "上次因除湿机噪音投诉，沟通需先安抚；当前有一单在退货流程中",
+      "scenes": ["service_outbound"]
+    },
+    {
+      "customer_id": "C1007",
+      "name": "顾青",
+      "phone_tail": "6081",
+      "level": "钻石",
+      "city": "北京",
+      "tags": ["高价值", "门店常客"],
+      "registered_at": "2020-03-05",
+      "note": "年消费 3 万以上，近三个月未到店，召回话术可提专属权益",
+      "scenes": ["retail_recall"]
+    },
+    {
+      "customer_id": "C1008",
+      "name": "林岚",
+      "phone_tail": "4477",
+      "level": "普通",
+      "city": "广州",
+      "tags": ["新客", "首单未评价"],
+      "registered_at": "2026-10-20",
+      "note": "首单到货 5 天，适合做使用体验回访",
+      "scenes": ["service_outbound"]
+    },
+    {
+      "customer_id": "C1009",
+      "name": "苏禾",
+      "phone_tail": "1290",
+      "level": "银卡",
+      "city": "南京",
+      "tags": ["价格敏感", "比价习惯"],
+      "registered_at": "2022-07-19",
+      "note": "多次咨询同款比价，权益话术要强调不额外付费",
+      "scenes": ["service_outbound", "retail_recall"]
+    },
+    {
+      "customer_id": "C1010",
+      "name": "程野",
+      "phone_tail": "8634",
+      "level": "金卡",
+      "city": "西安",
+      "tags": ["家电齐全", "延保已购"],
+      "registered_at": "2019-12-01",
+      "note": "已购延保，回访重点是使用体验与新品类推荐",
+      "scenes": ["service_outbound"]
+    },
+    {
+      "customer_id": "C1011",
+      "name": "许知",
+      "phone_tail": "2306",
+      "level": "普通",
+      "city": "重庆",
+      "tags": ["投诉历史", "需谨慎"],
+      "registered_at": "2024-01-26",
+      "note": "曾因配送延迟投诉，话术需先致歉再说明来意",
+      "scenes": ["service_outbound"]
+    },
+    {
+      "customer_id": "C1012",
+      "name": "叶舟",
+      "phone_tail": "7150",
+      "level": "钻石",
+      "city": "苏州",
+      "tags": ["企业采购", "门店会员"],
+      "registered_at": "2018-05-23",
+      "note": "企业采购 + 门店双身份，召回与售后都会触达，注意别重复打扰",
+      "scenes": ["retail_recall", "service_outbound"]
+    }
+  ]
+}

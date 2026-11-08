@@ -20,41 +20,124 @@ import time
 
 from .base import BaseAdapter
 
-# 假客户库：模拟企业提供的脱敏名单。
-_FAKE_CUSTOMERS = [
+# ---------------------------------------------------------------------------
+# 数据文件：config/mock/ 下的一整套 mock 数据（见 docs/34）
+#   applications.json           原集 120 条（评测基线，一个字节都不许动）
+#   applications_catalog.json   官方 68 个关单场景各一条（新增，补齐覆盖）
+#   customers.json / orders.json 售后与召回场景的客户/订单
+#   catalog.json                官方关单场景目录（68 条）+ 驳回话术索引
+#   rebuttals.json              官方 52 条驳回话术
+#   qa.json                     官方高频 QA + 特殊场景追问
+#
+# 读不到文件时**必须还能跑**：客户/订单回退到内置两条、申请单回退空表。
+# 理由很简单——mock 本来就是"没有外部依赖也能演示"的那条路径，
+# 文件被删了/RM 漏传了，自检和跑批不应该直接崩掉。
+# ---------------------------------------------------------------------------
+_MOCK_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "config", "mock")
+
+# 兜底客户/订单：与 mock_business/data 里的 C1001/C1002 同值。
+_FALLBACK_CUSTOMERS = [
     {"customer_id": "C1001", "name": "张伟", "phone_tail": "8866", "level": "金卡"},
     {"customer_id": "C1002", "name": "李娜", "phone_tail": "2143", "level": "普通"},
 ]
-
-# 假订单库：模拟订单系统。
-_FAKE_ORDERS = {
+_FALLBACK_ORDERS = {
     "C1001": {"order_id": "O20261101001", "amount": 2680.0, "status": "已签收"},
     "C1002": {"order_id": "O20261101002", "amount": 399.0, "status": "运输中"},
 }
 
-# C5：POP 资质驳回申请单档案（120 份虚构模拟数据，见 config/mock/SCHEMA.md）。
-# 懒加载 + 模块级缓存：读一次 282KB，之后每轮核身都是内存四路径匹配，
-# 不会把首字时延拖进 tools.timeout_ms 的 300ms 预算。
+_CUSTOMERS = None
+_ORDERS = None
+# C5：POP 资质驳回申请单档案。懒加载 + 模块级缓存：读一次 ~600KB，
+# 之后每轮核身都是内存匹配，不会把首字时延拖进 tools.timeout_ms 的 300ms 预算。
 _APPLICATIONS = None
-_APPLICATIONS_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "config", "mock", "applications.json")
+_CATALOG = None
+_QA = None
+
+
+def _load_items(fname):
+    """读 config/mock/<fname> 的 items；缺失或损坏返回 []（调用方负责兜底）。"""
+    try:
+        with open(os.path.join(_MOCK_DIR, fname), encoding="utf-8") as f:
+            return json.load(f).get("items") or []
+    except (OSError, ValueError):
+        return []
+
+
+def _load_customers():
+    global _CUSTOMERS
+    if _CUSTOMERS is None:
+        _CUSTOMERS = _load_items("customers.json") or list(_FALLBACK_CUSTOMERS)
+    return _CUSTOMERS
+
+
+def _load_orders():
+    global _ORDERS
+    if _ORDERS is None:
+        got = _load_items("orders.json")
+        if not got:
+            got = [dict(v, customer_id=k) for k, v in _FALLBACK_ORDERS.items()]
+        _ORDERS = got
+    return _ORDERS
 
 
 def _load_applications():
+    """运行时申请单池 = 原集 120 条 + 官方 68 场景 68 条 = 188 条。
+
+    顺序固定为"原集在前、新增在后"，是为了让 `next_outbound_target()`
+    （按名单顺序取第一条待外呼）和 `get_application()`（按单号精确取）
+    的行为与只有原集时**完全一致**——新增数据只增覆盖，不改既有路径。
+    """
     global _APPLICATIONS
     if _APPLICATIONS is None:
-        try:
-            with open(_APPLICATIONS_PATH, encoding="utf-8") as f:
-                _APPLICATIONS = json.load(f).get("items") or []
-        except (OSError, ValueError):
-            # 档案缺失/损坏时降级成"查无申请"，不能让核身链路直接崩掉
-            _APPLICATIONS = []
+        merged = list(_load_items("applications.json"))
+        merged.extend(_load_items("applications_catalog.json"))
+        _APPLICATIONS = merged
     return _APPLICATIONS
+
+
+def _load_catalog():
+    global _CATALOG
+    if _CATALOG is None:
+        _CATALOG = _load_items("catalog.json")
+    return _CATALOG
+
+
+def _load_qa():
+    global _QA
+    if _QA is None:
+        _QA = _load_items("qa.json")
+    return _QA
 
 
 def _ms(t0):
     return round((time.time() - t0) * 1000, 2)
+
+
+# QA 检索用的停用片段：这些 n-gram 几乎出现在每条问句里，命中它没有区分度
+_QA_STOP = {
+    "什么", "怎么", "可以", "如果", "这个", "那个", "我们", "你们", "他们",
+    "请问", "一下", "还是", "就是", "需要", "是不是", "有没有", "能不能",
+}
+
+
+def _qa_keywords(text):
+    """把官方问句切成 2/3/4 字片段（只保留中文与字母数字），做最笨的包含匹配。
+
+    不做语义相似度是刻意的：这里要的是"能不能复述官方原话"，
+    猜得像但没有出处，反而比"没找到"更危险。
+    """
+    s = "".join(ch for ch in str(text or "")
+                if "\u4e00" <= ch <= "\u9fff" or ch.isalnum())
+    out = set()
+    for n in (4, 3, 2):
+        for i in range(0, max(0, len(s) - n + 1)):
+            w = s[i:i + n]
+            if w in _QA_STOP:
+                continue
+            out.add(w)
+    return out
 
 
 class MockAdapter(BaseAdapter):
@@ -72,20 +155,81 @@ class MockAdapter(BaseAdapter):
     def query_customer(self, keyword):
         """按姓名或手机尾号查客户。返回 dict(found, customer)。
 
+        覆盖 12 条（售后 + 召回两类场景），C1001/C1002 与 Mock 业务服务同值。
         TODO 真实接口要处理：同名多结果、号码脱敏、无权限字段裁剪。
         """
         t0 = time.time()
         kw = (keyword or "").strip()
-        for c in _FAKE_CUSTOMERS:
-            if kw and (kw == c["name"] or kw == c["phone_tail"]):
+        for c in _load_customers():
+            if kw and (kw == c.get("name") or kw == str(c.get("phone_tail"))):
                 return {"found": True, "customer": c, "_ms": _ms(t0)}
         return {"found": False, "customer": None, "_ms": _ms(t0)}
 
     def query_order(self, customer_id):
-        """查客户最近一笔订单。返回 dict(found, order)。"""
+        """查客户**最近一笔**订单。返回 dict(found, order)。
+
+        一个客户可以有多笔订单，这里按 created_at 取最新（字符串 ISO 日期，
+        直接可比）。"最近一笔"是话术里的口径——"您上次下的那单"。
+        """
         t0 = time.time()
-        order = _FAKE_ORDERS.get(customer_id)
-        return {"found": bool(order), "order": order, "_ms": _ms(t0)}
+        cid = (customer_id or "").strip()
+        mine = [o for o in _load_orders() if o.get("customer_id") == cid]
+        if not mine:
+            return {"found": False, "order": None, "_ms": _ms(t0)}
+        latest = max(mine, key=lambda o: str(o.get("created_at") or ""))
+        return {"found": True, "order": latest, "_ms": _ms(t0)}
+
+    def reject_catalog(self):
+        """官方 68 个关单场景目录（只读）。编排侧/自检/看板都能按场景反查。"""
+        t0 = time.time()
+        items = _load_catalog()
+        return {"found": bool(items), "items": items, "count": len(items),
+                "_ms": _ms(t0)}
+
+    def reject_script(self, code):
+        """按场景 id（KB-POP-xxx）或二级分类关键词取驳回话术。"""
+        t0 = time.time()
+        kw = (code or "").strip()
+        if not kw:
+            return {"found": False, "scene": None, "_ms": _ms(t0)}
+        items = _load_catalog()
+        for it in items:
+            if kw == it.get("id"):
+                return {"found": True, "scene": it, "matched_by": "id", "_ms": _ms(t0)}
+        hits = [it for it in items
+                if any(kw in str(it.get(f) or "")
+                       for f in ("subcategory", "scene_key", "domain", "close_mode"))]
+        if len(hits) == 1:
+            return {"found": True, "scene": hits[0], "matched_by": "contains",
+                    "_ms": _ms(t0)}
+        return {"found": False, "scene": None, "_ms": _ms(t0)}
+
+    def lookup_qa(self, question):
+        """从官方高频 QA / 特殊场景里找一条最像的答案（只读，不参与合规判定）。
+
+        做法故意很笨：问句关键词命中越多越靠前，命中数为 0 就算没找到。
+        不做语义相似度——这里要的是"能不能复述官方原话"，不是"猜得像"。
+        """
+        t0 = time.time()
+        q = (question or "").strip()
+        if not q:
+            return {"found": False, "answer": "", "match": "", "_ms": _ms(t0)}
+        best, best_score, best_len = None, 0, 0
+        for it in _load_qa():
+            score, longest = 0, 0
+            for kw in _qa_keywords(it.get("question") or ""):
+                if kw in q:
+                    score += len(kw)
+                    longest = max(longest, len(kw))
+            if score > best_score or (score == best_score and longest > best_len):
+                best, best_score, best_len = it, score, longest
+        # 门槛：必须命中至少一个 4 字片段。只命中"怎么""可以"这种 2 字片段，
+        # 说明只是泛泛重合，宁可不答，也不要拿一条不相关的官方答案去糊。
+        if not best or best_len < 4:
+            return {"found": False, "answer": "", "match": "", "_ms": _ms(t0)}
+        return {"found": True, "answer": best.get("answer", ""),
+                "match": best.get("question", ""), "qid": best.get("id"),
+                "source": best.get("source"), "score": best_score, "_ms": _ms(t0)}
 
     def query_application(self, keyword):
         """C5：四路径定位 POP 资质驳回申请单，返回 dict(found, application)。

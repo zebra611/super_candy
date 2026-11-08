@@ -1,0 +1,175 @@
+{
+  "_meta": {
+    "title": "售后 / 召回场景订单档案（虚构模拟数据）",
+    "used_by": ["service_outbound", "retail_recall"],
+    "count": 16,
+    "fictional_notice": "全部为虚构订单，金额与商品不对应任何真实交易。",
+    "relation": "O20261101001 / O20261101002 与 mock_business/data/orders.json 保持同值；query_order 返回该客户**最近一笔**（按 created_at）。",
+    "updated_at": "2026-11-08"
+  },
+  "items": [
+    {
+      "order_id": "O20261101001",
+      "customer_id": "C1001",
+      "amount": 2680.0,
+      "status": "已签收",
+      "product": "智能按摩椅 X3",
+      "created_at": "2026-11-01",
+      "warranty_days": 365,
+      "channel": "线上"
+    },
+    {
+      "order_id": "O20261101002",
+      "customer_id": "C1002",
+      "amount": 399.0,
+      "status": "运输中",
+      "product": "空气炸锅 4L",
+      "created_at": "2026-11-01",
+      "warranty_days": 365,
+      "channel": "线上"
+    },
+    {
+      "order_id": "O20261028003",
+      "customer_id": "C1001",
+      "amount": 158.0,
+      "status": "已签收",
+      "product": "按摩椅专用靠垫",
+      "created_at": "2026-10-28",
+      "warranty_days": 90,
+      "channel": "线上"
+    },
+    {
+      "order_id": "O20261025004",
+      "customer_id": "C1003",
+      "amount": 12600.0,
+      "status": "已签收",
+      "product": "办公人体工学椅 ×20",
+      "created_at": "2026-10-25",
+      "warranty_days": 730,
+      "channel": "线上"
+    },
+    {
+      "order_id": "O20261021005",
+      "customer_id": "C1004",
+      "amount": 899.0,
+      "status": "已签收",
+      "product": "扫地机器人 S1",
+      "created_at": "2026-10-21",
+      "warranty_days": 365,
+      "channel": "线上"
+    },
+    {
+      "order_id": "O20261019006",
+      "customer_id": "C1004",
+      "amount": 129.0,
+      "status": "已签收",
+      "product": "耗材套装",
+      "created_at": "2026-10-19",
+      "warranty_days": 90,
+      "channel": "线上"
+    },
+    {
+      "order_id": "O20261015007",
+      "customer_id": "C1006",
+      "amount": 2199.0,
+      "status": "退货中",
+      "product": "除湿机 D2",
+      "created_at": "2026-10-15",
+      "warranty_days": 365,
+      "channel": "线上"
+    },
+    {
+      "order_id": "O20261012008",
+      "customer_id": "C1005",
+      "amount": 268.0,
+      "status": "已签收",
+      "product": "厨房收纳架",
+      "created_at": "2026-10-12",
+      "warranty_days": 90,
+      "channel": "线上"
+    },
+    {
+      "order_id": "O20261008009",
+      "customer_id": "C1008",
+      "amount": 649.0,
+      "status": "已签收",
+      "product": "无线吸尘器 V8",
+      "created_at": "2026-10-08",
+      "warranty_days": 365,
+      "channel": "线上"
+    },
+    {
+      "order_id": "O20261005010",
+      "customer_id": "C1009",
+      "amount": 359.0,
+      "status": "已签收",
+      "product": "电煮锅 2L",
+      "created_at": "2026-10-05",
+      "warranty_days": 180,
+      "channel": "线上"
+    },
+    {
+      "order_id": "O20260928011",
+      "customer_id": "C1010",
+      "amount": 4599.0,
+      "status": "已签收",
+      "product": "滚筒洗衣机 10kg",
+      "created_at": "2026-09-28",
+      "warranty_days": 1095,
+      "channel": "线上"
+    },
+    {
+      "order_id": "O20260920012",
+      "customer_id": "C1011",
+      "amount": 199.0,
+      "status": "已签收",
+      "product": "厨房置物架",
+      "created_at": "2026-09-20",
+      "warranty_days": 90,
+      "channel": "线上"
+    },
+    {
+      "order_id": "O20260915013",
+      "customer_id": "C1007",
+      "amount": 1288.0,
+      "status": "已签收",
+      "product": "门店组合礼包",
+      "created_at": "2026-09-15",
+      "warranty_days": 30,
+      "channel": "门店",
+      "store": "望京店"
+    },
+    {
+      "order_id": "O20260910014",
+      "customer_id": "C1012",
+      "amount": 3680.0,
+      "status": "已签收",
+      "product": "企业礼品定制套装",
+      "created_at": "2026-09-10",
+      "warranty_days": 180,
+      "channel": "门店",
+      "store": "园区店"
+    },
+    {
+      "order_id": "O20260905015",
+      "customer_id": "C1012",
+      "amount": 899.0,
+      "status": "已签收",
+      "product": "门店会员礼盒",
+      "created_at": "2026-09-05",
+      "warranty_days": 30,
+      "channel": "门店",
+      "store": "园区店"
+    },
+    {
+      "order_id": "O20260828016",
+      "customer_id": "C1002",
+      "amount": 79.0,
+      "status": "退款完成",
+      "product": "硅胶铲套装",
+      "created_at": "2026-08-28",
+      "warranty_days": 30,
+      "channel": "线上"
+    }
+  ]
+}
