@@ -123,8 +123,13 @@ def analyse_turns(turns):
         #    为什么单列：它不会让通过率掉下来（工单照样建出来了），
         #    但业务侧收到的是"商家拒绝整改"这个错误结论——沉默的错误最贵。
         user_text_now = user.get("text") or ""
-        wrote_back = (_stage(t) in ("WRITEBACK", "DONE")
-                      or ((t.get("agent") or {}).get("next_stage") in ("WRITEBACK", "DONE")))
+        # 「进了 DONE」不等于「回写了」。11-08 修完「没听明白」后，客服会在
+        # 第二次没听懂时转专员收线（_finish，带 end_reason，不产生回写事件）；
+        # 旧判据只看阶段，把这种收线误报成「提前回写」——是假阳性，不是缺陷。
+        _agent_now = t.get("agent") or {}
+        wrote_back = (not _agent_now.get("end_reason")
+                      and (_stage(t) in ("WRITEBACK", "DONE")
+                           or _agent_now.get("next_stage") in ("WRITEBACK", "DONE")))
         if (action == "deny" and wrote_back
                 and any(w in user_text_now for w in _COMPREHENSION_DENY)
                 and not any(w in user_text_now for w in _REFUSAL_DENY)):

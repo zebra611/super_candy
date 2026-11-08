@@ -66,6 +66,15 @@ YES_CONTAINS = ("同意", "没问题", "那就办", "办吧", "可以可以", "�
 NO_EXACT = {"不", "不要", "不用", "不了", "算了", "拒绝", "没兴趣", "不需要", "别打"}
 NO_CONTAINS = ("不要", "不用", "不需要", "没兴趣", "算了", "别打", "拒绝", "不办", "不了")
 
+# 「没听懂」既不是拒绝，更不是同意。11-08 实跑 S10：用户说「哎呀，我还是没听明白」，
+# confirm_yes_words 里的「明白」被子串命中，旧的否定检查只找连续的「没明白」，
+# 中间隔一个「听」就漏了 → 直接回写 consent=True 结束通话，业务侧收到
+# 「客户同意」这个错误结论。这类说法必须显式拦在肯定判定之前。
+NOT_CLEAR_MARKS = ("没听明白", "没明白", "没听懂", "没懂", "听不明白", "听不懂",
+                   "没听清", "没听清楚", "不清楚", "不太清楚", "不太明白", "不明白",
+                   "还是不明白", "再说一遍", "再讲一遍", "没太听懂", "没太懂",
+                   "搞不懂", "没太明白")
+
 # 否认本人 / 打错电话
 DENY_PERSON = ("不是本人", "我不是", "打错", "他不在", "不是他", "你找错了")
 
@@ -2284,6 +2293,21 @@ def _stage_confirm(session, text, flags):
     """
     cfg = config_loader.stage_config("CONFIRM")
 
+    # 用户明确说没听懂：不回写同意、也不记拒绝，先把复述再讲一遍。
+    # 第二次仍没听懂就转专员收线，**不产生回写事件**——回写会把
+    # 「客户同意 / 拒绝」写进工单，而这通电话客户只是没听清，
+    # 记成任何结论都是编的。也避免同一句追问反复念（agent_loop）。
+    if any(w in text for w in NOT_CLEAR_MARKS):
+        if session.get("reexplain_used"):
+            return _finish(session,
+                           cfg.get("reply_not_clear_handoff")
+                           or "那我先不打扰您了，稍后专员会用官方号码再联系您，"
+                              "需要补充的材料清单也会同步到商家后台，感谢您的接听，再见。",
+                           "unclear")
+        session["reexplain_used"] = True
+        return _reply(session, cfg.get("reply", ""),
+                      next_stage="CONFIRM", intent="ambiguous")
+
     # 场景确认词（pop："清楚了""明白了"）。CONFIRM 问的是什么由场景话术决定：
     # 主场景问"同意吗"，pop 问"清楚了吗"——通用 YES 词表覆盖不了所有场景问法
     # （"清楚了"不在任何肯定表里，"知道了"在通用含糊表里），于是商家明明说
@@ -2291,9 +2315,15 @@ def _stage_confirm(session, text, flags):
     # 声明本场景的确认说法，命中即视同明确肯定；主场景不配这个键，行为不变。
     # 子串匹配要防否定变体："没明白"同样包含"明白"，必须先拦。
     _yes_marks = [w for w in (cfg.get("confirm_yes_words") or []) if w and w in text]
+
+    def _negated(mark):
+        # 只看确认词前面一小段：「没听明白」中间隔了字，旧的连续串匹配抓不到；
+        # 但也不能扫全文，「不是，我清楚了」是先否认后肯定，扫全文会误伤。
+        i = text.find(mark)
+        return i >= 0 and any(neg in text[max(0, i - 4):i] for neg in ("没", "不", "别"))
+
     if _yes_marks and not flags["no"] and not any(w in text for w in NO_CONTAINS) \
-            and not any(text.find(_neg + w) >= 0
-                        for w in _yes_marks for _neg in ("没", "不", "别")):
+            and not any(_negated(w) for w in _yes_marks):
         return _do_writeback(session, True)
 
     if flags["yes"] and flags.get("conf", 1.0) >= YES_MIN_CONF:

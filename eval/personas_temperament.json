@@ -41,7 +41,8 @@
    "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
    "traits": {"hearing": 1.0, "patience": 7, "trust0": 0.5, "trust_gate": 0.2, "verbosity": 1.0},
    "style": ["哎呀"], "catchphrases": ["我跟你说啊，上次那个审核也拖了半个月", "对了还有，这两天后台老卡"],
-   "catchphrase_rate": 0.65, "expect": {"closed": true}
+   "catchphrase_rate": 0.65, "expect": {"closed": false},
+   "_why": "11-08：修掉「没听明白被当成同意直接回写」后，这位店主反复说没听懂，客服应当复述一次再转专员、不产生回写事件；closed=false 才符合业务规格。原来的 closed=true 是靠错误回写通过的假绿，改它不是降判据。"
   },
   {
    "id": "T05", "label": "听不清要重说的老师傅", "temper": "hard_of_hearing",

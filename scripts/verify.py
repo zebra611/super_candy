@@ -2705,6 +2705,35 @@ def main():
     check("数据包校验器的反向自测：6 种改坏都能被抓到（校验器不假绿）",
           _self_ok, ["变异用例全部报红" if _self_ok else "有变异没被抓到"])
 
+    # ---- 「没听明白」不是同意（11-08 S10 真实缺陷，附反向断言） ----
+    # 显式切到赛题场景：confirm_yes_words（含「明白」）写在 pop_reject 场景包里，
+    # 不切回来就会在主场景测，测不到这次修的否定变体。
+    _nc_prev_scene = config_loader.scene_path()
+    config_loader.set_scene("pop_reject")
+    _nc = dialogue.new_session("verify-not-clear")
+    _nc["stage"] = "CONFIRM"
+    _nc["slots"]["identity_confirmed"] = True
+    _r1 = dialogue.respond(_nc, "哎呀，我还是没听明白")
+    _r2 = dialogue.respond(_nc, "哎呀，这我搞不懂")
+    check("客户说没听明白：不回写同意，复述一次后转专员且无回写事件",
+          _r1["next_stage"] == "CONFIRM"
+          and not _r1.get("end_reason")
+          and "清楚了吗" in _r1["reply_text"]
+          and _nc["slots"].get("consent") in ("", None)
+          and bool(_r2.get("end_reason"))
+          and _nc["slots"].get("consent") in ("", None),
+          ["一轮=%s 二轮=%s consent=%r"
+           % (_r1["next_stage"], _r2.get("end_reason"), _nc["slots"].get("consent"))])
+
+    _yc = dialogue.new_session("verify-yes-clear")
+    _yc["stage"] = "CONFIRM"
+    _yc["slots"]["identity_confirmed"] = True
+    _ry = dialogue.respond(_yc, "我明白了，清楚了")
+    check("反向：真说清楚了仍按同意回写（修复没把肯定也挡掉）",
+          _ry["intent"] == "consent" and _yc["slots"].get("consent") is True,
+          ["intent=%s consent=%r" % (_ry["intent"], _yc["slots"].get("consent"))])
+    config_loader.set_scene(_nc_prev_scene)
+
     # ---- 双击入口（11-08 晚）：.bat 里混进一个中文字符，cmd 会吞掉后续命令 ----
     # 真踩过：把「自进化.bat」写进注释后，整份批处理被逐行拆碎执行。
     def _bat_bad(raw):
