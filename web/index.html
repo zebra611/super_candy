@@ -106,7 +106,7 @@
       <span class="tag" id="randomMatched"></span>
     </div>
     <div id="randomInfo" class="randinfo"></div>
-    <div class="hint" style="margin-top:8px">上方为系统随机/指定锁定的公司档案。请对照客服开场白是否真的对上了这家公司（公司名 + 联系人身份），以验证四段式第②环。</div>
+    <div class="hint" style="margin-top:8px">上方为系统随机/指定锁定的公司档案。请对照客服开场白是否真的对上了这家公司（公司名 + 联系人身份），以验证四段式第②环；末行「驳回话术」是客服将要说的官方原话（槽位已按本档案填好，不会出现【】或 XX）。</div>
   </div>
 </div>
 
@@ -225,7 +225,9 @@ const MATCHED_LABEL = {
 
 // 把后端回传的外呼目标档案渲染到页面下方的卡片里。
 // company 为空（非赛题场景 / 取空）时隐藏卡片并给一句提示。
-function renderRandomCompany(company, matched_by) {
+// scene = 本次随机到的驳回场景（后端用官方话术按本档案填好槽位）。
+// 没有 scene 不代表出错：京麦驳回按官方口径就是走站内指引、不外呼。
+function renderRandomCompany(company, matched_by, scene) {
   const card = $("randomCard");
   const info = $("randomInfo");
   const tag = $("randomMatched");
@@ -247,6 +249,18 @@ function renderRandomCompany(company, matched_by) {
             '</span><span class="' + vcls + '">' + escapeHtml(String(v)) + '</span></div>';
   }
   if (!html) html = '<div class="ri"><span class="k">提示</span><span class="v">该记录无可展示字段</span></div>';
+  // 驳回话术：官方话术表里的原话，【】槽位已按上面这份档案填好。
+  // 这一栏是给测试者核对"客服待会儿要说的原因，到底来自哪句话术"。
+  if (scene && scene.script) {
+    const from = scene.via === "reject_code" ? "按驳回代码命中" : "同业务域替身";
+    html += '<div class="ri long"><span class="k">驳回话术</span><span class="v">' +
+            escapeHtml(scene.script) +
+            '<span class="tag" style="margin-left:6px">官方 ' + escapeHtml(scene.id || "") +
+            ' · ' + escapeHtml(from) + '</span></span></div>';
+  } else {
+    html += '<div class="ri long"><span class="k">驳回话术</span><span class="v">' +
+            '本场景官方口径为站内指引（不外呼），没有电话话术</span></div>';
+  }
   info.innerHTML = html;
 }
 
@@ -295,7 +309,7 @@ async function startCall(opts) {
   $("btnEvents").disabled = false;
 
   // 展示本次外呼目标：随机/指定/名单命中的公司档案，让测试者一眼核对。
-  renderRandomCompany(d.company, d.matched_by);
+  renderRandomCompany(d.company, d.matched_by, d.scene);
 
   if (textOnly) {
     // 纯文字模式：不启用任何语音系统，客服回复以文字形式显示在对话区。
@@ -345,7 +359,7 @@ async function previewRandom() {
       return;
     }
     S.pendingTarget = c.application_id || null;
-    renderRandomCompany(c, d.matched_by);
+    renderRandomCompany(c, d.matched_by, d.scene);
     const who = (c.company_name || "") + (c.contact_role ? "（" + c.contact_role + "）" : "");
     log("系统", "已随机预览：" + who + " ［" + (MATCHED_LABEL[d.matched_by] || d.matched_by || "随机") +
         "］。客服已拿到该公司信息；点「纯文字测试」或「开始通话」即可让客服基于它主动对话。");

@@ -2628,6 +2628,33 @@ def main():
           ["仍有占位=%s 补齐=%d 条 实际播报=%s"
            % (_with_xx or "无", len(_filled), (_dph.get("qa") or {}).get("id"))])
 
+    # ---- 官方话术填槽（11-08）：模板不许把【】/XX 播出去 ----
+    _osq = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                       "check_official_scripts.py"),
+                           "--self-test"],
+                          cwd=ROOT, capture_output=True, text=True, timeout=180)
+    check("官方话术填槽：电话单都说得出话术、京麦单不外呼、无残留占位（含 3 种反向自测）",
+          _osq.returncode == 0,
+          ["退出码 %d；末行：%s" % (_osq.returncode,
+                                    ((_osq.stdout or "").strip().splitlines() or ["无输出"])[-1][:90])])
+
+    from modules import official_script as _osmod
+    _phone = next(a for a in _pool if a.get("close_mode") == "电话")
+    _jmapp = next(a for a in _pool if a.get("close_mode") == "京麦")
+    _scr = _osmod.script_for(_phone) or {}
+    _dneed = dialogue.new_session("verify-official-need")
+    _dneed["stage"] = "NEED"
+    _dneed["slots"]["identity_confirmed"] = True
+    _dneed["slots"]["application"] = _phone
+    _dout = dialogue.respond(_dneed, "为什么会驳回")
+    check("对话里讲驳回原因用官方话术（槽位已按档案填好），京麦单不配电话话术",
+          bool(_scr.get("script")) and not _scr.get("missing")
+          and not any(m in _scr["script"] for m in ("【", "】", "XX"))
+          and _osmod.script_for(_jmapp) is None
+          and not any(m in _dout["reply_text"] for m in ("【", "】", "XX")),
+          ["话术=%s 命中=%s 对话=%s"
+           % (_scr.get("id"), _dout.get("intent"), _dout["reply_text"][:40])])
+
     import io as _io
     import contextlib as _ctx
     from scripts import check_mock_bundle as _mbmod

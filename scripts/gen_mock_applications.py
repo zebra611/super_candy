@@ -24,10 +24,17 @@ import io
 import json
 import os
 import random
+import sys
 from datetime import date, timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT, "config", "mock")
+
+# 驳回代码要从"官方真有话术"的模板池里取（见 modules/official_script.candidates）。
+# 这里 import 项目模块是刻意的：**数据要能对着话术自洽**，
+# 代码里散一份 id 清单，早晚会跟 kb_pop.json 漂移。
+sys.path.insert(0, ROOT)
+from modules import official_script  # noqa: E402
 SEED = 20261106
 N = 120  # ≥100，留 20 条余量
 HOTLINE = "4006180092"
@@ -508,8 +515,13 @@ def build_records():
         if cat == "京麦驳回" or call_status in ("待外呼", "无需外呼", "无应答", "无效号码"):
             understood = "unknown"
 
-        reject_code = "KB-POP-%03d" % (1 + (idx * 7) % 96)
         reason = REJECT_REASONS[cat][idx % len(REJECT_REASONS[cat])]
+        # 以前是 `(idx*7)%96` 硬取序号：28 条指向不存在的 KB-POP-069..096，
+        # 另有一半指向别的业务域。现在按**驳回原因**在本业务域里挑最贴题的
+        # 官方模板（模板 patterns 命中的词长加权），保证"说什么原因就念哪段话术"。
+        reject_code = (official_script.best_code(cat, reason)
+                       or official_script.best_code("未定位", reason)
+                       or "KB-POP-001")
         if "overlong_reason" in edges:
             reason = reason + "；" + "补充说明：申请材料中多项附件与系统登记信息不一致，需逐项核对后重新上传，并确保所有扫描件清晰可辨、加盖公章完整。" * 2
         if "blank_placeholder" in edges:

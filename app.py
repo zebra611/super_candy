@@ -43,7 +43,7 @@ import cost_guard
 import dashboard as dashboard_mod
 import events
 import ws_channel
-from modules import dialogue, eval as eval_mod, tools, voice
+from modules import dialogue, eval as eval_mod, official_script, tools, voice
 from modules import semantic_judge
 from modules import wsproto
 
@@ -753,6 +753,24 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
     }
 
 
+def _scene_of(company):
+    """把一条档案映射成"本次驳回场景"（官方话术，槽位已填）。
+
+    返回 None 有三种情况，前端统一显示"该场景走站内指引/无电话话术"：
+      - 京麦驳回：官方口径本来就不外呼；
+      - 官方表里没有对应模板；
+      - 模板里有档案填不上的槽位（如 SKU）。
+    """
+    if not isinstance(company, dict) or not company:
+        return None
+    got = official_script.script_for(company)
+    if not got:
+        return None
+    return {"id": got["id"], "script": got["script"], "via": got["via"],
+            "missing": got["missing"], "source_id": got["source_id"],
+            "dialogue": official_script.dialogue_text(got["script"])}
+
+
 def start_call(application_id=None, random_target=False):
     """开一通新电话：生成 session_id 与会话级 token、初始化状态、记一条 call_started。
 
@@ -846,7 +864,8 @@ def start_call(application_id=None, random_target=False):
             # 前端据此在页面下方把"随机生成的公司具体信息"展示出来，
             # 便于核对客服开场白是否真的对上了这家公司。
             "matched_by": _tg.get("matched_by") if _tg.get("found") else None,
-            "company": sess.get("outbound_target")}
+            "company": sess.get("outbound_target"),
+            "scene": _scene_of(sess.get("outbound_target"))}
 
 
 def record_barge_in(session_id, turn_id=0, reason="user_speech", text="",
@@ -1293,9 +1312,13 @@ class Handler(BaseHTTPRequestHandler):
             # 不该因为"点了一下预览"就开一通电话、占用一个 session。
             # 回传的完整档案（含身份证号/统一社会信用代码等补全部件）即客服"知道"的信息。
             _tg = tools.random_application()
+            _company = _tg.get("application") or {}
             self._send_json({
                 "matched_by": _tg.get("matched_by") if _tg.get("found") else None,
-                "company": _tg.get("application"),
+                "company": _company,
+                # 本次随机到的"驳回场景"：官方话术已按这条档案填好槽位，
+                # 前端直接展示即可；没有话术（京麦驳回/官方无模板）时为 null。
+                "scene": _scene_of(_company),
             })
             return
         if path == "/api/metrics":

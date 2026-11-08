@@ -24,7 +24,7 @@
 import re
 
 import config_loader
-from modules import intent, kb, nlg, tools
+from modules import intent, kb, nlg, official_script, tools
 
 # ---------------------------------------------------------------------------
 # 意图关键词表
@@ -640,7 +640,7 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     # intent 记的是 greeting_confirm_company，但里面含官方原话——
     # 11-08 实测，按 intent 判会漏掉它，措辞层把整句压缩成
     # "麻烦您确认下，您是XX公司的负责人吗"，官方答案被丢掉了。
-    _freeze_official = bool(qa_hit) or intent == "qa"
+    _freeze_official = bool(qa_hit) or intent in ("qa", "official_script")
     if (not end_reason and intent not in ("error", "empty")
             and not _freeze_identity and not _freeze_official):
         text = nlg.say(session, _fill_application(text, session["slots"].get("application")),
@@ -848,6 +848,25 @@ def _qa_lookup(session, text):
     return info
 
 
+def _app_of(session):
+    """本通电话对应的那条档案（申请单优先，其次外呼目标）。"""
+    return (session["slots"].get("application")
+            or session.get("outbound_target") or {})
+
+
+def _official_line(session):
+    """本通档案的官方驳回话术（已填槽、已去掉自报身份与热线尾句）。
+
+    没有可用话术时返回空串——调用方退回自己的模板。
+    结果缓存在 session 里：一轮里可能问两次，没必要每次重读 kb_pop。
+    """
+    if "official_line" not in session:
+        got = official_script.script_for(_app_of(session))
+        session["official_line"] = official_script.dialogue_text(got["script"]) if got else ""
+        session["official_script_id"] = (got or {}).get("id", "")
+    return session["official_line"] or ""
+
+
 def _answer_official(session, text, flags):
     """先用官方原话答，再退回知识条目；都没命中返回 (None, None, None)。
 
@@ -868,17 +887,27 @@ def _answer_official(session, text, flags):
         return _soothe(qa["answer"], flags), qa, None
     hit = kb.match(text, slots=session.get("slots") or {}) if kb.enabled() else None
     if hit and hit.get("answer"):
-        if _unreadable(hit["answer"]) or hit.get("missing"):
+        # kb_pop 的 96 条驳回话术都是带【】的模板。以前填不满就整条不播，
+        # 等于商家问"为什么驳回"时客服只会说"我这边查不到"。
+        # 现在先用**本通档案**把槽位填上（modules/official_script）：
+        #   填满 → 播填好的句子；填不满 → 不播，记一条 answer_blocked。
+        # 注意两条分支都必须 return：漏掉一个 return，就会把**没填的模板原文**
+        # 送进 TTS（11-08 实测踩过，语音里念出"括号括号"就是这么来的）。
+        filled, miss = official_script.render_script(
+            hit["answer"], _app_of(session), hit.get("id"))
+        if miss:
             session.setdefault("answer_blocked", []).append(
                 {"via": "kb", "id": hit.get("id", ""), "source": hit.get("source_id", ""),
-                 "reason": "placeholder", "missing": list(hit.get("missing") or [])})
-        elif hit["answer"] in (session.get("spoken_answers") or []):
+                 "reason": "placeholder", "missing": list(miss)})
+            return None, None, None
+        spoken = session.get("spoken_answers") or []
+        if filled in spoken:
             # 和刚才播过的某句逐字相同：不念第二遍（理由见 _qa_lookup 末尾）。
             session.setdefault("answer_blocked", []).append(
                 {"via": "kb", "id": hit.get("id", ""), "source": hit.get("source_id", ""),
                  "reason": "repeated", "missing": []})
-        else:
-            return _soothe(hit["answer"], flags), None, hit
+            return None, None, None
+        return _soothe(filled, flags), None, dict(hit, answer=filled, rendered=True)
     return None, None, None
 
 
@@ -1901,6 +1930,10 @@ def _stage_identity(session, text, flags):
                            "jingmai_no_call")
         # C5：核上的那一刻就把「哪笔申请、哪个原因、补什么」说清楚，
         # 不再让用户再口述一遍业务域——这是申请单定位的真实落点。
+        # 这一段**不用**官方话术：赛题四段式③要求"说明驳回原因与整改"，
+        # 而官方话术是按"场景话术"写的（可能不提本单具体原因与需补材料）。
+        # 官方原话留给"商家追问为什么"的场合（见 NEED 的提问分支），
+        # 核身这一句保持"品牌 + 原因 + 补什么"的可溯源三件套。
         return _reply(session,
                       _fill_application(_soothe(cfg.get("reply_ok", ""), flags), app),
                       next_stage="NEED", intent="identity_ok")
@@ -2094,6 +2127,9 @@ def _stage_need(session, text, flags):
                           qa_hit=_qa_hit, kb_hit=_kb_hit)
         app = session["slots"].get("application")
         if app:
+            _off = _official_line(session)
+            if _off:
+                return _reply(session, _soothe(_off, flags), intent="official_script")
             return _reply(session,
                           _fill_application(_soothe(cfg.get("reply_application_detail",
                                                            "您这笔申请的驳回原因和需补材料我这边都有记录，我再说一遍：{reason}，需要补充{materials}。"), flags), app),

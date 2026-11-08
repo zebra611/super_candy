@@ -37,6 +37,40 @@ GitHub 的 Contributors 只显示账号名，看不出是谁，所以这里给�
 
 > 最新在最上面。每条改动都附当时的回归结果，断言数即验收标准。
 
+**2026-11-08 · 官方 `【】` 话术填槽：随机预览看得见场景、电话里听得见原话**：
+上一轮留下的边界是「`kb_pop.json` 的 96 条驳回话术都带 `【】` 槽位，填不满的整条不播」——
+结果商家问「为什么驳回」时，客服只能说「我这边查不到」。这轮把槽位真正填上，
+并让随机预览与对话**共用同一套渲染**：
+
+- 新增 `modules/official_script.py`：按本通档案（`brand_name` / `shop_name` /
+  `required_materials` / 商标状态）把 `【】` 填成具体词；填不满仍不播，
+  但 188 条电话单现在**每条都有能念的官方话术**（3 条要 SKU / 类似群、
+  档案里根本没这字段的模板直接排除出候选池）
+- 场景与档案对齐：legacy 档案的 `reject_code` 原来 `(idx*7)%96` 硬取序号，
+  28 条指向不存在的 `KB-POP-069..096`、另一半串到别的业务域。改成按**驳回原因词面**
+  在本域挑最贴题的模板（本域只命中「品牌」这类泛词时跨域兜底），
+  做到「说商标时间不符，就念商标时间那一段」
+- 5 条 S 系列官方话术原本带 `XX`，用与 `qa.json` **完全一致**的补齐文案做播报替身，
+  从 QA 通道问和从知识库通道问听到同一版本；京麦驳回 / 无需外呼的单子
+  按官方口径**不配电话话术**
+- 对话侧：NEED 阶段讲驳回原因用官方原话（`intent=official_script`，冻结措辞层），
+  kb 命中的模板先填槽再播——**填满才播，填不满不播，两条分支都必须 `return`**
+  （漏一个 return 就会把「您申请的【】品牌」送进 TTS，本轮实测踩到并修掉）
+- 展示侧：`/api/company/random` 与 `/api/call/start` 新增 `scene` 字段，
+  预览卡片末行显示「驳回话术」+ 官方条目号；电话里播的是去掉自报身份与热线尾句的
+  `dialogue` 版本，避免「核完身份又自我介绍一遍」
+- 新增 `scripts/check_official_scripts.py`（含 3 种变异反向自测）与
+  `scripts/test_official_script.py`（14 条）
+
+回归：`verify.py` **205/205**（+2 条话术证据）、`run_eval.py` **88/88**（留出 18/18）、
+`test_official_script` **14/14**、`test_qa_dialogue` **15/15**、`test_kb` 28/28、
+`test_tools` 34/34、`test_nlg` 25/25、`sim_eval` 8/10 不变；
+四个数据校验器（字节级复算 / 跨文件一致 / 官方包复算 / 话术填槽）全过。
+HTTP 实测：6 条随机预览话术无 `【】` / `XX`；报尾号核身后问「为什么会驳回」，
+播的是「您申请的玉竹品牌，行业许可证资质上传错误，需您协助操作重新上传正确的资质」。
+文档：`docs/34` §6 边界改写 + §10。
+
+
 **2026-11-08 · 随机预览的公司信息去机器痕迹 + 官方 5 条 `XX` 补齐**：
 测试页「随机预览」把一条档案的 34 个字段铺在卡片上，是演示里最显眼的一块。
 字段本来就齐（188 条 × 34 字段无空缺），但**值是程序拼出来的**，一眼假：
@@ -641,7 +675,7 @@ web/dashboard.html  指标看板：KPI、时延双口径、事件分布、质检
 mock_business/      独立 Mock 业务服务：查客户 / 查订单 / 建工单（幂等）
 config/mock/        完整 mock 数据包：188 条档案（原集 120 + 官方场景 68）、68 条场景目录、
                     52 条驳回话术、27 条 QA、12 客户、16 订单（全部可复算，见 docs/34）
-scripts/            verify（203 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
+scripts/            verify（205 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
                     sim_eval（模拟用户跑批）/ evolve（init·propose·gate·promote·rollback）
                     bench_speaker_gate（声纹阈值标定）/ gen_speaker_corpus（多音色语料）
                     build_mock_bundle（官方 xlsx → 场景目录/话术/QA）
@@ -649,7 +683,9 @@ scripts/            verify（203 条自检）/ run_eval（跑批）/ bench_voice
                     check_mock_applications + check_mock_bundle（两套数据校验，均带反向自测）
                     task2_metrics（四项指标出数）/ check_realtime_asr（流式识别连通验证）
                     test_*（离线自测，八套已作为证据 16/30 挂进 verify；
-                     test_qa_dialogue 专测官方 QA 接进对话后的边界，14 条）
+                     test_qa_dialogue 专测官方 QA 接进对话后的边界，15 条；
+                     test_official_script 专测官方话术填槽，14 条）
+                    check_official_scripts（话术填槽校验 + 3 种变异反向自测）
                     clean_events · archive_events（库体检/归档）/ check_key / 试听 / 录音验识别
 CODEOWNERS          谁的文件谁审（GitHub 账号对照）
 .githooks/          pre-push：禁止直接推 main（要 git config core.hooksPath .githooks）
@@ -663,7 +699,7 @@ reviews/            PR 审核记录
 ## 七、怎么验证我改的东西没坏
 
 ```bash
-python scripts/verify.py       # 203 条行为断言，用临时库，不污染 data/
+python scripts/verify.py       # 205 条行为断言，用临时库，不污染 data/
 python scripts/run_eval.py     # 30 条用例跑批（离线，不调云端）
 python scripts/sim_eval.py     # 10 类模拟用户跑完整通话 + 逐轮归因（不调云端）
 python scripts/evolve.py status            # 现在线上是哪一版话术、分数多少、能不能回滚
@@ -717,7 +753,7 @@ git config core.hooksPath .githooks
 场景路径与日志落盘（#16）、落库开关文档化（#19）、团队对照与密钥提示（#20）、
 评测与质检工具链（#17）、语音线 Z6/Z7/V1（#35–#37）、端到端跑通脚本（#38）、
 默认场景改赛题 POP（#39）、**四段式开场**（#40）、**档案补全 + 随机纯预览 + 纯文字模式 +
-macOS 启动**（#41）、**完整 mock 数据包**（官方 68 场景）、**官方 QA 接进对话**，自检 **203/203**。**当前没有开着的 PR**。
+macOS 启动**（#41）、**完整 mock 数据包**（官方 68 场景）、**官方 QA 接进对话**、**官方话术槽位填进随机预览与对话**，自检 **205/205**。**当前没有开着的 PR**。
 
 2026-11-08 的 L2 自进化、说话人门、mock 数据包、官方 QA 接进对话这批改动，
 按队长要求**直接进 main**（未开 PR），

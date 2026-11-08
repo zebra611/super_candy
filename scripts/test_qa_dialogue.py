@@ -157,13 +157,19 @@ class OfficialQaGuards(unittest.TestCase):
         self.assertIn("国家商标网", out["reply_text"])
         self.assertNotIn("XX", out["reply_text"])
 
-    def test_kb_template_with_slots_is_not_read(self):
-        """kb 里带【】槽位的模板不许原样念（TTS 会念成左右括号）。"""
-        s = _session("OFFER")
-        out = dialogue.respond(s, "你们能和品牌方确认吗")
-        self.assertNotIn("【", out["reply_text"])
-        self.assertNotIn("】", out["reply_text"])
-        self.assertTrue(any(b.get("via") == "kb" for b in s["answer_blocked"]))
+    def test_kb_template_is_filled_or_muted(self):
+        """kb 里带【】槽位的模板：要么填满再播，要么不播——不许原样念。
+
+        11-08 之后这里有两种合法结果：本通档案能填满（说不含【】的完整句子），
+        或者填不满（压根不播，记一条 answer_blocked）。两种都算过，
+        唯一不允许的是把"您申请的【】品牌"直接送给 TTS。
+        """
+        for slots in ({}, {"application": _app()}):
+            s = _session("OFFER", **slots)
+            out = dialogue.respond(s, "你们能和品牌方确认吗")
+            self.assertNotIn("【", out["reply_text"])
+            self.assertNotIn("】", out["reply_text"])
+            self.assertNotIn("XX", out["reply_text"])
 
     def test_unrelated_question_is_not_invented(self):
         """闲聊不命中：宁可说"确认不到"，也不许套一条官方答案。"""
