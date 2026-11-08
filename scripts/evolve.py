@@ -34,6 +34,7 @@
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -233,6 +234,14 @@ def validate_candidate(cand, base_cfg):
         for w in forbidden:
             if w and w in val:
                 problems.append("patch[%d] 引入合规禁语：%s" % (i, w))
+        # 不许新增原句没有的花括号占位符：11-08 实跑 --llm 起草出
+        #「{机构名称}」「{申请单编号}」，模板渲染器不认识就会原样念出花括号。
+        # 旧的检查只看「丢了哪些占位符」，看不出「多出了哪些」。
+        old_slots = set(re.findall(r"\{[^}]+\}", old))
+        extra_slots = set(re.findall(r"\{[^}]+\}", val)) - old_slots
+        if extra_slots:
+            problems.append("patch[%d] 新增了原句没有的占位符 %s（电话里会原样念出花括号）"
+                            % (i, "、".join(sorted(extra_slots))))
         # 占位符不许改：改 {company_name} 就是改事实来源
         for token in ("{company_name}", "{contact_role}", "{reason}",
                       "{materials}", "{application_desc}"):
@@ -732,12 +741,26 @@ def cmd_doctor(args):
     # 所以深度体检直接重跑一遍 active 场景，比对登记的分数。
     if args.get("deep") and not problems:
         active_rec = next((h for h in vd["history"] if h["version"] == active), {})
-        want = (active_rec.get("metrics") or {}).get("all_ok")
+        rec_m = active_rec.get("metrics") or {}
+        want = rec_m.get("all_ok")
         tmp = os.path.join(_ROOT, "eval", "reports", "_doctor_recheck.json")
-        got = _metrics(run_sim(scene_file, tmp, tag="doctor_" + active))["all_ok"]
-        print("深度复算：登记 %s/10，重跑 %s/10" % (want, got))
+        got_m = _metrics(run_sim(scene_file, tmp, tag="doctor_" + active))
+        got = got_m["all_ok"]
+        print("深度复算：通过 %s/10 → %s/10；系统缺陷会话 %s → %s；缺陷总数 %s → %s"
+              % (want, got, rec_m.get("agent_defect_sessions"),
+                 got_m["agent_defect_sessions"], rec_m.get("defect_total"),
+                 got_m["defect_total"]))
         if want is not None and got != want:
             problems.append("基线分数已失真（%s → %s）：代码变过，先跑 rebase" % (want, got))
+        # 通过数一样、缺陷构成变了，同样是基线失真：闸门拿旧基线算「有收益」和
+        # 「缺陷总数不增」，会对着错误的分母判。11-08 实测：场景与哈希全没动，
+        # 重跑多出 1 个槽位丢失缺陷，旧的 deep 只比通过数，完全照不出来。
+        for key, label in (("agent_defect_sessions", "系统缺陷会话"),
+                           ("defect_total", "缺陷总数")):
+            w, g = rec_m.get(key), got_m.get(key)
+            if w is not None and w != g:
+                problems.append("基线%s已失真（%s → %s）：通过数没变但闸门判据口径变了，先跑 rebase"
+                                % (label, w, g))
 
     if problems:
         print("\n体检不通过：")

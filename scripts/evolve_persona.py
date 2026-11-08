@@ -206,12 +206,23 @@ def cmd_doctor(args):
     # 证明不了对话代码没变；直接重跑一遍 active 规则表比对分数。
     if args.get("deep") and not problems:
         rec = next((h for h in vd["history"] if h["version"] == active), {})
-        want = (rec.get("metrics") or {}).get("all_ok")
+        rec_m = rec.get("metrics") or {}
+        want = rec_m.get("all_ok")
         tmp = os.path.join(_ROOT, "eval", "reports", "_persona_doctor.json")
-        got = _metrics(run_sim(_snapshot(active), tmp, tag="doctor_" + active))["all_ok"]
-        print("深度复算：登记 %s/12，重跑 %s/12" % (want, got))
+        got_m = _metrics(run_sim(_snapshot(active), tmp, tag="doctor_" + active))
+        got = got_m["all_ok"]
+        print("深度复算：通过 %s/12 → %s/12；系统缺陷会话 %s → %s；缺陷总数 %s → %s"
+              % (want, got, rec_m.get("agent_defect_sessions"),
+                 got_m["agent_defect_sessions"], rec_m.get("defect_total"),
+                 got_m["defect_total"]))
         if want is not None and got != want:
             problems.append("基线分数已失真（%s → %s）：代码变过，先跑 rebase" % (want, got))
+        for key, label in (("agent_defect_sessions", "系统缺陷会话"),
+                           ("defect_total", "缺陷总数")):
+            w, g = rec_m.get(key), got_m.get(key)
+            if w is not None and w != g:
+                problems.append("基线%s已失真（%s → %s）：通过数没变但闸门判据口径变了，先跑 rebase"
+                                % (label, w, g))
     if problems:
         print("\n体检不通过：")
         for x in problems:

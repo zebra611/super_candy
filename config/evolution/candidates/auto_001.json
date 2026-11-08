@@ -1,0 +1,82 @@
+{
+ "id": "auto_001",
+ "created": "2026-11-08 19:25:29",
+ "base_version": "v5",
+ "scene_file": "config/scenes/pop_reject.json",
+ "from_baseline": "eval/reports/sim_baseline_v5.json",
+ "targets": [
+  "agent_loop|IDENTITY|refuse_info|identity_offtopic",
+  "agent_slot_loss|IDENTITY|answer_name|identity_ok"
+ ],
+ "patches": [
+  {
+   "path": "stages.IDENTITY.reply_offtopic",
+   "old": "没关系，记不住号码也正常。您说个联系人姓名，或者申请单编号后六位，任意一个我都能核对上；实在不方便，我让专员用官方号码再联系您。",
+   "value": "您放心，我们是{机构名称}的官方客服，因您的{申请单编号}需要核实信息，所以联系您。若您记不住号码，报个姓名或后六位编号就行，我马上帮您核对。",
+   "cluster": "agent_loop|IDENTITY|refuse_info|identity_offtopic",
+   "clusters": [
+    "agent_loop|IDENTITY|refuse_info|identity_offtopic"
+   ],
+   "rationale": "原话术回避身份质疑且提供替代路径不足。改写后直接说明来电原因（核实{申请单编号}），正面回应身份合法性，并给出姓名/编号双路径，符合真实通话中用户对身份确认和便捷核对的需求。"
+  },
+  {
+   "path": "stages.IDENTITY.reply_ask_tail",
+   "old": "好的，核对申请单需要您预留手机号的后四位，说四个数字就行。",
+   "value": "为了核对申请信息，需要您报一下预留手机号的后四位，方便我们确认身份，说四个数字就行。",
+   "cluster": "agent_slot_loss|IDENTITY|answer_name|identity_ok",
+   "clusters": [
+    "agent_slot_loss|IDENTITY|answer_name|identity_ok"
+   ],
+   "rationale": "原话术未解释为何需手机号后四位，导致用户质疑身份合理性。改写后明确说明用途为‘核对信息’和‘确认身份’，增强可信度，避免身份困惑。"
+  }
+ ],
+ "gate": {
+  "result": "rejected_metrics",
+  "checks": [
+   {
+    "check": "train 不降",
+    "pass": true,
+    "detail": "7 → 7"
+   },
+   {
+    "check": "holdout 不降",
+    "pass": true,
+    "detail": "2 → 2"
+   },
+   {
+    "check": "有实际收益",
+    "pass": false,
+    "detail": "总通过 9→9，系统缺陷会话 3→3"
+   },
+   {
+    "check": "无个体回退",
+    "pass": true,
+    "detail": "无"
+   },
+   {
+    "check": "缺陷总数不增",
+    "pass": true,
+    "detail": "4 → 4"
+   }
+  ],
+  "version": "v6",
+  "at": "2026-11-08 19:25:32",
+  "metrics": {
+   "all_ok": 9,
+   "all_total": 10,
+   "train_ok": 7,
+   "train_total": 7,
+   "holdout_ok": 2,
+   "holdout_total": 3,
+   "agent_defect_sessions": 3,
+   "case_defect_sessions": 0,
+   "codes": {
+    "agent_slot_loss": 1,
+    "agent_noise_on_question": 1,
+    "agent_no_progress": 1,
+    "agent_premature_writeback": 1
+   },
+   "defect_total": 4
+  }
+ }
+}
