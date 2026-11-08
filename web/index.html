@@ -53,6 +53,20 @@
   .randinfo .k { flex: 0 0 120px; color: var(--muted); }
   .randinfo .v { flex: 1; color: var(--ink); word-break: break-all; }
   .randinfo .v.hl { color: #0c447c; font-weight: 600; }
+  .sel { flex: 1; min-width: 220px; font: inherit; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); }
+  #trainFlow { margin-top: 12px; max-height: 460px; overflow-y: auto; }
+  .tl { border-top: 1px dashed var(--line); padding: 10px 0 4px; }
+  .tl:first-child { border-top: 0; padding-top: 0; }
+  .tmeta { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+  .lvl { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--amber-bg); color: var(--amber); margin-right: 6px; }
+  .weak { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; background: #fcebeb; color: #a32d2d; margin-left: 6px; }
+  .verdict { font-size: 13px; font-weight: 500; margin-top: 12px; }
+  .verdict.ok { color: #0f6e56; }
+  .verdict.bad { color: #a32d2d; }
+  .weakgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 10px; }
+  .weakcell { background: var(--gray-bg); border-radius: 8px; padding: 8px 10px; }
+  .weakcell .k { font-size: 11px; color: var(--muted); }
+  .weakcell .v { font-size: 15px; font-weight: 500; }
 </style>
 </head>
 <body>
@@ -98,6 +112,20 @@
       <button id="btnEvents" disabled>刷新</button>
     </div>
     <div id="events">还没有事件。</div>
+  </div>
+
+  <div class="card" id="trainCard">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <strong style="font-weight:500">训练回放 · 让对抗客户给客服上难度</strong>
+      <span class="hint" id="trainState">未开始</span>
+    </div>
+    <div class="row">
+      <select id="trainPersona" class="sel"></select>
+      <button id="btnTrain" class="primary">开始训练</button>
+    </div>
+    <div class="hint" style="margin-top:6px">现场真跑一场，逐轮播放客户与客服的对话：客户按客服露出的破绽把难度从 L1 拉到 L4，红标是这一轮被抓住的弱点。训练用独立事件库、强制模板话术，结果可复现、不写生产数据；有通话进行中会被拒绝。</div>
+    <div id="trainFlow"></div>
+    <div id="trainSummary"></div>
   </div>
 
   <div class="card" id="randomCard" style="display:none">
@@ -1505,6 +1533,126 @@ function saveVadCal() {
 }
 
 if (VADCAL) vadCalPanel();
+
+// ---------------------------------------------------------------------------
+// 训练回放：对抗客户 vs 客服
+//
+// 数据来自 POST /api/train/run：后端真跑一场（独立事件库 + 强制模板话术），
+// 返回逐轮轨迹。这里只负责播放，不改任何业务状态。
+// 为什么要逐轮播而不是一次性铺开：训练的价值在「哪一轮露怯、难度什么时候涨」，
+// 一次性铺开就只剩一堆气泡，看不出因果。
+// ---------------------------------------------------------------------------
+const TRAIN_ACT = {
+  answer_company: "报公司名", answer_tail: "报尾号", answer_name: "报姓名",
+  answer_order: "报单号", cant_remember: "记不住", ask_why: "质疑来电",
+  ask_material: "问材料", ask_fee: "问收费", refuse_info: "拒绝提供",
+  reask_already_told: "重复已给信息", mishear: "说没听清", off_topic: "跑题",
+  deny: "说没听懂", confirm: "明确确认", ack: "嗯", yes_company: "确认本人",
+  no_wrong_person: "说打错了", hangup: "挂断"
+};
+const TRAIN_WEAK = {
+  repeat: "客服复读同一句", no_answer: "问题没被正面回答",
+  slot_loss: "已给信息又被要一遍", vague_ref: "核身指代含糊",
+  noise_on_question: "把提问当杂音", premature: "没听懂就回写",
+  stalled: "连续停在同一个要求"
+};
+
+function trainSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function loadTrainPersonas() {
+  try {
+    const r = await fetch("/api/train/personas");
+    const d = await r.json();
+    const sel = $("trainPersona");
+    sel.innerHTML = "";
+    (d.personas || []).forEach(p => {
+      const o = document.createElement("option");
+      o.value = p.id;
+      o.textContent = p.id + " · " + p.label +
+        "（" + (p.split === "holdout" ? "留出集" : "训练集") + "，最高 L" + p.max_level + "）";
+      sel.appendChild(o);
+    });
+    if (!sel.options.length) $("trainState").textContent = "没有可用画像";
+  } catch (e) {
+    $("trainState").textContent = "画像清单加载失败";
+  }
+}
+
+async function runTrain() {
+  const pid = $("trainPersona").value;
+  if (!pid) return;
+  $("btnTrain").disabled = true;
+  $("trainState").textContent = "训练中…（真跑一场，约 5–15 秒）";
+  $("trainFlow").innerHTML = "";
+  $("trainSummary").innerHTML = "";
+  try {
+    const r = await fetch("/api/train/run", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona_id: pid })
+    });
+    const d = await r.json();
+    if (d.error) {
+      $("trainState").textContent = d.error + "：" + (d.detail || "");
+      return;
+    }
+    await playTrain(d);
+  } catch (e) {
+    $("trainState").textContent = "训练失败：" + e;
+  } finally {
+    $("btnTrain").disabled = false;
+  }
+}
+
+async function playTrain(d) {
+  const flow = $("trainFlow");
+  const turns = d.turns || [];
+  if (!turns.length) {
+    $("trainState").textContent = "这一场没有产生对话";
+    renderTrainSummary(d);
+    return;
+  }
+  for (let i = 0; i < turns.length; i++) {
+    const u = turns[i].user || {};
+    const a = turns[i].agent || {};
+    const found = (u.found || []).map(w => TRAIN_WEAK[w] || w);
+    const div = document.createElement("div");
+    div.className = "tl";
+    div.innerHTML =
+      '<div class="tmeta"><span class="lvl">L' + (u.level || 1) + "</span>第 " + (i + 1) +
+      " 轮 · 客户：" + escapeHtml(TRAIN_ACT[u.action] || u.action || "") +
+      (found.length ? '<span class="weak">露怯：' + escapeHtml(found.join(" / ")) + "</span>" : "") +
+      "</div>" +
+      '<div class="msg"><div class="who">客户</div><div class="bubble">' +
+      escapeHtml(u.text || "") + "</div></div>" +
+      '<div class="msg"><div class="who">客服</div><div class="bubble agent">' +
+      escapeHtml(a.reply_text || "") + '<span class="tag">' +
+      escapeHtml((a.stage || "") + "→" + (a.next_stage || "")) + "</span></div></div>";
+    flow.appendChild(div);
+    flow.scrollTop = flow.scrollHeight;
+    $("trainState").textContent = "播放中… " + (i + 1) + "/" + turns.length;
+    await trainSleep(520);
+  }
+  $("trainState").textContent = "播放完";
+  renderTrainSummary(d);
+}
+
+function renderTrainSummary(d) {
+  const w = d.weakness || {};
+  const cells = Object.keys(TRAIN_WEAK).map(k =>
+    '<div class="weakcell"><div class="k">' + escapeHtml(TRAIN_WEAK[k]) +
+    '</div><div class="v">' + (w[k] || 0) + "</div></div>").join("");
+  const want = d.expect && d.expect.closed === true ? "闭环" : "不闭环";
+  $("trainSummary").innerHTML =
+    '<div class="verdict ' + (d.ok ? "ok" : "bad") + '">判定：' + escapeHtml(d.verdict || "") +
+    "（期望" + want + "，实际" + (d.closed ? "闭环" : "不闭环") + "）· 难度峰值 L" +
+    (d.level_peak || 1) + " · 结束于 " + escapeHtml(d.end_by || "") + "</div>" +
+    '<div class="weakgrid">' + cells + "</div>" +
+    '<div class="hint" style="margin-top:8px">这一场露出的弱点就是自进化的输入：失败簇 → 候选话术 → 闸门。' +
+    "训练用独立事件库，不写生产数据。</div>";
+}
+
+$("btnTrain").onclick = runTrain;
+loadTrainPersonas();
 </script>
 </body>
 </html>

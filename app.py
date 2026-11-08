@@ -26,8 +26,10 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -44,6 +46,7 @@ import dashboard as dashboard_mod
 import events
 import ws_channel
 from modules import dialogue, eval as eval_mod, official_script, tools, voice
+from modules import nlg
 from modules import semantic_judge
 from modules import wsproto
 
@@ -185,6 +188,59 @@ def active_session_count():
     """
     with _STORE_LOCK:
         return sum(1 for v in _SESSIONS.values() if not v.get("closed"))
+
+
+#: 训练回放串行化：跑一场要独占状态机与工具层，两场并行会串台。
+_TRAIN_LOCK = threading.Lock()
+_TRAIN_MAX_TURNS = 14
+
+
+def _train_personas():
+    """对抗画像清单：只回展示需要的字段，不回 knows / traits / style。"""
+    from scripts import adversarial_evolve as adv
+    return [{
+        "id": p["id"], "label": p.get("label", ""), "goal": p.get("goal", ""),
+        "split": p.get("split", "train"),
+        "max_level": int(p.get("max_level") or 4),
+        "expect": p.get("expect") or {},
+    } for p in adv.load_personas()]
+
+
+def _train_run(persona):
+    """真跑一场对抗对话，返回逐轮轨迹。
+
+    两条隔离都必须做：
+        1. 事件库切到临时目录——训练不是真实通话，不能混进会话数与时延分位数；
+        2. 改写层强制 template——改写有随机性，回放要逐字节可复现，也不该看一次训练调一次模型。
+    两处都在 finally 里恢复，即使跑批抛异常，也不会把生产库路径留在临时目录。
+    """
+    from scripts import adversarial_evolve as adv
+    old_dir, old_db = events.DATA_DIR, events.DB_PATH
+    old_tts = config_loader.tts_config
+    tmp = tempfile.mkdtemp(prefix="sc_train_")
+    events.DATA_DIR = tmp
+    events.DB_PATH = os.path.join(tmp, "train.db")
+    events.init_db()
+    # 训练不播语音：TTS 走浏览器口径，避免每轮调一次合成（慢且花钱）。
+    config_loader.tts_config = lambda: {"provider": "browser",
+                                        "voice": "zh-CN-XiaoxiaoNeural", "rate": 1.05}
+    try:
+        with nlg.template_only():
+            out = adv.run_one(persona, max_turns=_TRAIN_MAX_TURNS)
+    finally:
+        events.DATA_DIR, events.DB_PATH = old_dir, old_db
+        events.init_db()
+        config_loader.tts_config = old_tts
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    expect = persona.get("expect") or {}
+    want = expect.get("closed")
+    out["expect"] = expect
+    out["ok"] = (want is None) or (bool(want) == bool(out.get("closed")))
+    out["verdict"] = "通过" if out["ok"] else "失败"
+    out["scene"] = config_loader.scene_name()
+    out["max_turns"] = _TRAIN_MAX_TURNS
+    return out
 
 
 def _auth(session_id, token):
@@ -1309,6 +1365,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "scene": config_loader.scene_name(),
                              "gate_ms": contracts.LATENCY_GATE_MS})
             return
+        if path == "/api/train/personas":
+            # 训练回放的画像清单。不含 knows / traits / style：
+            # 前端只需要展示用的字段，档案细节不该顺手回给浏览器。
+            self._send_json({"personas": _train_personas()})
+            return
         if path == "/api/company/random":
             # 纯预览：随机抽一条可电话外呼的档案回传，**不创建会话**。
             # 用途：测试页"随机"按钮先看清这家公司的信息，再决定用哪家与客服对话——
@@ -1436,6 +1497,34 @@ class Handler(BaseHTTPRequestHandler):
             return
         except Exception as e:
             self._send_json({"error": "BAD_JSON", "detail": str(e)}, 400)
+            return
+
+        if path == "/api/train/run":
+            # 现场跑一场对抗对话，把逐轮轨迹回给浏览器。
+            # 有真实通话在跑时拒绝：训练会独占状态机与工具层，还会把事件库切到临时目录。
+            pid = str(body.get("persona_id") or "").strip()
+            from scripts import adversarial_evolve as _adv
+            raw = next((p for p in _adv.load_personas() if p["id"] == pid), None)
+            if raw is None:
+                self._send_json({"error": "UNKNOWN_PERSONA",
+                                 "detail": "没有这个画像：%s" % (pid or "(空)")}, 404)
+                return
+            if active_session_count() > 0:
+                self._send_json({"error": "CALL_IN_PROGRESS",
+                                 "detail": "有通话进行中，先挂断再训练（训练会独占状态机）"}, 409)
+                return
+            if not _TRAIN_LOCK.acquire(blocking=False):
+                self._send_json({"error": "TRAIN_BUSY",
+                                 "detail": "上一场训练还没跑完"}, 409)
+                return
+            try:
+                out = _train_run(raw)
+            except Exception as e:
+                self._send_json({"error": "TRAIN_FAILED", "detail": str(e)}, 500)
+                return
+            finally:
+                _TRAIN_LOCK.release()
+            self._send_json(out)
             return
 
         if path == "/api/call/start":

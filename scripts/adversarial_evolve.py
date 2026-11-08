@@ -16,6 +16,7 @@
 出现「候选明明改了、分数没动」的假结论（evolve.py 踩过）。
 """
 
+import atexit
 import argparse
 import copy
 import json
@@ -40,12 +41,6 @@ if _SCENE_ARG.endswith(".json"):
     os.environ.pop("APP_SCENE", None)
 
 import events  # noqa: E402
-_tmp = tempfile.mkdtemp(prefix="sc_adversarial_")
-events.DATA_DIR = _tmp
-events.DB_PATH = os.path.join(_tmp, "sim.db")
-events.init_db()
-import atexit  # noqa: E402
-atexit.register(lambda: shutil.rmtree(_tmp, ignore_errors=True))
 
 import config_loader  # noqa: E402
 from modules import tools  # noqa: E402
@@ -54,12 +49,26 @@ from modules.cluster import cluster_defects  # noqa: E402
 from modules.adversary import AdversarySim, WEAKNESS  # noqa: E402
 from modules.user_sim import HANGUP  # noqa: E402
 
-config_loader.tts_config = lambda: {"provider": "browser",
-                                    "voice": "zh-CN-XiaoxiaoNeural", "rate": 1.05}
-config_loader.nlg_config = lambda: {**config_loader.load().get("nlg", {}),
-                                    "provider": "template"}
-
 from app import end_call, handle_turn, start_call  # noqa: E402
+
+
+def _isolate():
+    """脚本模式专用：事件库切临时目录、TTS 不合成、改写不调模型。
+
+    为什么必须是函数而不是模块级代码：app.py 会 import 本模块跑训练回放，
+    模块级副作用会把服务的事件库路径与改写配置一起改掉（实测：训练结束后
+    DB_PATH 仍指向 sc_adversarial_* 临时目录，真实通话会写进一个待删的库）。
+    import 必须零副作用，副作用只在命令行真正跑批时发生。
+    """
+    tmp = tempfile.mkdtemp(prefix="sc_adversarial_")
+    events.DATA_DIR = tmp
+    events.DB_PATH = os.path.join(tmp, "sim.db")
+    events.init_db()
+    atexit.register(lambda: shutil.rmtree(tmp, ignore_errors=True))
+    config_loader.tts_config = lambda: {"provider": "browser",
+                                        "voice": "zh-CN-XiaoxiaoNeural", "rate": 1.05}
+    config_loader.nlg_config = lambda: {**config_loader.load().get("nlg", {}),
+                                        "provider": "template"}
 
 PERSONAS_PATH = os.path.join(_ROOT, "eval", "personas_adversarial.json")
 BASELINE = os.path.join(_ROOT, "eval", "reports", "adversarial_baseline.json")
@@ -433,6 +442,10 @@ def main():
     g.add_argument("candidate")
     sub.add_parser("check")
     a = ap.parse_args()
+    if not a.cmd:
+        ap.print_help()
+        return 2
+    _isolate()
     if a.cmd == "run":
         return cmd_run(a)
     if a.cmd == "propose":

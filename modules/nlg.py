@@ -49,6 +49,7 @@
     建议按 600ms 配：服务端合计约 1.55s，真实首字约 1.75s，仍在 2000ms 门槛内。
 """
 
+import contextlib
 import json
 import re
 import sys
@@ -90,6 +91,23 @@ def _warn_once(tag, msg):
     sys.stderr.write("[nlg] %s\n" % msg)
 
 
+#: 训练回放期间强制走模板：改写层是随机的，回放要能逐字节复现，
+#: 也不能每看一次训练就烧一次模型调用。只影响 nlg.say 的出口，不改任何配置。
+_FORCE_TEMPLATE = False
+
+
+@contextlib.contextmanager
+def template_only():
+    """在 with 块内让 say() 原样返回骨架话术；退出时恢复原值。"""
+    global _FORCE_TEMPLATE
+    prev = _FORCE_TEMPLATE
+    _FORCE_TEMPLATE = True
+    try:
+        yield
+    finally:
+        _FORCE_TEMPLATE = prev
+
+
 def say(session, base_text, stage=""):
     """把骨架话术改写成自然口语。
 
@@ -104,6 +122,9 @@ def say(session, base_text, stage=""):
     """
     if not base_text:
         return base_text or ""
+
+    if _FORCE_TEMPLATE:
+        return base_text                       # 训练回放：可复现、不调模型
 
     cfg = config_loader.nlg_config()
     if (cfg.get("provider") or "template").strip() != "dashscope":

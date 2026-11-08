@@ -20,6 +20,7 @@
 """
 
 import random
+import re
 
 from modules import user_sim as _us
 from modules.user_sim import (
@@ -105,6 +106,17 @@ _PROBE_FOR = {
 #: 低压力配合者听到这句会如实回答，不会继续质疑；高压力画像不受影响。
 _CONFIRM_PROMPT_MARKS = ("您清楚了吗", "清楚了或者", "还有疑问", "同意或者不需要")
 
+
+def _stem(text, n=14):
+    """去掉空白与标点后的前 n 个字。
+
+    为什么不用整句相等：客服用 _soothe 给同一句话追加「您慢慢想，我这边等着」
+    这类尾巴，整句比较会漏判；而用户听到的就是"又问了一遍"。按主干比更贴近
+    真实感受，也能让训练回放里的「客服复读」标得出来（11-08 实测 A07 第 1~3 轮）。
+    """
+    t = re.sub(r"[\s，。！？、；：,.!?;:\"'“”‘’（）()]", "", text or "")
+    return t[:n]
+
 _ACTION_FACT = {
     ANSWER_TAIL: "phone_tail", ANSWER_NAME: "contact_name",
     ANSWER_ORDER: "application_id", ANSWER_COMPANY: "company_name",
@@ -140,7 +152,7 @@ class AdversarySim(object):
         t = agent_text or ""
         self.confirm_prompt = any(w in t for w in _CONFIRM_PROMPT_MARKS)
         found = []
-        if t and t == self.last_agent:
+        if t and self.last_agent and _stem(t) == _stem(self.last_agent):
             found.append("repeat")
         if self.last_action in _ANSWER_CUES:
             cues = _ANSWER_CUES[self.last_action]
@@ -248,7 +260,7 @@ class AdversarySim(object):
             self.ended = True
             return {"text": _TEMPLATES[HANGUP], "action": HANGUP,
                     "level": self.level, "probe": "patience_exhausted",
-                    "given_fact": ""}
+                    "given_fact": "", "found": list(found)}
 
         action, probe = self._choose(found, asks)
         text, action = self._render(action)
@@ -261,4 +273,4 @@ class AdversarySim(object):
         if action == HANGUP:
             self.ended = True
         return {"text": text, "action": action, "level": self.level,
-                "probe": probe, "given_fact": given}
+                "probe": probe, "given_fact": given, "found": list(found)}
