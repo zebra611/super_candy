@@ -101,6 +101,10 @@ _PROBE_FOR = {
     "stalled": OFF_TOPIC,
 }
 
+#: 客服在问「确认了吗」——只看播出文本，不读阶段/意图/槽位。
+#: 低压力配合者听到这句会如实回答，不会继续质疑；高压力画像不受影响。
+_CONFIRM_PROMPT_MARKS = ("您清楚了吗", "清楚了或者", "还有疑问", "同意或者不需要")
+
 _ACTION_FACT = {
     ANSWER_TAIL: "phone_tail", ANSWER_NAME: "contact_name",
     ANSWER_ORDER: "application_id", ANSWER_COMPANY: "company_name",
@@ -125,6 +129,7 @@ class AdversarySim(object):
         self.last_given = ""
         self.ask_streak = ""
         self.streak_n = 0
+        self.confirm_prompt = False
         self.hits = {k: 0 for k in WEAKNESS}
         self.levels = []
         self.blocked_by_missing_fact = []
@@ -133,6 +138,7 @@ class AdversarySim(object):
     # -- 观察：只用客服播出去的那句话 -------------------------------------
     def _observe(self, agent_text):
         t = agent_text or ""
+        self.confirm_prompt = any(w in t for w in _CONFIRM_PROMPT_MARKS)
         found = []
         if t and t == self.last_agent:
             found.append("repeat")
@@ -172,6 +178,16 @@ class AdversarySim(object):
 
     # -- 决策：哪里弱打哪里 ------------------------------------------------
     def _choose(self, found, asks):
+        # 低压力「配合者」对照画像：客服复述完问「您清楚了吗」，这类商家会
+        # 如实答「清楚了」，而不是继续把同一句质疑重复到通话结束。不补这条，
+        # A01 这种 label 写着「低压力配合者」、goal=confirm 的画像会被对抗器
+        # 逼成连续 8 轮质疑，造出和自身定义相反的假失败；它原来的「通过」
+        # 靠的也是客服在质疑中回写 unknown 这个错误行为（假绿）。
+        # 边界写死：只作用于 max_level<=2 的对照组，难度仍由弱点命中数驱动，
+        # 其余 8 个高压力画像的动作池、升级逻辑一字不改。
+        if (self.profile.get("goal") == "confirm" and self.max_level <= 2
+                and self.confirm_prompt):
+            return CONFIRM, ""
         if found and self.level >= 2 and self.rng.random() < 0.72:
             for w in found:
                 probe = _PROBE_FOR.get(w)

@@ -1,0 +1,86 @@
+{
+ "id": "adv_auto_001",
+ "created": "2026-11-08 21:05:29",
+ "from_baseline": "eval/reports/adversarial_baseline.json",
+ "targets": [
+  "agent_slot_loss|IDENTITY|answer_name|identity_ok",
+  "agent_noise_on_question|IDENTITY|cant_remember|no_voice",
+  "agent_slot_loss|GREETING|answer_name|identity_ok"
+ ],
+ "patches": [
+  {
+   "path": "stages.IDENTITY.reply_ask_tail",
+   "old": "好的，核对申请单需要您预留手机号的后四位，说四个数字就行。",
+   "value": "您刚报的联系人姓名我核对一下；如果方便，再说一下预留手机号的后四位，四个数字就行。",
+   "cluster": "agent_slot_loss|IDENTITY|answer_name|identity_ok",
+   "clusters": [
+    "agent_slot_loss|IDENTITY|answer_name|identity_ok"
+   ],
+   "rationale": "本地模板草案（确定性兜底）：保留核对关键词，不新增变量"
+  },
+  {
+   "path": "stages.IDENTITY.reply_noise",
+   "old": "不好意思，这边有点杂音没听清，您方便再说一次吗？不着急。",
+   "value": "不好意思，我没听明白您的意思。您是问要补什么材料，还是要核对申请单？我慢慢说。",
+   "cluster": "agent_noise_on_question|IDENTITY|cant_remember|no_voice",
+   "clusters": [
+    "agent_noise_on_question|IDENTITY|cant_remember|no_voice"
+   ],
+   "rationale": "本地模板草案（确定性兜底）：保留核对关键词，不新增变量"
+  },
+  {
+   "path": "stages.GREETING.reply",
+   "old": "您好，我是京东商家资质审核专员，请问您是{company_name}的{contact_role}吗？",
+   "value": "您好，我是京东商家资质审核专员，请问您是{company_name}的{contact_role}吗？我这边核对一下申请单，刚才报过的信息不会重复问。",
+   "cluster": "agent_slot_loss|GREETING|answer_name|identity_ok",
+   "clusters": [
+    "agent_slot_loss|GREETING|answer_name|identity_ok"
+   ],
+   "rationale": "本地模板草案（确定性兜底）：保留核对关键词，不新增变量"
+  }
+ ],
+ "code_only": [
+  {
+   "key": "agent_no_progress|GREETING|no_wrong_person|not_me",
+   "reason": "槽位轮换与收尾条件（dialogue._next_identity_slot）"
+  },
+  {
+   "key": "agent_no_progress|IDENTITY|cant_remember|no_voice",
+   "reason": "槽位轮换与收尾条件（dialogue._next_identity_slot）"
+  }
+ ],
+ "unexplained": [],
+ "adversarial_gate": {
+  "result": "rejected",
+  "at": "2026-11-08 21:05:30",
+  "baseline": "eval/reports/adversarial_baseline.json",
+  "candidate": "config/evolution/candidates/adv_auto_001.json",
+  "checks": [
+   {
+    "check": "train 不降",
+    "pass": true,
+    "detail": "7 → 7"
+   },
+   {
+    "check": "holdout 不降",
+    "pass": true,
+    "detail": "3 → 3"
+   },
+   {
+    "check": "有实际收益",
+    "pass": false,
+    "detail": "通过 10→10，系统缺陷会话 0→0"
+   },
+   {
+    "check": "无个体回退",
+    "pass": true,
+    "detail": "无"
+   },
+   {
+    "check": "按难度分组无回退",
+    "pass": true,
+    "detail": "L1 1→1  L2 5→5  L3 2→2  L4 2→2"
+   }
+  ]
+ }
+}

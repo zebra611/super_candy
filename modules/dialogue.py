@@ -2274,6 +2274,33 @@ def _stage_offer(session, text, flags):
                   next_stage="CONFIRM", intent=_intent_name(flags))
 
 
+# 「客户还在谈」的信号：提问、质疑来电或费用、重复报已给过的核身信息。
+# 这些都不是表态。旧逻辑把它们一并算成「含糊」，追问两次就回写 unknown——
+# 客户还在问「你哪来的我号码」，工单却已经记了「不确定」并收线
+# （11-08 对抗集 A03/A06/A07/A10 逐轮复现）。
+_ENGAGED_MARKS = ("凭什么", "你谁", "哪来的", "怎么信", "别是", "推销",
+                  "补什么", "怎么弄", "去哪", "第几遍")
+
+
+def _still_engaged(session, text, flags):
+    """客户这一轮还在主动沟通（而不是含糊表态）？只看字面，不猜意图。"""
+    # 已经明确表态就不能算「还在谈」。「哦免费啊，那还是要吧」里带「免费」，
+    # 旧词表把它当成质疑，转专员收线，整通电话一张工单都没有（L07 实测）。
+    if flags.get("yes") or flags.get("no"):
+        return False
+    if flags.get("ask"):
+        return True
+    if any(w in text for w in _ENGAGED_MARKS):
+        return True
+    # 反复报已经给过的尾号/姓名：客服没接住，不是客户没表态。
+    # 用 slot_history 而不是当前值：核不上时当前值会被清空，历史不会。
+    for values in (session.get("slot_history") or {}).values():
+        for v in values or []:
+            if len(str(v)) >= 2 and str(v) in text:
+                return True
+    return False
+
+
 def _stage_confirm(session, text, flags):
     """CONFIRM：拿到明确答复。
 
@@ -2358,6 +2385,26 @@ def _stage_confirm(session, text, flags):
             return _reply(session, "%s %s" % (_ans, _tail),
                           intent="qa" if _qa_hit else "ask",
                           qa_hit=_qa_hit, kb_hit=_kb_hit)
+
+    # 客户还在提问 / 质疑 / 重复给信息，而这一轮答不上：这不是「含糊表态」。
+    # 旧逻辑把它计入 confirm_asks，两次就回写 unknown 收线，等于替一个还没
+    # 谈完的客户编结论。第一次如实说明确认不到并留在 CONFIRM；第二次转专员
+    # 收线，全程不产生回写事件——工单里不该出现凭空猜出来的「不确定」。
+    if _still_engaged(session, text, flags):
+        n = int(session.get("confirm_engaged", 0)) + 1
+        session["confirm_engaged"] = n
+        if n >= 2:
+            return _finish(
+                session,
+                cfg.get("reply_engaged_handoff")
+                or "您的问题我这边确认不到，先不打扰您了；稍后专员会用官方号码"
+                   "再联系您，需要补充的材料清单也会同步到商家后台，感谢您的接听，再见。",
+                "unresolved_question")
+        return _reply(
+            session,
+            cfg.get("reply_unanswered")
+            or "这个我这边确认不到，稍后让专员用官方号码给您回电说明，可以吗？",
+            next_stage="CONFIRM", intent="ask")
 
     session["confirm_asks"] += 1
     if session["confirm_asks"] < 2:

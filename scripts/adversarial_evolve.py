@@ -395,13 +395,24 @@ def cmd_check(a):
     import inspect
     ok_iface = list(inspect.signature(AS.say).parameters) == ["self", "agent_text"]
 
+    # 11-08：低压力「配合者」对照画像听到确认提问会如实收尾；高压力画像
+    # 一个字不变。防止有人靠「把客户调乖」把对抗集刷成满分。
+    from modules.adversary import CONFIRM as ACT_CONFIRM
+    _q = "我跟您复述一下：您清楚了吗？"
+    _coop = AS(dict(p, goal="confirm", max_level=2), company, seed="CHK3")
+    _hard = AS(dict(p, goal="confirm", max_level=4), company, seed="CHK4")
+    ok_coop = (_coop.say(_q) or {}).get("action") == ACT_CONFIRM
+    ok_hard = (_hard.say(_q) or {}).get("action") != ACT_CONFIRM
+
     checks = [("同种子逐字节可复现", ok_det), ("绝不念出花括号/XX 占位", ok_no_placeholder),
               ("客服复读时难度确实上升", ok_escalate),
               ("客服正常回答时不乱加压", ok_calm),
               ("档案缺事实时不编造、不念占位", ok_fact),
               ("闸门第六道：平均值涨但 L4 塌了会拒绝", ok_group),
               ("静态校验能拦下新增花括号占位", ok_static),
-              ("say() 只收客服文本，拿不到阶段/意图/槽位", ok_iface)]
+              ("say() 只收客服文本，拿不到阶段/意图/槽位", ok_iface),
+              ("低压力配合者听到确认提问会收尾", ok_coop),
+              ("高压力画像不会突然配合（不许把客户调乖刷分）", ok_hard)]
     for n, ok in checks:
         print("  [%s] %s" % ("通过" if ok else "失败", n))
     return 0 if all(ok for _, ok in checks) else 1

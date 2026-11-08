@@ -2732,7 +2732,37 @@ def main():
     check("反向：真说清楚了仍按同意回写（修复没把肯定也挡掉）",
           _ry["intent"] == "consent" and _yc["slots"].get("consent") is True,
           ["intent=%s consent=%r" % (_ry["intent"], _yc["slots"].get("consent"))])
+
+    # 客户还在提问/质疑/重复给信息时，不许把「没表态」记成 unknown 回写收线
+    # （11-08 对抗集 A03/A06/A07/A10 逐轮复现的真实缺陷）。
+    _eg = dialogue.new_session("verify-engaged")
+    _eg["stage"] = "CONFIRM"
+    _eg["slots"]["identity_confirmed"] = True
+    _eg["slot_history"]["tail"] = ["0086"]
+    _e1 = dialogue.respond(_eg, "那我具体要补什么材料")
+    _e2 = dialogue.respond(_eg, "你哪来的我号码，怎么信你")
+    check("客户还在提问：两次也不回写 unknown，转专员收线",
+          not _e1.get("end_reason")
+          and bool(_e2.get("end_reason"))
+          and _eg["slots"].get("consent") in ("", None),
+          ["一轮 end_reason=%r 二轮 end_reason=%r consent=%r"
+           % (_e1.get("end_reason"), _e2.get("end_reason"),
+              _eg["slots"].get("consent"))])
     config_loader.set_scene(_nc_prev_scene)
+
+    # 反向（L07 十轮改口用例）：明确表态优先于「还在谈」判定。
+    # 端到端由 run_eval 的 L07 守（88/88）；这里直接测纯函数，是刻意做的
+    # 变异靶子——把这条排除规则删掉，本断言必须当场报红。
+    _lf = dialogue.new_session("verify-free-yes")
+    _lf["stage"] = "CONFIRM"
+    _lf["slots"]["identity_confirmed"] = True
+    _yes = {"ask": True, "yes": True}
+    _no = {"ask": True, "yes": False}
+    _a = dialogue._still_engaged(_lf, "那还是要吧", _yes)
+    _b = dialogue._still_engaged(_lf, "那还是要吧", _no)
+    check("反向：明确表态优先于「还在谈」判定（L07 不回归）",
+          not _a and _b,
+          ["yes=True → %s（应 False）；yes=False → %s（应 True）" % (_a, _b)])
 
     # ---- PR #42 收线覆盖（合并审查后补的守卫） ----
     import ws_channel as _wsc

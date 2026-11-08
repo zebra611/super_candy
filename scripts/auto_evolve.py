@@ -2,13 +2,15 @@
 """一键自进化：把「体检 → 读基线 → 提案 → 闸门」固定成一条命令。
 
 用法（项目根目录）：
-    python scripts/auto_evolve.py             # 一轮：本地模板草案 → 闸门 → 上架提示
+    python scripts/auto_evolve.py             # 一轮：三条链各跑一遍，本地模板草案 → 闸门 → 上架提示
     python scripts/auto_evolve.py --llm       # 改由大模型起草，坏文案仍由本地模板兜底
     python scripts/auto_evolve.py --no-gate   # 只到提案，不跑闸门
 
-顺序写在输出的第 1～5 步里，对外只暴露这一行命令。
-上架（promote）永远不自动做，必须单独一条命令。
+三条链：L2 话术链、性格链、自适应对抗链。顺序写在输出的第 1～5 步里，
+对外只暴露这一行命令。上架（promote）永远不自动做，必须单独一条命令。
 空草稿或被静态拒绝的草稿会就地重做，不累积垃圾候选。
+对抗链会先复算基线分数：代码或模拟器改过却没重定基线时直接中止，
+不许拿旧基线把别处的收益算到话术候选头上。
 """
 
 import glob
@@ -27,6 +29,7 @@ _L2_DIR = os.path.join(_ROOT, "config", "evolution", "candidates")
 _P_DIR = os.path.join(_ROOT, "config", "evolution", "persona", "candidates")
 _L2_VERSIONS = os.path.join(_ROOT, "config", "evolution", "versions.json")
 _P_VERSIONS = os.path.join(_ROOT, "config", "evolution", "persona", "versions.json")
+_ADV_BASE = os.path.join(_ROOT, "eval", "reports", "adversarial_baseline.json")
 
 
 def _rel(path):
@@ -133,6 +136,83 @@ def _newest_gated(path):
     return ""
 
 
+#: 对抗候选的确定性兜底文案：与 evolve.validate_candidate 的静态规则一致，
+#: 不联网、不花钱、不依赖密钥，也不会写出原句没有的花括号变量。
+_ADV_DRAFTS = {
+    "stages.IDENTITY.reply_ask_tail":
+        "您刚报的联系人姓名我核对一下；如果方便，再说一下预留手机号的后四位，四个数字就行。",
+    "stages.IDENTITY.reply_noise":
+        "不好意思，我没听明白您的意思。您是问要补什么材料，还是要核对申请单？我慢慢说。",
+    "stages.GREETING.reply":
+        "您好，我是京东商家资质审核专员，请问您是{company_name}的{contact_role}吗？"
+        "我这边核对一下申请单，刚才报过的信息不会重复问。",
+}
+
+
+def _adv_draft_fallback(cand, base_cfg):
+    """把对抗候选填成可送闸门的形状；返回替换条数。"""
+    n = 0
+    for p in cand.get("patches") or []:
+        val, old = str(p.get("value") or ""), str(p.get("old") or "")
+        extra = set(re.findall(r"\{[^}]+\}", val)) - set(re.findall(r"\{[^}]+\}", old))
+        bad = (not val.strip() or bool(extra)
+               or bool(_evo.validate_candidate({"patches": [p]}, base_cfg)))
+        if bad:
+            p["value"] = _ADV_DRAFTS.get(p.get("path"), old)
+            p["rationale"] = "本地模板草案（确定性兜底）：保留核对关键词，不新增变量"
+            n += 1
+    return n
+
+
+def _adv_next_path():
+    n = 1
+    while True:
+        p = os.path.join(_L2_DIR, "adv_auto_%03d.json" % n)
+        if not os.path.exists(p):
+            return p
+        n += 1
+
+
+def _adv_pending():
+    """最近一份还没进过对抗闸门的草稿。"""
+    for p in reversed(sorted(glob.glob(os.path.join(_L2_DIR, "adv_auto_*.json")))):
+        try:
+            c = _read(p)
+        except Exception:
+            continue
+        if "adversarial_gate" not in c:
+            return p, c
+    return None, None
+
+
+def _adv_ready(cand):
+    patches = cand.get("patches") or []
+    return bool(patches) and all(str(p.get("value") or "").strip() for p in patches)
+
+
+def _levels(d):
+    return {k: (v["ok"], v["total"]) for k, v in (d.get("by_level") or {}).items()}
+
+
+def _adv_doctor(base):
+    """重跑同一批对抗客户，确认登记的基线分数没漂；返回问题列表。"""
+    tmp = os.path.join(_ROOT, "eval", "reports", "_adv_doctor.json")
+    rc = _run("对抗基线复算", [_PY, "scripts/adversarial_evolve.py", "run",
+                              "--json", _rel(tmp), "--quiet"], allow_fail=True)
+    if rc != 0 or not os.path.exists(tmp):
+        return ["对抗跑批没跑起来"]
+    got = _read(tmp)
+    os.remove(tmp)
+    problems = []
+    for k in ("all", "train", "holdout"):
+        a, b = base["summary"][k]["ok"], got["summary"][k]["ok"]
+        if a != b:
+            problems.append("%s %s→%s" % (k, a, b))
+    if _levels(base) != _levels(got):
+        problems.append("按难度分组不一致")
+    return problems
+
+
 def main():
     argv = sys.argv[1:]
     use_llm = "--llm" in argv
@@ -140,12 +220,23 @@ def main():
     for d in (_L2_DIR, _P_DIR):
         os.makedirs(d, exist_ok=True)
 
-    print("一键自进化｜1 体检 → 2 读基线 → 3 提案 → 4 闸门 → 5 上架")
+    print("一键自进化｜三条链（L2 话术 / 性格 / 自适应对抗）：1 体检 → 2 读基线 → 3 提案 → 4 闸门 → 5 上架")
 
-    print("\n第 1 步｜地基体检（两条链都要过，不过就不往下跑）")
+    print("\n第 1 步｜地基体检（三条链都要过，不过就不往下跑）")
     _run("L2 链", [_PY, "scripts/evolve.py", "doctor", "--deep"])
     _run("性格链", [_PY, "scripts/evolve_persona.py", "doctor", "--deep"])
-    print("  [完成] 两处地基对齐，后面的分数才算数")
+    _run("对抗链（10 项反向自测）", [_PY, "scripts/adversarial_evolve.py", "check"])
+    if not os.path.exists(_ADV_BASE):
+        print("  [中止] 找不到对抗基线报告：%s" % _rel(_ADV_BASE))
+        print("  修法：python scripts/adversarial_evolve.py run")
+        sys.exit(1)
+    adv_base = _read(_ADV_BASE)
+    drift = _adv_doctor(adv_base)
+    if drift:
+        print("  [中止] 对抗基线已失真：%s" % "、".join(drift))
+        print("  修法：python scripts/adversarial_evolve.py run 重定基线，再跑本命令")
+        sys.exit(1)
+    print("  [完成] 三处地基对齐，后面的分数才算数")
 
     print("\n第 2 步｜读当前基线（提案和闸门必须共用同一份报告）")
     l2_report = os.path.join(_ROOT, _read(_L2_VERSIONS).get("baseline_json") or "")
@@ -161,7 +252,16 @@ def main():
         print("  %s：通过 %s/%s，系统缺陷会话 %s，缺陷构成 %s"
               % (label, (s.get("all") or {}).get("ok"), (s.get("all") or {}).get("total"),
                  s.get("agent_defect_sessions"), s.get("codes")))
-    print("  [完成] 第 1 步的深度体检已重跑复算过这份基线；不再另外采样，避免分母不一致")
+    _as = adv_base.get("summary") or {}
+    print("  对抗：通过 %s/%s（train %s/%s、holdout %s/%s），系统缺陷会话 %s"
+          % (_as["all"]["ok"], _as["all"]["total"],
+             _as["train"]["ok"], _as["train"]["total"],
+             _as["holdout"]["ok"], _as["holdout"]["total"],
+             _as["agent_defect_sessions"]))
+    print("        按难度 %s"
+          % "  ".join("%s %s/%s" % (k, v["ok"], v["total"])
+                     for k, v in sorted((adv_base.get("by_level") or {}).items())))
+    print("  [完成] 第 1 步已重跑复算过这三份基线；不再另外采样，避免分母不一致")
 
     print("\n第 3 步｜按失败聚类出候选")
     l2_path, l2_cand = _pending(_L2_DIR)
@@ -200,7 +300,30 @@ def main():
         if rc != 0 and p_cand is None:
             print("  [完成] 性格集全部跑满，本轮没有可优化的性格（正常，不是报错）")
 
-    print("\n第 4 步｜双跑闸门（同一批电话只换配置；不过就只留档）")
+    adv_path, adv_cand = _adv_pending()
+    if adv_cand is not None and _adv_ready(adv_cand):
+        print("  [沿用] 上一轮对抗草稿已填好：%s" % _rel(adv_path))
+    else:
+        if adv_cand is None:
+            adv_path = _adv_next_path()
+        _run("对抗提案", [_PY, "scripts/adversarial_evolve.py", "propose",
+                         "--out", _rel(adv_path)], allow_fail=True)
+        adv_cand = _read(adv_path) if os.path.exists(adv_path) else {}
+        if not (adv_cand.get("patches") or []):
+            print("  [完成] 对抗集已跑满，本轮没有可优化簇（正常，不是报错）")
+            if adv_cand.get("code_only") or adv_cand.get("unexplained"):
+                print("         仍有 %d 个只能改代码的簇、%d 通待归因失败，"
+                      "这些不进优化池"
+                      % (len(adv_cand.get("code_only") or []),
+                         len(adv_cand.get("unexplained") or [])))
+        else:
+            base_cfg = _read(os.path.join(_ROOT, "config", "scenes", "pop_reject.json"))
+            n = _adv_draft_fallback(adv_cand, base_cfg)
+            if n:
+                _write(adv_path, adv_cand)
+                print("  [完成] %d 句改写用本地模板填好（不调模型也能进闸门）" % n)
+
+    print("\n第 4 步｜三链闸门（同一批电话只换配置；不过就只留档）")
     if no_gate:
         print("  [跳过] 本轮用了 --no-gate")
     else:
@@ -219,6 +342,19 @@ def main():
             rc = _run("性格闸门", [_PY, "scripts/evolve_persona.py", "gate", _rel(p_path)],
                       allow_fail=True)
             print("  [结果] %s" % ("通过，进第 5 步" if rc == 0 else "未通过，版本只留档"))
+        if adv_cand and _adv_ready(adv_cand):
+            rc = _run("对抗闸门", [_PY, "scripts/adversarial_evolve.py", "gate",
+                                  _rel(adv_path)], allow_fail=True)
+            after = _read(adv_path) if os.path.exists(adv_path) else {}
+            g = (after.get("adversarial_gate") or {}).get("result")
+            if g == "passed":
+                print("  [结果] 五道判据全过，可人工评估上架（脚本不会自动上线）")
+            elif g:
+                print("  [结果] 未通过，候选只留档，线上话术未动")
+            else:
+                print("  [结果] 候选不合规，静态拒绝；没有生成版本")
+        else:
+            print("  [完成] 对抗集没有可改话术的失败簇，本轮无需闸门")
 
     print("\n第 5 步｜上架（永远单独一条命令，脚本不会自己上线）")
     v = _newest_gated(_L2_VERSIONS)
@@ -229,9 +365,12 @@ def main():
         print("  性格待上架：python scripts/evolve_persona.py promote %s" % pv)
     if not v and not pv:
         print("  没有待上架版本：闸门没过的候选只留档，线上话术一个字都没动")
+    print("  对抗链：闸门通过后需人工评估，不提供自动上架命令")
 
-    print("\n本轮结论：地基健康；没有新失败样本时，闸门会如实拒绝无收益的改动。")
-    print("想让它真的改东西：加更难的画像，或修掉需要改代码的缺陷，再跑一次本命令。")
+    print("\n本轮结论：三处地基健康；没有新失败样本时，闸门会如实拒绝无收益的改动。")
+    print("想让它继续进化：往 eval/personas_adversarial.json 加更难的画像（独立挑战集，")
+    print("不动 10 通与 12 画像的分母），或修掉只改代码那几簇里的缺陷；")
+    print("代码或画像改完先重定基线，再双击同一个文件。")
     return 0
 
 
