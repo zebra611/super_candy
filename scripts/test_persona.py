@@ -118,6 +118,11 @@ class TestGuard(unittest.TestCase):
         self.assertTrue(applied)
         self.assertIn("您慢慢看", out)
 
+    def test_question_does_not_get_statement_suffix(self):
+        """问句后不许接「我就不多说了」这类陈述式引导。"""
+        out, _ = self._adapt("那方便说一下您的姓名吗？")
+        self.assertEqual(out, "那方便说一下您的姓名吗？")
+
     def test_digits_cannot_disappear(self):
         out, _ = self._adapt("申请单编号 20261101001 请核对。")
         self.assertIn("20261101001", out)

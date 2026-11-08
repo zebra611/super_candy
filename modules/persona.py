@@ -209,7 +209,13 @@ def _apply_actions(base, rule, freeze=False, repeated=False, repeat_n=0):
     for pair in (rule.get("replace") or []):
         if isinstance(pair, list) and len(pair) == 2 and pair[0] in out:
             out = out.replace(pair[0], pair[1], 1)
-    return _append(out, rule.get("suffix") or "")
+    # 问句后面不许接陈述式引导：线上实测「那方便说一下您的姓名吗？…
+    # 我就不多说了」，刚问完又说不多说，自相矛盾。问句要的是等对方回答。
+    # avoid_repeat 不受影响——那是重复轮专用的换说法引导。
+    tail = rule.get("suffix") or ""
+    if out.rstrip().endswith(("？", "?")):
+        tail = ""
+    return _append(out, tail)
 
 
 def adapt(session, text, stage="", freeze=False):

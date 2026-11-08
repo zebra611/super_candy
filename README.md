@@ -72,10 +72,13 @@ NEED 阶段官方话术只播一次、第二次推进到确认（原样会连念
 （仍是 24/24），改注「核身校验失效」后 0/24，旧注入留作对照、不放宽判据。
 
 回归：`verify.py` **209/209**（+4 条性格证据）、`run_eval.py` **88/88**、
-`sim_eval` **9/10**、性格集 **12/12**、`test_persona` **23/23**、
+`sim_eval` **9/10**、性格集 **12/12**、`test_persona` **24/24**、
 `test_qa_dialogue` 15/15、`test_official_script` 14/14、`test_kb` 28/28、
 `test_tools` 34/34、`test_nlg` 25/25、`test_intent` 14/14；
-三个数据校验器全过，两条进化链 `doctor`（L2 用 `--deep`）均通过。
+三个数据校验器全过，两条进化链 `doctor --deep` 均通过。
+线上实测还抓到一处措辞矛盾并修掉：急性子在**问句**后也被追加「我就不多说了」，
+变成「那方便说一下您的姓名吗？…我就不多说了」。现在问句后不追加陈述式引导，
+`test_persona` 加了一条断言守住。
 文档：`docs/32` §九。
 
 
@@ -728,7 +731,7 @@ scripts/            verify（209 条自检）/ run_eval（跑批）/ bench_voice
                     test_*（离线自测，八套已作为证据 16/30 挂进 verify；
                      test_qa_dialogue 专测官方 QA 接进对话后的边界，15 条；
                      test_official_script 专测官方话术填槽，14 条；
-                     test_persona 专测性格识别/守卫/闸门，23 条）
+                     test_persona 专测性格识别/守卫/闸门，24 条）
                     check_official_scripts（话术填槽校验 + 3 种变异反向自测）
                     evolve_persona（性格规则表闭环：6 道闸门 + 按性格分组无回退）
                     clean_events · archive_events（库体检/归档）/ check_key / 试听 / 录音验识别

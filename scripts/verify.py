@@ -2662,7 +2662,7 @@ def main():
                                                         "evolve.py"), "doctor", "--deep"],
                           cwd=ROOT, capture_output=True, text=True, timeout=240)
     _pd2 = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
-                                                        "evolve_persona.py"), "doctor"],
+                                                        "evolve_persona.py"), "doctor", "--deep"],
                           cwd=ROOT, capture_output=True, text=True, timeout=180)
     check("性格单测（含真跑识别一致率）+ 两条进化链体检全部通过",
           _pt.returncode == 0 and _pd1.returncode == 0 and _pd2.returncode == 0,

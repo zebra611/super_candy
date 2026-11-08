@@ -201,6 +201,17 @@ def cmd_doctor(args):
         problems.append("线上规则表与 active 快照不一致")
     if not base or base != snap:
         problems.append("基线结果不是用 active 规则表跑出来的")
+
+    # --deep：和 evolve.py 对称。规则表哈希只能证明规则没变，
+    # 证明不了对话代码没变；直接重跑一遍 active 规则表比对分数。
+    if args.get("deep") and not problems:
+        rec = next((h for h in vd["history"] if h["version"] == active), {})
+        want = (rec.get("metrics") or {}).get("all_ok")
+        tmp = os.path.join(_ROOT, "eval", "reports", "_persona_doctor.json")
+        got = _metrics(run_sim(_snapshot(active), tmp, tag="doctor_" + active))["all_ok"]
+        print("深度复算：登记 %s/12，重跑 %s/12" % (want, got))
+        if want is not None and got != want:
+            problems.append("基线分数已失真（%s → %s）：代码变过，先跑 rebase" % (want, got))
     if problems:
         print("\n体检不通过：")
         for x in problems:
