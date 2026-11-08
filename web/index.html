@@ -1,0 +1,1516 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>super_candy · 哑链路</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --card: #ffffff; --line: #e3e2dd;
+    --ink: #1f1f1d; --muted: #6b6a65; --blue: #185fa5; --blue-bg: #e6f1fb;
+    --amber: #854f0b; --amber-bg: #faeeda; --gray-bg: #f1efe8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    font-size: 14px; line-height: 1.6;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font-size: 18px; font-weight: 500; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button {
+    font: inherit; padding: 8px 16px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: #fff; color: var(--ink);
+  }
+  button:hover { border-color: #c9c8c2; }
+  button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+  button.danger { background: #fff; border-color: #e0b4b4; color: #a32d2d; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input[type=text] {
+    flex: 1; min-width: 200px; font: inherit; padding: 8px 12px;
+    border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink);
+  }
+  #log { min-height: 220px; max-height: 420px; overflow-y: auto; }
+  .msg { display: flex; gap: 8px; margin-bottom: 10px; }
+  .who { flex: 0 0 46px; color: var(--muted); font-size: 12px; padding-top: 2px; }
+  .bubble { flex: 1; padding: 8px 12px; border-radius: 8px; background: var(--gray-bg); }
+  .bubble.agent { background: var(--blue-bg); color: #0c447c; }
+  .bubble.sys { background: #fff; border: 1px dashed var(--line); color: var(--muted); font-size: 12px; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--amber-bg); color: var(--amber); margin-left: 6px; }
+  .meters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .meter { background: var(--gray-bg); border-radius: 8px; padding: 10px 12px; }
+  .meter .k { font-size: 11px; color: var(--muted); }
+  .meter .v { font-size: 17px; font-weight: 500; }
+  #metricNote { color: var(--muted); font-size: 11px; margin-top: 8px; }
+  #events { font-family: Consolas, monospace; font-size: 11px; color: var(--muted); white-space: pre-wrap; max-height: 240px; overflow-y: auto; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .randinfo { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 18px; }
+  .randinfo .ri { display: flex; gap: 8px; font-size: 13px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+  .randinfo .ri.long { grid-column: 1 / -1; }
+  .randinfo .k { flex: 0 0 120px; color: var(--muted); }
+  .randinfo .v { flex: 1; color: var(--ink); word-break: break-all; }
+  .randinfo .v.hl { color: #0c447c; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>super_candy · 外呼数字员工哑链路</h1>
+  <div class="sub" id="sceneLine">正在连接服务…</div>
+
+  <div class="card">
+    <div class="row">
+      <button id="btnStart" class="primary">开始通话（语音）</button>
+      <button id="btnText" class="primary" title="纯文字模式：不开启语音系统（不连麦克风、不合成/播放语音），直接在下方输入框打字与客服对话，便于快速测试">纯文字测试</button>
+      <button id="btnRandom" class="primary" title="纯预览：随机生成一家公司并展示在下方，不发起通话；之后点「纯文字测试」或「开始通话」即可让客服基于它主动发起询问（用于功能测试）">随机预览</button>
+      <button id="btnRec" disabled>暂停聆听</button>
+      <button id="btnEnd" disabled class="danger">挂断</button>
+      <span class="hint" id="sessionLine">未开始</span>
+    </div>
+    <div class="hint" id="phaseLine" style="margin-top:8px;font-weight:600">状态：未开始</div>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="textInput" placeholder="没有麦克风就打字；留空直接点发送 = 模拟用户不说话" disabled>
+      <button id="btnSend" disabled>发送</button>
+    </div>
+    <div class="hint" id="audioLine" style="margin-top:8px">麦克风未启用。点「开始通话」后麦克风会自动打开，直接说话即可，客服说话时可以插话打断。</div>
+    <div class="hint" id="liveSubtitle" style="margin-top:4px;min-height:16px;color:#0c447c"></div>
+  </div>
+
+  <div class="card">
+    <div id="log"></div>
+  </div>
+
+  <div class="card">
+    <div class="meters">
+      <div class="meter"><div class="k">本轮首字响应（T4−T0）</div><div class="v" id="mFirst">—</div></div>
+      <div class="meter"><div class="k">本轮处理耗时（服务端）</div><div class="v" id="mTotal">—</div></div>
+      <div class="meter"><div class="k">首字 P50 / P95（语音轮）</div><div class="v" id="mPct" style="font-size:13px">—</div></div>
+      <div class="meter"><div class="k">闭环通话数</div><div class="v" id="mClosed">—</div></div>
+    </div>
+    <div id="metricNote">门槛 2000ms。首字口径要等第一通语音电话才有样本。</div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <strong style="font-weight:500">事件链（这通电话到底发生了什么）</strong>
+      <button id="btnEvents" disabled>刷新</button>
+    </div>
+    <div id="events">还没有事件。</div>
+  </div>
+
+  <div class="card" id="randomCard" style="display:none">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <strong style="font-weight:500">本次外呼目标（测试用 · 客服将据此主动发起询问）</strong>
+      <span class="tag" id="randomMatched"></span>
+    </div>
+    <div id="randomInfo" class="randinfo"></div>
+    <div class="hint" style="margin-top:8px">上方为系统随机/指定锁定的公司档案。请对照客服开场白是否真的对上了这家公司（公司名 + 联系人身份），以验证四段式第②环；末行「驳回话术」是客服将要说的官方原话（槽位已按本档案填好，不会出现【】或 XX）。</div>
+  </div>
+</div>
+
+<script>
+// 全部状态放这里，避免到处找变量。
+// token 是这通电话的读取凭证：没有它，别人拿到 session_id 也查不到事件与报告。
+const S = { sessionId: null, token: null, pendingTarget: null, textOnly: false,
+            busy: false, turnId: 0, t0: 0,
+            // 连续通话状态机：idle → listening → user → thinking → agent → (打断) → user
+            phase: "idle", autoMode: false,
+            silentFrames: 0, bargeHits: 0, onsetHits: 0, prevPhase: "idle",
+            // 打断的两段式状态：idle（等声音）→ suspect（疑似，已压低音量）
+            // → probing（正在识别这段到底说了什么）。只有 identify 出实义文字才真停。
+            bargeState: "idle", bargeBuf: [], ducked: false,
+            // 当前正在播报的文本。用途：探针识别出的文字要是与它高度重合，
+            // 那就是**自己的回声**，不是用户在插话。没有这个字段时，
+            // 外放环境下麦克风收到自己的播报，ASR 会原样识别出客服的话，
+            // _has_interrupt_content 判"有实义"→ 直接停播。这是硬 bug。
+            agentText: "",
+            currentAudio: null, playToken: 0 };
+
+// VAD 判定参数。逐帧（20ms）算特征，不起模型：这段链路在浏览器主线程上跑，
+// 一秒 50 次，必须便宜。
+//
+// Z6 把"纯能量"升级成"能量 + 谱特征"，原因很实在：
+//   能量门挡不住键盘（瞬态够响）和摩擦声，演示现场敲一下键盘就会切一轮。
+//   语音与噪声在谱上的差别比在响度上大得多：
+//     · 过零率：语音 0.1~0.3，白噪/纸张摩擦 >0.4
+//     · 谱倾斜（400Hz 能量 / 2000Hz 能量）：语音低频强（>1），键盘高频强（<0.3）
+//   zcrMax / tiltMin 是**宽松值**：宁可多放进来（后面还有 3 帧确认 + 服务端
+//   VAD + ASR 三层），也不要漏掉真人说话。浏览器开了噪声抑制与 AGC，
+//   与离线语料的电平分布不同，所以这两个值现场还要用 ?vaddebug=1 看一眼再定。
+const VAD = {
+  speechRms: 0.020,      // 一帧超过它 = 有人在说话（约 -34dBFS）
+  silenceRms: 0.010,     // 低于它算静音
+  endpointFrames: 35,    // 连续 35 帧静音 = 700ms，判"说完了"
+  bargeRms: 0.035,       // 疑似插话阈值，**故意高于说话阈值**
+  bargeFrames: 3,        // 连续 3 帧（60ms）才算"疑似"，挡瞬时碰撞声
+  // 以下是"疑似之后"的两段式参数。光有能量不算插话，要等这段说完、
+  // 识别出实义文字才停播——否则清个嗓子就能把客服打断，而且不可逆。
+  probeSilenceFrames: 18,  // 疑似之后静音 18 帧（360ms）= 这一句说完了
+  bargeMaxFrames: 160,     // 最多攒 160 帧（3.2 秒），防止用户一直说导致永远不判
+  duckVolume: 0.12,        // 疑似期间把播报压到 12%（约 -18dB）
+  // Z6 新增：谱特征门与开口确认
+  zcrMax: 0.45,          // 过零率上限，挡白噪/纸张摩擦（0.45 偏宽，只为不误伤真人）
+  tiltMin: 0.35,         // 低频/高频能量比下限，挡键盘（实测键盘约 0.1）
+  onsetFrames: 2,        // 连续 2 帧（40ms）够"像人声"才算开口，键盘单帧不再触发
+};
+
+// 现场标定开关：地址后面加 ?vaddebug=1，麦克风状态行会实时显示 rms/zcr/tilt
+// 与判定结果。为什么要有：浏览器噪声抑制 + 设备频响会让"理论阈值"偏一截，
+// 现场 30 秒看一眼就知道该往哪调，比事后猜快得多。
+const VAD_DEBUG = /[?&]vaddebug=1/.test(location.search);
+
+const $ = (id) => document.getElementById(id);
+
+function log(who, text, tag) {
+  const box = document.createElement("div");
+  box.className = "msg";
+  const cls = who === "客服" ? "bubble agent" : (who === "系统" ? "bubble sys" : "bubble");
+  box.innerHTML = '<div class="who">' + who + '</div><div class="' + cls + '">' +
+                  escapeHtml(text) + (tag ? '<span class="tag">' + escapeHtml(tag) + '</span>' : '') + '</div>';
+  $("log").appendChild(box);
+  $("log").scrollTop = $("log").scrollHeight;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+// 本次外呼目标要展示的字段：键是档案字段名，值是中文标签，
+// 第三个元素为 true 表示"长文本，占整行"（驳回原因、需补材料）。
+// 命中公司名/联系人身份这两个开场白占位符来源字段，加高亮便于核对四段式第②环。
+const RAND_FIELDS = [
+  ["company_name", "公司名称", "hl"],
+  ["company_short_name", "公司简称"],
+  ["company_type", "公司类型"],
+  ["region", "地区"],
+  ["registered_address", "注册地址", "long"],
+  ["shop_name", "店铺名称"],
+  ["shop_id", "店铺编号"],
+  ["shop_id_tail", "店铺编号后四位"],
+  ["shop_type", "店铺类型"],
+  ["shop_status", "经营状态"],
+  ["shop_open_date", "开店时间"],
+  ["legal_representative", "法定代表人"],
+  ["contact_name", "联系人"],
+  ["contact_role", "联系人身份", "hl"],
+  ["phone_tail", "联系电话尾号"],
+  ["id_card", "身份证号"],
+  ["id_card_tail", "身份证后四位"],
+  ["credit_code", "统一社会信用代码"],
+  ["credit_code_tail", "信用代码后四位"],
+  ["bank_account_tail", "对公账户尾号"],
+  ["application_id", "申请单号"],
+  ["application_type", "申请类型"],
+  ["brand_name", "品牌名称"],
+  ["brand_registration_no", "商标注册号"],
+  ["category_l1", "经营类目(一级)"],
+  ["category_l2", "经营类目(二级)"],
+  ["category_l3", "经营类目(三级)"],
+  ["reject_code", "驳回代码"],
+  ["reject_category", "驳回类别"],
+  ["reject_reason", "驳回原因", "long"],
+  ["required_materials", "需补充材料", "long"],
+  ["recheck_deadline", "复核截止"],
+  ["close_mode", "关单方式"],
+  ["call_status", "外呼状态"],
+];
+
+const MATCHED_LABEL = {
+  "random_test": "随机生成",
+  "application_id": "指定复测",
+  "outbound_list": "外呼名单",
+};
+
+// 把后端回传的外呼目标档案渲染到页面下方的卡片里。
+// company 为空（非赛题场景 / 取空）时隐藏卡片并给一句提示。
+// scene = 本次随机到的驳回场景（后端用官方话术按本档案填好槽位）。
+// 没有 scene 不代表出错：京麦驳回按官方口径就是走站内指引、不外呼。
+function renderRandomCompany(company, matched_by, scene) {
+  const card = $("randomCard");
+  const info = $("randomInfo");
+  const tag = $("randomMatched");
+  if (!company || typeof company !== "object") {
+    card.style.display = "none";
+    info.innerHTML = "";
+    tag.textContent = "";
+    return;
+  }
+  card.style.display = "";
+  tag.textContent = MATCHED_LABEL[matched_by] || (matched_by || "");
+  let html = "";
+  for (const [key, label, flag] of RAND_FIELDS) {
+    const v = company[key];
+    if (v === undefined || v === null || v === "") continue;
+    const cls = "ri" + (flag === "long" ? " long" : "");
+    const vcls = "v" + (flag === "hl" ? " hl" : "");
+    html += '<div class="' + cls + '"><span class="k">' + escapeHtml(label) +
+            '</span><span class="' + vcls + '">' + escapeHtml(String(v)) + '</span></div>';
+  }
+  if (!html) html = '<div class="ri"><span class="k">提示</span><span class="v">该记录无可展示字段</span></div>';
+  // 驳回话术：官方话术表里的原话，【】槽位已按上面这份档案填好。
+  // 这一栏是给测试者核对"客服待会儿要说的原因，到底来自哪句话术"。
+  if (scene && scene.script) {
+    const from = scene.via === "reject_code" ? "按驳回代码命中" : "同业务域替身";
+    html += '<div class="ri long"><span class="k">驳回话术</span><span class="v">' +
+            escapeHtml(scene.script) +
+            '<span class="tag" style="margin-left:6px">官方 ' + escapeHtml(scene.id || "") +
+            ' · ' + escapeHtml(from) + '</span></span></div>';
+  } else {
+    html += '<div class="ri long"><span class="k">驳回话术</span><span class="v">' +
+            '本场景官方口径为站内指引（不外呼），没有电话话术</span></div>';
+  }
+  info.innerHTML = html;
+}
+
+// 启动时拉一次健康检查，确认后端活着
+async function boot() {
+  try {
+    const r = await fetch("/api/health");
+    const d = await r.json();
+    $("sceneLine").textContent = "场景：" + d.scene + " · 服务已就绪 · 首字门槛 " + d.gate_ms + "ms";
+  } catch (e) {
+    $("sceneLine").textContent = "连不上服务，确认 python app.py 是否在跑";
+  }
+}
+
+// 开始通话：拿 session_id 与 read_token，之后每一轮都要带它们。
+// opts.random=true  → 让后端从可电话外呼的档案里随机抽一条公司作为外呼目标；
+// opts.application_id=xxx → 指定某家（可复现复测）；
+// 都不带 → 优先用"随机预览"锁定的公司（S.pendingTarget），再没有就走外呼名单下一条。
+// opts.textOnly=true → 纯文字模式：不连麦克风、不合成/播放语音，只走打字对话。
+// 命中后后端会把"本次外呼目标"档案回传，我们在页面下方展示，便于对照客服开场白。
+async function startCall(opts) {
+  opts = opts || {};
+  const body = {};
+  // 优先用"随机预览"锁定的公司；只有显式指定/随机时才覆盖
+  if (S.pendingTarget && !opts.application_id && !opts.random) {
+    body.application_id = S.pendingTarget;
+  }
+  if (opts.application_id) body.application_id = opts.application_id;
+  if (opts.random) body.random = true;
+  const textOnly = !!opts.textOnly;
+
+  const r = await fetch("/api/call/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const d = await r.json();
+  S.sessionId = d.session_id;
+  S.token = d.read_token;
+  S.textOnly = textOnly;
+  S.pendingTarget = null;          // 已用于开会话，清掉；下次不重预览会走外呼名单
+  $("sessionLine").textContent = "会话 " + d.session_id + (textOnly ? "（纯文字）" : "");
+  $("btnStart").disabled = true;
+  $("btnRandom").disabled = true;   // 通话进行中两个起通话的入口都锁住，避免孤儿会话
+  $("btnText").disabled = true;
+  $("btnRec").disabled = true;      // 纯文字模式本就无麦克风；语音模式在拿到麦克风后再开
+  $("btnEnd").disabled = false;
+  $("textInput").disabled = false;
+  $("btnSend").disabled = false;
+  $("btnEvents").disabled = false;
+
+  // 展示本次外呼目标：随机/指定/名单命中的公司档案，让测试者一眼核对。
+  renderRandomCompany(d.company, d.matched_by, d.scene);
+
+  if (textOnly) {
+    // 纯文字模式：不启用任何语音系统，客服回复以文字形式显示在对话区。
+    $("audioLine").textContent = "纯文字模式：未启用语音系统（不连麦克风、不播放语音）。直接在下方输入框打字即可，客服会基于上方公司信息主动对话。";
+    S.autoMode = false;
+    S.phase = "idle";
+    setPhaseLine();
+  } else {
+    wsConnect();                   // S2：实时音频通道；纯文字模式不会走到这里（也不连麦克风）
+    // 连续通话：进来就把麦克风打开，用户直接说话，不用点任何按钮。
+    // 采集在整个通话期间常开——播报时也要开着，否则检测不到"用户想插话"。
+    A.seq = 0;                     // 新会话，帧序号从头开始（服务端也是从 0 期望）
+    S.onsetHits = 0;               // 开口确认计数也要清零，否则上一轮的残留会漏进来
+    try {
+      await startCapture();
+      S.autoMode = true;
+      S.phase = "agent";           // 开场白马上要播，此期间允许被打断
+      setPhaseLine();
+    } catch (e) {
+      S.autoMode = false;
+      S.phase = "idle";
+      log("系统", "拿不到麦克风：" + (e && e.message ? e.message : e) +
+          "（可用下面打字；或检查浏览器权限）");
+    }
+  }
+
+  if (d.opening) {
+    // 外呼由客服先开口：开场自报身份是六环节的第一环
+    log("客服", d.opening, "开场");
+    if (!textOnly) speak(d.opening_tts || { text: d.opening, mode: "browser" }, 0);
+  }
+  log("系统", textOnly
+    ? "纯文字会话已建立。直接在下框输入，客服会基于上方公司信息主动发起询问。"
+    : "通话已建立。直接说话即可，说完会自动提交；客服说话时可以随时插话打断。");
+}
+
+// 纯预览：随机抽一家公司展示在下方，**不发起通话、不创建会话**。
+// 锁定的公司（application_id）存进 S.pendingTarget，供随后「纯文字测试」或「开始通话」复用，
+// 这样客服就能基于"你刚预览的那家"主动发起四段式询问——即"客服也需要知道这家公司"。
+async function previewRandom() {
+  try {
+    const r = await fetch("/api/company/random");
+    const d = await r.json();
+    const c = d.company;
+    if (!c || typeof c !== "object") {
+      log("系统", "随机取公司失败：后端未返回档案。");
+      return;
+    }
+    S.pendingTarget = c.application_id || null;
+    renderRandomCompany(c, d.matched_by, d.scene);
+    const who = (c.company_name || "") + (c.contact_role ? "（" + c.contact_role + "）" : "");
+    log("系统", "已随机预览：" + who + " ［" + (MATCHED_LABEL[d.matched_by] || d.matched_by || "随机") +
+        "］。客服已拿到该公司信息；点「纯文字测试」或「开始通话」即可让客服基于它主动对话。");
+  } catch (e) {
+    log("系统", "随机预览失败：" + (e && e.message ? e.message : e));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// S1 采集：AudioWorklet 分帧
+// ---------------------------------------------------------------------------
+// 为什么不用 MediaRecorder：它只给压缩后的 webm，拿不到原始采样点——
+// 既不能切帧（做不了流式识别），也算不出能量（做不了 VAD），
+// 而且服务端还得先解码才知道音频有多长。
+// 现在换成：麦克风 → AudioWorklet 拿原始 PCM → 重采样 16k → 20ms 一帧 → 每 8 帧上传。
+
+// worklet 必须作为独立模块加载，所以拼成字符串再走 Blob URL，
+// 这样前端仍然只有 index.html 一个文件（不新增静态资源，部署不用改路由）。
+const WORKLET_SRC = `
+class PcmCollector extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.ratio = sampleRate / 16000;   // 一般是 48000/16000 = 3
+    this.pos = 0;       // 跨 block 保留的小数位置，保证重采样连续
+    this.tail = 0;      // 上一 block 的最后一个采样，拼接用
+    this.frame = new Int16Array(320);  // 20ms @16k
+    this.fill = 0;
+    this.seq = 0;       // 帧序号，服务端靠它发现丢帧
+  }
+  emit(v) {
+    v = v < -1 ? -1 : (v > 1 ? 1 : v);
+    this.frame[this.fill++] = v < 0 ? v * 0x8000 : v * 0x7fff;
+    if (this.fill === this.frame.length) {
+      // 转移所有权而不是复制，主线程再拼批
+      this.port.postMessage({ seq: this.seq++, pcm: this.frame.buffer }, [this.frame.buffer]);
+      this.frame = new Int16Array(320);
+      this.fill = 0;
+    }
+  }
+  process(inputs) {
+    const input = inputs[0];
+    if (!input || input.length === 0 || !input[0]) return true;
+    const n = input[0].length;
+    // 下混成单声道（多声道设备取平均），契约要求 mono
+    const mono = new Float32Array(n);
+    for (let c = 0; c < input.length; c++) {
+      const d = input[c];
+      for (let i = 0; i < n; i++) mono[i] += d[i] / input.length;
+    }
+    // 线性插值重采样到 16k：arr[0] 是上一块的尾巴，arr[1..n] 是本块
+    const arr = new Float32Array(n + 1);
+    arr[0] = this.tail;
+    arr.set(mono, 1);
+    let p = this.pos;
+    while (p < n) {                       // 需要 arr[p+1]，故 p < n
+      const i = p | 0;
+      const f = p - i;
+      this.emit(arr[i] * (1 - f) + arr[i + 1] * f);
+      p += this.ratio;
+    }
+    this.pos = p - n;                     // 折算到下一块坐标（下一块 arr[0] = 本块 arr[n]）
+    this.tail = mono[n - 1];
+    return true;
+  }
+}
+registerProcessor('pcm-collector', PcmCollector);
+`;
+
+// 采集与上传的状态。录一轮就重置一次，避免跨轮串数据。
+const A = { ctx: null, node: null, gain: null, src: null, stream: null,
+            seq: 0, frames: 0, samples: 0, dropped: 0,
+            batch: [], inflight: 0, queue: Promise.resolve(),
+            srvFrames: 0, srvSamples: 0, srvGaps: 0 };
+
+const BATCH_FRAMES = 8;      // 8 帧 = 160ms 一次请求，兼顾延迟与请求数
+const MAX_INFLIGHT = 6;      // 网络跟不上时的背压上限，超了丢片并记账
+
+// 开采集：拿麦克风、装 worklet、接管线
+async function startCapture() {
+  // 回声消除必须开。否则播报声会被麦克风收回去，VAD 以为用户在说话，
+  // 结果就是每播一句都自我打断——这是 S3/S6 最容易踩的坑，源头在这里。
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true,
+             noiseSuppression: true, autoGainControl: true }
+  });
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: "application/javascript" }));
+  try {
+    await ctx.audioWorklet.addModule(url);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+  const src = ctx.createMediaStreamSource(stream);
+  const node = new AudioWorkletNode(ctx, "pcm-collector");
+  node.port.onmessage = (e) => onFrame(e.data);
+  // 必须接到 destination 才会被音频图拉动；gain=0 保证不把麦克风声音放出来
+  const gain = ctx.createGain();
+  gain.gain.value = 0;
+  src.connect(node);
+  node.connect(gain);
+  gain.connect(ctx.destination);
+
+  Object.assign(A, { ctx, node, gain, src, stream,
+                     frames: 0, samples: 0, dropped: 0,
+                     batch: [], inflight: 0, queue: Promise.resolve(),
+                     srvFrames: 0, srvSamples: 0, srvGaps: 0 });
+  return { sampleRate: ctx.sampleRate };
+}
+
+// 停采集：先发完尾巴，再断开资源。返回这一轮的采集统计。
+async function stopCapture() {
+  if (A.node) A.node.port.onmessage = null;
+  flushBatch();                    // 最后不足一批的帧也要发出去
+  await A.queue;                   // 等所有分片落地，否则服务端样本数会少一截
+  try {
+    if (A.gain) A.gain.disconnect();
+    if (A.node) A.node.disconnect();
+    if (A.src) A.src.disconnect();
+  } catch (e) { /* 已经断开过就忽略 */ }
+  if (A.ctx) { try { await A.ctx.close(); } catch (e) { /* 同上 */ } }
+  if (A.stream) A.stream.getTracks().forEach(t => t.stop());   // 及时松开麦克风
+
+  const stat = { frames: A.frames, samples: A.samples, dropped: A.dropped };
+  A.ctx = A.node = A.gain = A.src = A.stream = null;
+  return stat;
+}
+
+// 收到一帧：先做 VAD 判定，再决定要不要攒进上传批次。
+function onFrame(d) {
+  const pcm = new Int16Array(d.pcm);
+  A.frames += 1;
+  A.samples += pcm.length;
+
+  if (S.autoMode) {
+    vadTick(analyzeFrame(pcm));
+    // 只在"该收用户声音"的两个状态上传。思考中/播报中的音频不能进识别：
+    // 播报时麦克风是开着的（要判打断），会把客服自己的声音采进来。
+    if (S.phase === "listening" || S.phase === "user") {
+      A.batch.push(pcm);
+      if (A.batch.length >= BATCH_FRAMES) flushBatch();
+    } else if (S.bargeState === "suspect") {
+      // 疑似插话期间单独攒一小段，用来问"这到底是不是人话"。
+      // 千万不能进 A.batch：那会把客服自己的播报声混进本轮识别。
+      S.bargeBuf.push(pcm);
+    }
+  }
+  updateAudioLine();
+}
+
+// 一帧 PCM16 的均方根，归一到 0~1。320 个采样，一秒 50 次，开销可以忽略。
+function frameRms(pcm) {
+  let sum = 0;
+  for (let i = 0; i < pcm.length; i++) {
+    const v = pcm[i] / 32768;
+    sum += v * v;
+  }
+  return Math.sqrt(sum / pcm.length);
+}
+
+// 单频点能量（Goertzel）。只要几个频点，比做 FFT 便宜一个量级。
+function goertzel(pcm, freq, sr) {
+  const coeff = 2 * Math.cos(2 * Math.PI * freq / sr);
+  let s0 = 0, s1 = 0, s2 = 0;
+  for (let i = 0; i < pcm.length; i++) {
+    s0 = pcm[i] / 32768 + coeff * s1 - s2;
+    s2 = s1;
+    s1 = s0;
+  }
+  const e = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+  return e > 0 ? e : 0;
+}
+
+// 频段能量 = 几个频点的均值。
+// **这里之前写成"单点 400Hz / 单点 2000Hz"，那是错的**：20ms 窗的频率分辨率
+// 只有 50Hz，单点测的是"这个精确频率上有没有能量"，跟基频/共振峰落在哪强相关。
+// 女声基频 200Hz 附近、400Hz 上恰好是谷，tilt 就掉到 0.1 以下，真人被判成键盘。
+// 换成每侧三个点取均值后，测的是"这一带整体有多亮"，才对得上注释里的"谱倾斜"。
+const LOW_BAND = [300, 500, 700];
+const HIGH_BAND = [1800, 2400, 3000];
+
+function bandSum(pcm, freqs, sr) {
+  let e = 0;
+  for (let i = 0; i < freqs.length; i++) e += goertzel(pcm, freqs[i], sr);
+  return e / freqs.length;
+}
+
+// 一帧特征。与 scripts/tune_barge_vad.py 的 analyze_frame() 必须保持一致——
+// 那边用同一套判据在语料上标定参数，两边不一致就等于标定了个寂寞。
+function analyzeFrame(pcm) {
+  const rms = frameRms(pcm);
+  let zc = 0, prev = pcm[0];
+  for (let i = 1; i < pcm.length; i++) {
+    const v = pcm[i];
+    if ((v >= 0) !== (prev >= 0)) zc += 1;
+    prev = v;
+  }
+  const zcr = pcm.length > 1 ? zc / (pcm.length - 1) : 0;
+  const tilt = bandSum(pcm, LOW_BAND, 16000) / (bandSum(pcm, HIGH_BAND, 16000) + 1e-12);
+  // voiced 只回答"这一帧像不像人在说话"，用于**开口确认**和打断探针。
+  const voiced = rms >= VAD.speechRms && zcr <= VAD.zcrMax && tilt >= VAD.tiltMin;
+  return { rms, zcr, tilt, voiced };
+}
+
+// VAD 状态推进。每个 20ms 帧调一次，是整套连续对话的心脏。
+function vadTick(f) {
+  // 状态刚从别处切回 listening 时，开口计数必须清零：
+  // 否则上一轮残留的 1 帧会让"下一帧像人声"立刻判成开口，
+  // 等于把 40ms 的确认门悄悄关掉。
+  if (S.prevPhase !== S.phase) {
+    if (S.phase === "listening") S.onsetHits = 0;
+    S.prevPhase = S.phase;
+  }
+  if (S.phase === "agent") {
+    agentTick(f);
+    return;
+  }
+  if (S.phase === "thinking") return;         // 等响应，不判任何东西
+
+  if (S.phase === "listening") {
+    // 开口要连续几帧"像人声"：键盘单帧很响但谱不对，40ms 才认。
+    S.onsetHits = f.voiced ? S.onsetHits + 1 : 0;
+    if (S.onsetHits >= VAD.onsetFrames) {
+      S.phase = "user";
+      S.silentFrames = 0;
+      S.onsetHits = 0;
+      setPhaseLine();
+    }
+    if (VAD_DEBUG) updateAudioLine(f);
+    return;
+  }
+
+  if (S.phase === "user") {
+    // 「还在说」用**能量**判，不用 voiced。
+    // 之前这里写的是 `if (f.voiced) silentFrames = 0`，是个真 bug：
+    // voiced 里含过零率和谱倾斜两个门，用户说到一半侧个头、换个字音、
+    // 音量略降，zcr/tilt 一不达标就被当成静音，700ms 一到直接把一句话切成两半。
+    // 端点只该回答「还有没有声音」，不该用"像不像人声"去判。
+    // （silenceRms 之前定义了却从来没用过——这个死参数就是那条 bug 的证据。）
+    if (f.rms >= VAD.silenceRms) S.silentFrames = 0;
+    else S.silentFrames += 1;
+    if (S.silentFrames >= VAD.endpointFrames) {
+      // 端点到了：用户说完了，自动提交，不需要按任何按钮
+      S.phase = "thinking";
+      setPhaseLine();
+      // T0 = 说完了的那一刻，必须在等上传落地之前取
+      const t0 = performance.now();
+      // S2：通道在线走协议推送（服务端主动回结果与语音）；
+      // 不在线回落 HTTP 轮。两条路的差别只在运输，业务事件完全一样。
+      if (!wsSendTurn(t0)) {
+        sendTurn({ audio_streamed: true, audio_dropped: A.dropped }, t0);
+      }
+    }
+    if (VAD_DEBUG) updateAudioLine(f);
+  }
+}
+
+// 播报中每帧调一次。这里分两段判定，别把它压成"能量超了就算打断"。
+//
+// 为什么必须两段：实测发现 60ms 的咳嗽、碰麦、椅子响就能把客服打断，
+// 而打断是不可逆的——那半句话用户再也听不到了，得重听一遍。
+// 所以能量只当"疑似"，真正停播要等这段说完、识别出实义文字。
+// 代价是"客服多说了半句"，但这在半双工电话里听起来像正常的反应延迟。
+function agentTick(f) {
+  const rms = f.rms;                        // 打断仍用能量：要快，宁可多探一次再否决
+  if (VAD_DEBUG) updateAudioLine(f);
+  if (S.bargeState === "probing") return;   // 正在识别，等结果，别重复触发
+
+  if (S.bargeState === "suspect") {
+    // 已经在疑似状态：等这段说完（静音 360ms）或者攒满 3.2 秒
+    if (rms >= VAD.speechRms) S.silentFrames = 0;
+    else S.silentFrames += 1;
+    S.bargeHits += 1;
+    if (S.silentFrames >= VAD.probeSilenceFrames ||
+        S.bargeHits >= VAD.bargeMaxFrames) {
+      confirmBargeIn();
+    }
+    return;
+  }
+
+  // 空闲：攒够 3 帧（60ms）超阈值的能量，进"疑似"
+  S.bargeHits = rms >= VAD.bargeRms ? S.bargeHits + 1 : 0;
+  if (S.bargeHits >= VAD.bargeFrames) startBargeSuspect();
+}
+
+// 疑似插话：先压低播报音量，开始攒音频。**不暂停**。
+// 为什么用压低而不是暂停：万一是我误判（多半是），暂停再恢复会有一个
+// 明显的断音，而音量压下去再抬回来，用户几乎察觉不到。
+function startBargeSuspect() {
+  S.bargeState = "suspect";
+  S.bargeBuf = [];
+  S.silentFrames = 0;
+  S.bargeHits = 0;
+  S.bargeStartedAt = performance.now();   // 打断响应从这里开始计时
+  duckPlayback(true);
+  setPhaseLine();
+}
+
+// 这段说完了，拿去识别：到底是不是在说话、说的是什么。
+async function confirmBargeIn() {
+  const frames = S.bargeBuf;
+  S.bargeBuf = [];
+  S.bargeState = "probing";
+
+  if (!frames.length) {
+    dismissBargeIn("没攒到音频");
+    return;
+  }
+
+  let total = 0;
+  for (const f of frames) total += f.length;
+  const merged = new Int16Array(total);
+  let off = 0;
+  for (const f of frames) { merged.set(f, off); off += f.length; }
+
+  let d = null;
+  try {
+    const q = "?session_id=" + encodeURIComponent(S.sessionId) +
+              "&token=" + encodeURIComponent(S.token) +
+              "&agent_text=" + encodeURIComponent(S.agentText || "");
+    const r = await fetch("/api/asr/probe" + q, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: merged.buffer
+    });
+    d = await r.json();
+  } catch (e) {
+    dismissBargeIn("识别请求失败");
+    return;
+  }
+
+  if (d && d.has_content) {
+    doBargeIn(d.text || "", frames);
+  } else {
+    dismissBargeIn(d && d.text ? "只听到「" + d.text + "」，不算插话" : "没识别出内容");
+  }
+}
+
+// 否决：这不是插话。抬回音量继续播，就当没发生过。
+function dismissBargeIn(why) {
+  S.bargeState = "idle";
+  S.bargeBuf = [];
+  S.silentFrames = 0;
+  S.bargeHits = 0;
+  duckPlayback(false);
+  setPhaseLine();
+  if (why) log("系统", "疑似插话已忽略：" + why);
+}
+
+// 确认打断：到这里才真的让客服闭嘴。
+// 顺序很重要——先停播再发通知。网络请求可以慢，但"闭嘴"不能慢。
+function doBargeIn(heardText, preBuf) {
+  if (S.phase !== "agent") return;
+  // 打断响应有两个口径，别混：
+  //   duck_ms：从检测到人声到音量压下去（用户"感觉"客服让路了）
+  //   stop_ms：到真的停声（含等说完 + 识别确认，必然更慢）
+  // 验收写的"≤300ms 停声"，指的是前者；后者做不到 300ms——
+  // 要等用户把话说完才能识别出文字，这是原理决定的，不是实现偷懒。
+  const now = performance.now();
+  const stopMs = S.bargeStartedAt ? Math.round(now - S.bargeStartedAt) : 0;
+  S.bargeState = "idle";
+  S.bargeBuf = [];
+  S.bargeHits = 0;
+  S.silentFrames = 0;
+  stopPlayback();
+  // 插话开头那几个字（"等一下""不是"）不能丢：用户是连着往下说的，
+  // 把这段接到本轮缓冲的最前面，等他说完一起识别。
+  if (preBuf && preBuf.length) {
+    for (const f of preBuf) A.batch.push(f);
+  }
+  S.phase = "user";              // 用户已经在说话了，直接进 user 继续收
+  log("系统", "打断：听到「" + (heardText || "") + "」，客服已停止播报");
+  setPhaseLine();
+  // 通知服务端记 barge_in、丢掉这一轮没播完的音频。
+  // S2：通道在线走协议事件（服务端同时清缓冲），否则走原来的 HTTP。
+  if (WS.sock && WS.started && WS.sock.readyState === 1) {
+    WS.sock.send(JSON.stringify({ type: "barge_in", heard: heardText || "",
+                                  latency_ms: stopMs }));
+  } else {
+    const sid = S.sessionId, tok = S.token, tid = S.turnId;
+    fetch("/api/call/barge_in", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sid, token: tok, turn_id: tid,
+                             reason: "user_speech", text: heardText || "",
+                             latency_ms: stopMs })
+    }).catch(() => {});
+  }
+}
+
+// 压低/恢复播报音量。分段播放时每段是新的 Audio 对象，
+// 所以 playNext / speak 里都要按 S.ducked 补一次音量。
+function duckPlayback(on) {
+  S.ducked = !!on;
+  const a = S.currentAudio;
+  if (a) {
+    try { a.volume = on ? VAD.duckVolume : 1.0; } catch (e) { /* 某些浏览器只读 */ }
+  }
+}
+
+// 立刻停掉正在播的声音，并让所有待播队列失效
+function stopPlayback() {
+  S.playToken += 1;              // 队列里每一段都会检查这个值，变了就不再播
+  S.ducked = false;
+  if (S.currentAudio) {
+    try { S.currentAudio.pause(); } catch (e) { /* 已经停了 */ }
+    S.currentAudio = null;
+  }
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+}
+
+// 播报结束（正常播完）：回到聆听，并清掉播报期间采到的音频
+function afterPlayback() {
+  if (S.phase !== "agent") return;      // 被打断过就别再改状态
+  S.phase = "listening";
+  S.silentFrames = 0;
+  S.bargeHits = 0;
+  // 播完时如果还卡在"疑似"里（用户刚好在最后一刻出声），一并清掉：
+  // 客服已经说完了，这时候再确认插话没有意义，只会把用户拖进一次空轮。
+  S.bargeState = "idle";
+  S.bargeBuf = [];
+  S.ducked = false;
+  S.agentText = "";
+  setPhaseLine();
+  // 播报期间麦克风一直开着（为了能打断），这段音频里混着客服自己的声音，
+  // 不清掉的话下一轮识别会把它们当成用户说的话。
+  const sid = S.sessionId, tok = S.token;
+  fetch("/api/audio/reset", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sid, token: tok })
+  }).catch(() => {});
+}
+
+function setPhaseLine() {
+  let label = { idle: "未开始", listening: "在听……请直接说话",
+                user: "正在听你说", thinking: "正在处理",
+                agent: "客服在说（可随时插话打断）" }[S.phase] || S.phase;
+  // 补一句"正在确认"：不然用户会觉得"我说话了但客服没停"，其实是在识别。
+  if (S.bargeState === "suspect") label = "听到你说话了……（客服即将停下）";
+  else if (S.bargeState === "probing") label = "正在确认你说了什么……";
+  const el = $("phaseLine");
+  if (el) el.textContent = "状态：" + label;
+  const b = $("btnRec");
+  if (b && S.autoMode) b.textContent = "暂停聆听";
+}
+
+// 把攒着的帧合成一片发出去。seq 用"这批第一帧的序号"，
+// 服务端靠它判断有没有中间丢片（帧号不跳是 S1 的验收标准）。
+function flushBatch() {
+  if (!A.batch.length) return;
+  const frames = A.batch;
+  A.batch = [];
+  let total = 0;
+  for (const f of frames) total += f.length;
+  const merged = new Int16Array(total);
+  let off = 0;
+  for (const f of frames) { merged.set(f, off); off += f.length; }
+
+  const seq = A.seq;
+  A.seq += frames.length;
+
+  if (!S.sessionId) return;          // 还没开始通话，直接把音频丢掉
+  // S2：通道开着就直接推二进制帧——单条 TCP 有序到达，不需要 seq，
+  // 也不需要并发窗口。通道没起来（老服务端/握手失败）走原来的 HTTP 分片，
+  // 两种路线喂的是同一个服务端缓冲，随时切换不打架。
+  if (WS.sock && WS.started && WS.sock.readyState === 1) {
+    WS.sock.send(merged.buffer);
+    A.srvFrames += frames.length;
+    A.srvSamples += merged.length;
+    updateAudioLine();
+    return;
+  }
+  if (A.inflight >= MAX_INFLIGHT) {
+    // 背压：宁可丢片并记账，也不要把内存堆爆。
+    // 丢片会让服务端看到 seq 缺口——这是故意的，掩盖丢片才是错的。
+    A.dropped += frames.length;
+    updateAudioLine();
+    return;
+  }
+  A.inflight += 1;
+  // 串行发送：保证到达顺序，也避免 seq 乱序被误判成丢片
+  A.queue = A.queue.then(() => uploadChunk(seq, merged)).catch(() => {});
+}
+
+// 上传一片音频。失败不抛给用户，但要留痕（否则会以为"没声音"是麦克风坏了）
+async function uploadChunk(seq, pcm16) {
+  try {
+    const q = "?session_id=" + encodeURIComponent(S.sessionId) +
+              "&token=" + encodeURIComponent(S.token) +
+              "&seq=" + seq + "&rate=16000";
+    const r = await fetch("/api/audio/chunk" + q, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: pcm16.buffer
+    });
+    const d = await r.json();
+    if (d.ok) {
+      A.srvFrames = d.received_frames;
+      A.srvSamples = d.received_samples;
+      A.srvGaps = d.gaps;
+    } else {
+      log("系统", "音频分片被拒：" + (d.error || r.status) +
+          (d.detail ? "（" + d.detail + "）" : ""));
+    }
+  } catch (e) {
+    log("系统", "音频分片上传失败：" + e.message);
+  } finally {
+    A.inflight -= 1;
+    updateAudioLine();
+  }
+}
+
+// 采集状态条：这是 S1 唯一能"眼看为实"的地方
+function updateAudioLine(f) {
+  if (!S.autoMode && !A.frames) return;
+  const parts = ["采集 " + A.frames + " 帧 / " + A.samples +
+                 " 采样（" + (A.samples / 16000).toFixed(2) + " 秒）"];
+  if (A.srvSamples) parts.push("服务端已收 " + A.srvSamples + " 采样");
+  if (A.srvGaps) parts.push("序号缺口 " + A.srvGaps + " 次");
+  if (A.dropped) parts.push("本地丢帧 " + A.dropped);
+  // 现场标定：看得到才能调。这三个数分别对应"够不够响""是不是噪声""偏高频吗"。
+  if (VAD_DEBUG && f) {
+    parts.push("rms=" + f.rms.toFixed(3) + (f.rms >= VAD.speechRms ? "✓" : "·"));
+    parts.push("zcr=" + f.zcr.toFixed(2) + (f.zcr <= VAD.zcrMax ? "✓" : "·"));
+    parts.push("tilt=" + f.tilt.toFixed(2) + (f.tilt >= VAD.tiltMin ? "✓" : "·"));
+    parts.push(f.voiced ? "判人声" : "非人声");
+  }
+  $("audioLine").textContent = parts.join(" · ");
+}
+
+// 连续通话下这个按钮不再是"录音"，而是暂停/恢复聆听。
+// 为什么还留一个暂停键：演示时要停下来讲解、环境太吵想先关麦，
+// 真电话上的"静音键"也是这个作用。
+async function toggleRec() {
+  if (!S.sessionId) return;
+
+  if (S.autoMode) {
+    S.autoMode = false;
+    S.phase = "idle";
+    stopPlayback();
+    await stopCapture();
+    $("btnRec").textContent = "恢复聆听";
+    $("audioLine").textContent = "已暂停聆听（麦克风已关闭）";
+    setPhaseLine();
+    log("系统", "已暂停聆听。点「恢复聆听」继续；也可以直接在下面打字。");
+    return;
+  }
+
+  try {
+    await startCapture();
+    S.autoMode = true;
+    S.phase = "listening";
+    $("btnRec").textContent = "暂停聆听";
+    setPhaseLine();
+    log("系统", "已恢复聆听，直接说话即可。");
+  } catch (e) {
+    log("系统", "拿不到麦克风：" + (e && e.message ? e.message : e) + "（可改用下面打字）");
+  }
+}
+
+// 一轮对话：把音频或文字发给后端，拿回回复并播报。
+// t0 由调用方给：语音轮是"说完那一刻"（在等上传之前取），文字轮是"点发送那一刻"。
+async function sendTurn(payload, t0) {
+  if (!S.sessionId || S.busy) return;
+  S.busy = true;
+  $("btnSend").disabled = true;
+  // T0：用户"说完 / 点发送"的时刻。首字响应从这里算到第一帧声音。
+  S.t0 = t0 || performance.now();
+  try {
+    const r = await fetch("/api/turn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Object.assign({ session_id: S.sessionId, token: S.token }, payload))
+    });
+    const d = await r.json();
+    if (d.error) { log("系统", "出错了：" + d.error + (d.detail ? "（" + d.detail + "）" : "")); return; }
+
+    log("用户", d.user_text || "（无应答）");
+    log("客服", d.reply_text, d.next_stage);
+    if (d.tool_result) {
+      log("系统", "工具调用：" + JSON.stringify(d.tool_result) + (d.closed ? "（已闭环并回写）" : ""));
+    }
+    if (d.compliance && d.compliance.blocked) {
+      log("系统", "⚠ 合规护栏命中禁语：" + d.compliance.hits.join("、") + "，已整句替换");
+    }
+
+    S.turnId = d.turn_id;
+    $("mTotal").textContent = d.latency.total_ms + " ms";
+    // 进入"客服说话"状态：从这一刻起麦克风转成"监听打断"用途
+    if (S.autoMode) {
+      S.phase = "agent";
+      S.bargeHits = 0;
+      setPhaseLine();
+    }
+    if (!S.textOnly) speak(d.tts || { text: d.reply_text, mode: "browser" }, d.turn_id);
+    // 这一轮已是终态：TTS 播完（或文字模式直接等 2.5s）就收线。
+    // 语音走 WS 时服务端会自己挂；纯文字走 HTTP，没有服务端收线，只能前端来。
+    if (d.hangup) {
+      clearTimeout(S.hangupTimer);
+      S.hangupTimer = setTimeout(() => { if (S.sessionId) endCall(); }, 2500);
+    }
+    refreshMetrics();
+    refreshEvents();
+  } catch (e) {
+    log("系统", "请求失败：" + e.message);
+    if (S.autoMode) { S.phase = "listening"; setPhaseLine(); }
+  } finally {
+    S.busy = false;
+    if (S.sessionId) $("btnSend").disabled = false;
+    // 兜底：这一轮如果没能进入播报（出错、空回复），别让状态卡死在"思考中"，
+    // 否则 VAD 再也不会推进，用户会觉得"它不理我了"。
+    if (S.autoMode && S.phase === "thinking") {
+      S.phase = "listening";
+      setPhaseLine();
+    }
+  }
+}
+
+// 播报：服务端合成好音频就播它，没合成成功才退回浏览器自带 TTS。
+// 首字响应在这里测量：onplaying / onstart 触发时才是"用户真的听到声音"。
+// 注意这个数现在**包含云 TTS 的合成耗时**——那才是真实的端到端首字。
+function speak(tts, turnId) {
+  const t0 = S.t0;
+  const text = (tts && tts.text) || "";
+  let reported = false;
+  const report = (estimate) => {
+    if (reported) return;
+    reported = true;
+    reportMetric(turnId, performance.now() - t0, estimate);
+  };
+
+  S.agentText = text;                    // 回声比对用（见 confirmBargeIn）
+
+  // 分段合成路线：第一段先出声，后面的段自动接上。
+  // 服务端把长回复切成 3–5 字的头段 + 若干尾段并发合成，
+  // 首字不用再等整句念完（30 字整句要 1.7 秒，切完头段约 0.35 秒）。
+  if (tts && tts.mode === "segments" && Array.isArray(tts.segments) && tts.segments.length) {
+    playSegments(tts, turnId, report, text);
+    return;
+  }
+
+  // 服务端整句合成路线：<audio> 播 OSS 链接。不 fetch，所以不受 CORS 限制。
+  if (tts && tts.mode === "url" && tts.audio_url) {
+    const a = new Audio(tts.audio_url);
+    S.currentAudio = a;                       // 留个句柄，打断时要能 pause
+    if (S.ducked) a.volume = VAD.duckVolume;  // 疑似插话期间新起一段也要保持压低
+    a.onplaying = () => report(false);
+    a.onended = () => { S.currentAudio = null; afterPlayback(); };
+    a.onerror = () => { log("系统", "音频播放失败，改用浏览器播报"); browserSpeak(text, report); };
+    a.play().catch(() => { log("系统", "自动播放被拦截，改用浏览器播报"); browserSpeak(text, report); });
+    return;
+  }
+
+  browserSpeak(text, report);
+}
+
+// 顺序播放分段音频。第一段出声就算"首字响应"。
+// 服务端只等第一段就返回响应，剩下的段落在后台合成；这里播完首段再去取，
+// 所以用户听到声音的时间不再取决于整句话有多长。
+// 任何一段失败就整体回落浏览器播报——只播半句话比不播更难解释。
+function playSegments(tts, turnId, report, fallbackText) {
+  const queue = (tts.segments || []).slice();
+  const myToken = S.playToken;      // 打断时 playToken 会 +1，这里记住当初的值
+  let restCount = tts.rest_count || 0;
+  let reported = false;
+  let aborted = false;
+
+  // 被用户打断之后，这个队列必须整体作废——不能"停一下再接着念"
+  const barged = () => myToken !== S.playToken;
+
+  const fallback = () => {
+    if (aborted || barged()) return;
+    aborted = true;
+    log("系统", "分段音频播放失败，改用浏览器播报");
+    browserSpeak(fallbackText, report);
+  };
+
+  const playNext = () => {
+    if (aborted || barged()) return;
+
+    if (!queue.length) {
+      // 队列空了：还有剩余段就去取一次，取到接着播
+      if (restCount > 0) {
+        restCount = 0;
+        fetchRestSegments(turnId).then((segs) => {
+          if (aborted || barged()) return;
+          if (segs.length) { queue.push(...segs); playNext(); }
+          else afterPlayback();          // 取不到就直接收尾，别卡着
+        });
+      } else {
+        afterPlayback();                 // 全部播完，回到聆听
+      }
+      return;
+    }
+
+    const seg = queue.shift();
+    const a = new Audio(seg.audio_url);
+    S.currentAudio = a;
+    if (S.ducked) a.volume = VAD.duckVolume;  // 切段时也要保持压低
+    a.onplaying = () => { if (!reported) { reported = true; report(false); } };
+    a.onended = () => { S.currentAudio = null; playNext(); };
+    a.onerror = fallback;
+    a.play().catch(fallback);
+  };
+
+  playNext();
+}
+
+// 取剩余段。失败就当作没有——少播一句也不能让播报卡死在那里。
+async function fetchRestSegments(turnId) {
+  if (!S.sessionId || !S.token) return [];
+  try {
+    const r = await fetch("/api/tts/rest?session_id=" + encodeURIComponent(S.sessionId) +
+                          "&token=" + encodeURIComponent(S.token) +
+                          "&turn_id=" + encodeURIComponent(turnId));
+    if (!r.ok) return [];
+    const d = await r.json();
+    return Array.isArray(d.segments) ? d.segments : [];
+  } catch (e) { return []; }
+}
+
+// 降级路线：浏览器 speechSynthesis。音色机械，但保证"有声音"。
+function browserSpeak(text, report) {
+  if (!("speechSynthesis" in window)) {
+    report(true);
+    return;
+  }
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "zh-CN";
+  u.rate = 1.05;
+  u.onstart = () => report(false);
+  // 播完要回到聆听状态。被打断时 cancel() 也会触发 onend，
+  // 但那时 phase 已经是 user，afterPlayback 里的判断会把它挡掉。
+  u.onend = () => afterPlayback();
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+  // 兜底：个别浏览器不触发 onstart，1.5 秒后按"已开始播报"记一条估算值。
+  // 宁可标 estimated，也不要让面板空着——空着会让人以为没在测。
+  setTimeout(() => report(true), 1500);
+}
+
+// 把浏览器实测的首字响应回传给服务端，聚合口径才有一手数据
+async function reportMetric(turnId, ms, estimate) {
+  if (!turnId || !S.sessionId) return;
+  const val = Math.round(ms);
+  $("mFirst").textContent = val + (estimate ? " ms（估算）" : " ms");
+  try {
+    await fetch("/api/turn/metric", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: S.sessionId, token: S.token,
+        turn_id: turnId, first_audio_ms: val, estimate: estimate
+      })
+    });
+  } catch (e) { /* 上报失败不影响通话，聚合时按服务端下界计入 */ }
+  refreshMetrics();
+}
+
+async function endCall(opts) {
+  if (!S.sessionId) return;
+  const silent = !!(opts && opts.silent);   // 服务端已收线时不重复 POST
+  // 挂断时先把状态机停掉，再关麦克风：否则正在播的声音会继续，
+  // 而 VAD 还在拿"已结束会话"的音频做判定。
+  S.autoMode = false;
+  S.phase = "idle";
+  stopPlayback();
+  if (WS.sock) { try { WS.sock.close(); } catch (e) { /* 已断 */ } WS.sock = null; WS.started = false; }
+  $("liveSubtitle").textContent = "";
+  if (A.node) {
+    await stopCapture();
+    $("audioLine").textContent = "麦克风已关闭。";
+  }
+  $("btnRec").textContent = "暂停聆听";
+  if (!silent) {
+    await fetch("/api/call/end", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: S.sessionId, token: S.token })
+    });
+  }
+  log("系统", "通话已结束。");
+  $("btnStart").disabled = false;
+  $("btnRandom").disabled = false;
+  $("btnText").disabled = false;
+  $("btnRec").disabled = true;
+  $("btnEnd").disabled = true;
+  $("textInput").disabled = true;
+  $("btnSend").disabled = true;
+  S.sessionId = null;
+  S.token = null;
+  refreshMetrics();
+}
+
+async function refreshMetrics() {
+  try {
+    const r = await fetch("/api/metrics");
+    const d = await r.json();
+    const p95 = d.first_audio_p95_ms ? d.first_audio_p95_ms + " ms" : "样本不足";
+    $("mPct").textContent = d.first_audio_samples
+      ? d.first_audio_p50_ms + " / " + p95
+      : "— （暂无语音样本）";
+    $("mClosed").textContent = d.closed_sessions + " 通（共 " + d.turns + " 轮）";
+
+    const bits = [];
+    bits.push("语音样本 " + d.first_audio_samples + (d.first_audio_estimated ? "（其中估算 " + d.first_audio_estimated + "）" : ""));
+    bits.push("超时 " + d.first_audio_timeouts);
+    if (d.first_audio_text_samples) bits.push("打字轮参考 P50 " + d.first_audio_text_p50_ms + "ms（不计入门槛）");
+    bits.push("处理耗时 P50 " + d.processing_p50_ms + "ms");
+    bits.push("估算成本 ¥" + d.est_cost_cny);
+    $("metricNote").textContent = "门槛 " + d.gate_ms + "ms · " + bits.join(" · ");
+  } catch (e) { /* 指标拉取失败不影响通话 */ }
+}
+
+async function refreshEvents() {
+  if (!S.sessionId) return;
+  try {
+    const url = "/api/events?session_id=" + encodeURIComponent(S.sessionId) +
+                "&token=" + encodeURIComponent(S.token);
+    const r = await fetch(url);
+    const d = await r.json();
+    if (d.error) { $("events").textContent = "读取失败：" + d.error; return; }
+    $("events").textContent = (d.events || []).map(e =>
+      "#" + String(e.id).padStart(3, "0") + "  turn " + e.turn_id + "  " +
+      e.type.padEnd(14) + " " + (e.latency_ms ? e.latency_ms + "ms" : "") +
+      "\n     " + JSON.stringify(e.payload)
+    ).join("\n") || "还没有事件。";
+  } catch (e) { /* 忽略 */ }
+}
+
+// ===== S2：WebSocket 双向通道（角色 1）=====
+// 三件事：音频帧直推（不再 HTTP 分片）、结果与语音"就绪即推"（不再轮询
+// /api/tts/rest）、打断变协议事件。通道任何一步失败都整体回落 HTTP 路线，
+// S1 的行为不受影响——S2 坏了不能把 S1 也带坏。
+const WS = { sock: null, started: false, rtReady: false };
+
+function wsConnect() {
+  if (WS.sock) { try { WS.sock.close(); } catch (e) { /* 已经断了 */ } }
+  WS.started = false;
+  try {
+    const proto = location.protocol === "https:" ? "wss://" : "ws://";
+    const s = new WebSocket(proto + location.host + "/ws/call");
+    s.binaryType = "arraybuffer";
+    WS.sock = s;
+    s.onopen = () => {
+      // start 必须在音频之前：服务端要先验 token 才肯收帧
+      s.send(JSON.stringify({ type: "start", session_id: S.sessionId, token: S.token }));
+    };
+    s.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      wsOnMessage(m);
+    };
+    s.onclose = () => { WS.started = false; };
+    s.onerror = () => { /* 回落由 readyState 判断；这里不打扰用户 */ };
+  } catch (e) {
+    log("系统", "实时通道建不起来，继续用 HTTP 分片：" + e.message);
+  }
+}
+
+function wsOnMessage(m) {
+  switch (m.type) {
+    case "ready":
+      WS.started = true;
+      WS.rtReady = !!m.realtime;
+      log("系统", "实时通道已建立（S2）" + (WS.rtReady ? "，流式字幕开启" : "") + "。");
+      // 流式没起来要说清原因：演示现场"字幕不出"最常见的三个原因是
+      // 没密钥、模型没开通、公司网拦 WSS。不讲原因就只能干猜。
+      if (!WS.rtReady && m.realtime_error) {
+        log("系统", "流式字幕未启用，回落整段识别：" + m.realtime_error, "降级");
+      }
+      return;
+    case "turn_result":
+      handleWsTurnResult(m);
+      return;
+    case "tts":
+      wsOnTts(m);
+      return;
+    case "tts_done":
+      WSP.done = true;
+      wsPlayNext();
+      return;
+    case "turn_end":
+      if (m.latency) $("mTotal").textContent = Math.round(m.latency.total_ms) + " ms";
+      refreshMetrics(); refreshEvents();
+      return;
+    case "call_ended":
+      // 服务端说完结束语后主动收线。这里不能直接调 endCall()：
+      // 它还会 POST /api/call/end，服务端已经记过一次，会重复记账。
+      log("系统", "通话已结束（" + (m.reason || "done") + "），服务端已收线。");
+      endCall({ silent: true });
+      return;
+    case "barge_ack":
+      return;                       // 服务端已记账；停播在前端早已完成
+    case "partial":
+      // 流式识别的半句字幕：只给演示者看，不进对话日志——
+      // 半句随时会被整句取代，进了日志反而像"客服听错了"。
+      $("liveSubtitle").textContent = m.text || "";
+      return;
+    case "pong":
+      return;
+    case "error":
+      // 一轮在服务端失败：必须把状态放回去，否则前端永远卡在"思考中"
+      if (m.code === "TURN_FAILED" || m.code === "TURN_BUSY") {
+        S.busy = false;
+        if (S.phase === "thinking") { S.phase = "listening"; setPhaseLine(); }
+      }
+      log("系统", "通道消息被拒：" + m.code + "（" + (m.detail || "") + "）");
+      return;
+  }
+}
+
+// 服务端推回的一轮文字结果。展示逻辑与 sendTurn 相同，只是运输路线不同。
+function handleWsTurnResult(m) {
+  S.turnId = m.turn_id;
+  S.busy = false;
+  // 半句字幕到此为止：整句已经落在下面的对话日志里，字幕再留着就是同一句
+  // 出现两遍（这就是验收里说的"不重复"）。
+  $("liveSubtitle").textContent = "";
+  $("btnSend").disabled = false;
+  log("用户", m.user_text || "（无应答）");
+  log("客服", m.reply_text, m.next_stage);
+  if (m.tool_result) {
+    log("系统", "工具调用：" + JSON.stringify(m.tool_result) +
+        (m.closed ? "（已闭环并回写）" : ""));
+  }
+  refreshEvents();
+}
+
+// WS 语音轮提交。返回 true 表示已走通道；false 表示通道不可用，调用方回落 HTTP。
+function wsSendTurn(t0) {
+  if (!WS.started || !WS.sock || WS.sock.readyState !== 1) return false;
+  S.busy = true;
+  S.t0 = t0;
+  WSP.queue = []; WSP.done = false; WSP.reported = false; WSP.playing = false; WSP.text = "";
+  WS.sock.send(JSON.stringify({ type: "turn" }));
+  return true;
+}
+
+// ===== WS 语音播放队列：段就绪即播，与 HTTP 版 playSegments 平行 =====
+// 为什么要平行实现：HTTP 版的队列是"一次拿一包"，WS 版的段是分批到达的，
+// 硬塞进同一个函数会让两条路线互相耦合，坏一处坏一双。
+const WSP = { queue: [], done: false, playing: false, reported: false, text: "" };
+
+function wsOnTts(m) {
+  if (m.mode === "browser") {
+    // 服务端合成失败回落：用浏览器念。与 HTTP 版的 browserSpeak 同源。
+    const myToken = S.playToken;
+    log("客服", m.text, "（浏览器播报）");
+    if (S.phase !== "agent") { S.phase = "agent"; setPhaseLine(); }
+    browserSpeak(m.text, (est) => {
+      if (myToken !== S.playToken) return;
+      reportMetric(m.turn_id, performance.now() - S.t0, est);
+    });
+    return;
+  }
+  WSP.text = m.text || WSP.text;
+  if (S.phase !== "agent") { S.phase = "agent"; S.bargeHits = 0; setPhaseLine(); }
+  if (m.audio_url) WSP.queue.push(m);
+  wsPlayNext();
+}
+
+function wsPlayNext() {
+  if (WSP.playing) return;
+  const seg = WSP.queue.shift();
+  if (seg) {
+    WSP.playing = true;
+    const myToken = S.playToken;
+    const barged = () => myToken !== S.playToken;   // 被打断的队列整体作废
+    const fallback = (why) => {
+      WSP.playing = false;
+      if (barged()) return;
+      log("系统", why + "，改用浏览器播报");
+      browserSpeak(WSP.text, (est) => reportMetric(seg.turn_id, performance.now() - S.t0, est));
+    };
+    const a = new Audio(seg.audio_url);
+    S.currentAudio = a;
+    if (S.ducked) a.volume = VAD.duckVolume;        // 插话疑似期新起段也保持压低
+    a.onplaying = () => {
+      if (!WSP.reported) {
+        WSP.reported = true;
+        reportMetric(seg.turn_id, performance.now() - S.t0, false);
+      }
+    };
+    a.onended = () => {
+      S.currentAudio = null;
+      WSP.playing = false;
+      if (barged()) return;
+      wsPlayNext();
+    };
+    a.onerror = () => fallback("分段音频播放失败");
+    a.play().catch(() => fallback("自动播放被拦截"));
+    return;
+  }
+  if (WSP.done) {
+    WSP.done = false; WSP.reported = false; WSP.text = "";
+    $("liveSubtitle").textContent = "";
+    afterPlayback();
+  }
+}
+
+$("btnStart").onclick = () => startCall();
+$("btnText").onclick = () => startCall({ textOnly: true });
+$("btnRandom").onclick = previewRandom;
+$("btnRec").onclick = toggleRec;
+$("btnEnd").onclick = endCall;
+$("btnEvents").onclick = refreshEvents;
+$("btnSend").onclick = () => {
+  const t = $("textInput").value.trim();
+  $("textInput").value = "";
+  // 允许空发送：等于模拟"用户没说话"，用来验证沉默处理（记 no_answer、不推进状态机）。
+  // 调试期很有用——真实电话里"没人应答"是常态，不能只在脚本里测。
+  sendTurn({ text: t });
+};
+$("textInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btnSend").click(); });
+
+boot();
+refreshMetrics();
+
+// ===========================================================================
+// 现场校准模式（地址加 ?vadcal=1）
+//
+// 为什么要有这个：离线语料是 TTS 合成的、噪声是我用 math 拼的，在那上面怎么调
+// 都全过；但真正决定演示成败的是这台机器的**扬声器→房间→麦克风→浏览器 AEC**
+// 这一整条链。链上有多少残余回声、底噪多高、设备频响偏多少，离线一个都测不到。
+// 这个模式就在真实链路上采四个阶段的逐帧特征，导出一份 JSON，
+// 再交给 scripts/fit_vad_from_calib.py 算建议阈值。
+//
+// 四个阶段刻意覆盖了会上翻车的四种情况：
+//   静音 · 外放自己的播报 · 用户说话 · 敲键盘
+// ===========================================================================
+const VADCAL = /[?&]vadcal=1/.test(location.search);
+
+const CAL_LINE = "您好，我是京东商家资质审核的工作人员，您这边提交的营业执照经营范围与店铺主营类目不一致，需要您补充说明一下。";
+const CAL_READ = "我这边已经上传了新的营业执照，你看看能不能过。";
+
+function vadCalPanel() {
+  const box = document.createElement("div");
+  box.id = "vadcal";
+  box.style.cssText = "position:fixed;right:16px;bottom:16px;width:360px;z-index:9999;" +
+    "background:#fff;border:1px solid #d8dee8;border-radius:10px;padding:12px 14px;" +
+    "box-shadow:0 8px 28px rgba(0,0,0,.14);font:13px/1.6 system-ui,sans-serif;color:#1b2430";
+  box.innerHTML =
+    '<b style="font-size:14px">现场 VAD 校准</b>' +
+    '<div style="color:#5b6b7c;margin:4px 0 8px">约 22 秒，四步：静音 → 外放播报 → 你说话 → 敲键盘。' +
+    '请确保用的是<b>扬声器</b>不是耳机，音量正常。</div>' +
+    '<button id="vcStart">开始</button> <button id="vcSave" disabled>下载 JSON</button>' +
+    '<div id="vcStep" style="margin-top:8px;font-weight:600;min-height:22px"></div>' +
+    '<pre id="vcLog" style="margin:8px 0 0;max-height:150px;overflow:auto;' +
+    'background:#f5f7fa;border-radius:6px;padding:6px;font-size:11px;white-space:pre-wrap"></pre>';
+  document.body.appendChild(box);
+  $("vcStart").onclick = () => runVadCal();
+  $("vcSave").onclick = () => saveVadCal();
+}
+
+let _calRows = [];
+let _calMeta = {};
+
+function vcLog(s) { $("vcLog").textContent += s + "\n"; $("vcLog").scrollTop = 1e9; }
+function vcStep(s) { $("vcStep").textContent = s; }
+
+async function runVadCal() {
+  $("vcStart").disabled = true;
+  _calRows = [];
+  const rows = _calRows;
+  let phase = "prep";
+
+  let stream, ctx, node;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true,
+               noiseSuppression: true, autoGainControl: true }
+    });
+  } catch (e) {
+    vcStep("拿不到麦克风：" + e.message);
+    $("vcStart").disabled = false;
+    return;
+  }
+
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: "application/javascript" }));
+  try { await ctx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
+  const src = ctx.createMediaStreamSource(stream);
+  node = new AudioWorkletNode(ctx, "pcm-collector");
+  const gain = ctx.createGain();
+  gain.gain.value = 0;
+  src.connect(node); node.connect(gain); gain.connect(ctx.destination);
+
+  const t0 = performance.now();
+  node.port.onmessage = (e) => {
+    const f = analyzeFrame(new Int16Array(e.data.pcm));
+    rows.push({ t: Math.round(performance.now() - t0), ph: phase,
+                rms: +f.rms.toFixed(5), zcr: +f.zcr.toFixed(3), tilt: +f.tilt.toFixed(2) });
+  };
+
+  const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+  // ① 静音
+  phase = "silence";
+  vcStep("① 静音 4 秒 · 请别说话");
+  await wait(4000);
+
+  // ② 外放自己的播报（浏览器 TTS，走的是同一套喇叭→麦克风路径）
+  phase = "echo";
+  if (window.speechSynthesis) {
+    vcStep("② 正在外放一句客服话术，请别跟着念");
+    const u = new SpeechSynthesisUtterance(CAL_LINE);
+    u.lang = "zh-CN";
+    speechSynthesis.speak(u);
+    await wait(7000);
+    speechSynthesis.cancel();
+  } else {
+    vcLog("[跳过] 这个浏览器没有 speechSynthesis");
+  }
+
+  // ③ 用户说话
+  phase = "voice";
+  vcStep("③ 请念这句话：「" + CAL_READ + "」");
+  await wait(6000);
+
+  // ④ 敲键盘
+  phase = "keytap";
+  vcStep("④ 请敲键盘 5 秒（正常力度）");
+  await wait(5000);
+
+  phase = "done";
+  node.port.onmessage = null;
+  try { stream.getTracks().forEach(t => t.stop()); } catch (e) { /* 已经关了 */ }
+  try { await ctx.close(); } catch (e) { /* 同上 */ }
+
+  const n = {};
+  for (const r of rows) n[r.ph] = (n[r.ph] || 0) + 1;
+  _calMeta = {
+    ua: navigator.userAgent,
+    saved_at: new Date().toISOString(),
+    front_params: VAD,
+    counts: n
+  };
+  vcStep("完成，共 " + rows.length + " 帧（" + JSON.stringify(n) + "）→ 点「下载 JSON」");
+  vcLog("把 JSON 放到 data/vad_calib/ 下，跑 python scripts/fit_vad_from_calib.py");
+  $("vcSave").disabled = false;
+}
+
+function saveVadCal() {
+  const payload = JSON.stringify({ meta: _calMeta, rows: _calRows });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([payload], { type: "application/json" }));
+  a.download = "vadcal_" + Date.now() + ".json";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+}
+
+if (VADCAL) vadCalPanel();
+</script>
+</body>
+</html>
