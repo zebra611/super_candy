@@ -126,7 +126,10 @@ const S = { sessionId: null, token: null, pendingTarget: null, textOnly: false,
             // 外放环境下麦克风收到自己的播报，ASR 会原样识别出客服的话，
             // _has_interrupt_content 判"有实义"→ 直接停播。这是硬 bug。
             agentText: "",
-            currentAudio: null, playToken: 0 };
+            currentAudio: null, playToken: 0,
+            // 纯文字模式走 HTTP，没有服务端收线，只能靠前端定时器；
+            // 定时器必须可取消，否则上一通的会把新开的通话挂掉。
+            hangupTimer: null };
 
 // VAD 判定参数。逐帧（20ms）算特征，不起模型：这段链路在浏览器主线程上跑，
 // 一秒 50 次，必须便宜。
@@ -283,6 +286,8 @@ async function boot() {
 // 命中后后端会把"本次外呼目标"档案回传，我们在页面下方展示，便于对照客服开场白。
 async function startCall(opts) {
   opts = opts || {};
+  clearTimeout(S.hangupTimer);
+  S.hangupTimer = null;
   const body = {};
   // 优先用"随机预览"锁定的公司；只有显式指定/随机时才覆盖
   if (S.pendingTarget && !opts.application_id && !opts.random) {
@@ -955,11 +960,16 @@ async function sendTurn(payload, t0) {
       setPhaseLine();
     }
     if (!S.textOnly) speak(d.tts || { text: d.reply_text, mode: "browser" }, d.turn_id);
-    // 这一轮已是终态：TTS 播完（或文字模式直接等 2.5s）就收线。
-    // 语音走 WS 时服务端会自己挂；纯文字走 HTTP，没有服务端收线，只能前端来。
-    if (d.hangup) {
+    // 收线判据必须与服务端 should_auto_hangup 一致：hangup 只覆盖终态
+    // 两个出口，挂断/打错/核身失败/转专员等 15 个出口只有 end_reason。
+    // 只判 d.hangup 会让这些路径说完「再见」仍不挂断（PR43 实测）。
+    // 语音走 WS 时服务端自己收；纯文字走 HTTP，只能前端定时收。
+    if (d.hangup || d.end_reason) {
       clearTimeout(S.hangupTimer);
-      S.hangupTimer = setTimeout(() => { if (S.sessionId) endCall(); }, 2500);
+      S.hangupTimer = setTimeout(() => {
+        S.hangupTimer = null;
+        if (S.sessionId) endCall();
+      }, 2500);
     }
     refreshMetrics();
     refreshEvents();
@@ -1120,6 +1130,8 @@ async function reportMetric(turnId, ms, estimate) {
 }
 
 async function endCall(opts) {
+  clearTimeout(S.hangupTimer);
+  S.hangupTimer = null;
   if (!S.sessionId) return;
   const silent = !!(opts && opts.silent);   // 服务端已收线时不重复 POST
   // 挂断时先把状态机停掉，再关麦克风：否则正在播的声音会继续，
