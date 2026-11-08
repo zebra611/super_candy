@@ -2734,6 +2734,40 @@ def main():
           ["intent=%s consent=%r" % (_ry["intent"], _yc["slots"].get("consent"))])
     config_loader.set_scene(_nc_prev_scene)
 
+    # ---- PR #42 收线覆盖（合并审查后补的守卫） ----
+    import ws_channel as _wsc
+    check("PR #42：挂断/拒绝/转专员等所有收尾出口都会触发服务端收线",
+          _wsc.should_auto_hangup({"hangup": True})
+          and _wsc.should_auto_hangup({"end_reason": "hangup"})
+          and _wsc.should_auto_hangup({"end_reason": "unclear"})
+          and not _wsc.should_auto_hangup({"reply_text": "好的，我核对一下"}),
+          ["终态/挂断/转专员=true，普通轮=false"])
+
+    class _FakeEndBackend:
+        def detach(self, sess):
+            pass
+
+        def end_call(self, sid):
+            pass
+
+    _wsx = _wsc.WsCallSession(_FakeEndBackend(), send_text=lambda _t: None,
+                              close=lambda: None)
+    _wsx._schedule_hangup("done")
+    _timer_set = _wsx._hangup_timer is not None
+    _wsx.close()
+    check("PR #42：连接关闭时撤销收线定时器，避免重复记 call_ended",
+          _timer_set and _wsx._hangup_timer is None,
+          ["关闭前=%s 关闭后=%s" % (_timer_set, _wsx._hangup_timer)])
+
+    _adv = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                        "adversarial_evolve.py"), "check"],
+                          cwd=ROOT, capture_output=True, text=True, timeout=180)
+    check("对抗闭环反向自测：确定性/不编事实/闸门第六道/静态校验/接口约束全过",
+          _adv.returncode == 0,
+          ["退出码 %d；末行：%s"
+           % (_adv.returncode,
+              ((_adv.stdout or "").strip().splitlines() or ["无输出"])[-1][:80])])
+
     # ---- 双击入口（11-08 晚）：.bat 里混进一个中文字符，cmd 会吞掉后续命令 ----
     # 真踩过：把「自进化.bat」写进注释后，整份批处理被逐行拆碎执行。
     def _bat_bad(raw):

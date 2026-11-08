@@ -1,0 +1,62 @@
+{
+ "_comment": "自适应对抗画像集：客户按客服暴露的弱点主动升级难度。与 eval/personas_sim.json（10 通 L2 基线）、eval/personas_temperament.json（12 性格画像）完全分开；往那两份里加人会让既有分母失真。",
+ "_schema": {
+  "max_level": "压力上限 1~4；实际等级由客服弱点命中数驱动，不是固定脚本",
+  "knows": "受知约束：false 的字段不会出现在 facts 里，模拟器编不出这个值",
+  "traits.patience": "耐心初值；命中弱点会扣，耗尽即挂断",
+  "expect.closed": "业务上这通电话该不该回写工单；不是按跑出来的结果回填",
+  "split": "train=可用于出候选；holdout=只验收，不得据它改话术"
+ },
+ "personas": [
+  {
+   "id": "A01", "label": "低压力配合者（对照）", "goal": "confirm", "split": "train",
+   "max_level": 2, "knows": {"phone_tail": true, "contact_name": true, "application_id": true, "company_name": true},
+   "traits": {"patience": 12}, "style": ["好的"], "expect": {"closed": true}
+  },
+  {
+   "id": "A02", "label": "低压力爱追问（对照）", "goal": "confirm", "split": "train",
+   "max_level": 2, "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+   "traits": {"patience": 12}, "style": ["嗯"], "expect": {"closed": true}
+  },
+  {
+   "id": "A03", "label": "质疑来电身份", "goal": "offtopic", "split": "train",
+   "max_level": 4, "knows": {"phone_tail": true, "contact_name": true, "company_name": true},
+   "traits": {"patience": 9}, "style": ["我说"], "expect": {"closed": false}
+  },
+  {
+   "id": "A04", "label": "记不住尾号且急躁", "goal": "offtopic", "split": "train",
+   "max_level": 4, "knows": {"contact_name": true, "company_name": true},
+   "traits": {"patience": 7}, "style": ["唉"], "expect": {"closed": false}
+  },
+  {
+   "id": "A05", "label": "反复跑题的店主", "goal": "offtopic", "split": "train",
+   "max_level": 4, "knows": {"phone_tail": true, "company_name": true},
+   "traits": {"patience": 10}, "style": ["我跟你说啊"], "expect": {"closed": false}
+  },
+  {
+   "id": "A06", "label": "只肯报姓名", "goal": "confirm", "split": "train",
+   "max_level": 3, "knows": {"contact_name": true, "application_id": true, "company_name": true},
+   "traits": {"patience": 9}, "style": ["那个"], "expect": {"closed": false}
+  },
+  {
+   "id": "A07", "label": "听不清又多疑", "goal": "offtopic", "split": "train",
+   "max_level": 4, "knows": {"phone_tail": true, "contact_name": true},
+   "traits": {"patience": 8}, "style": ["啊"], "expect": {"closed": false}
+  },
+  {
+   "id": "A08", "label": "留出集·高压力拒绝提供信息", "goal": "offtopic", "split": "holdout",
+   "max_level": 4, "knows": {"company_name": true},
+   "traits": {"patience": 8}, "style": ["不是"], "expect": {"closed": false}
+  },
+  {
+   "id": "A09", "label": "留出集·连环追问", "goal": "offtopic", "split": "holdout",
+   "max_level": 4, "knows": {"phone_tail": true, "contact_name": true, "application_id": true},
+   "traits": {"patience": 9}, "style": ["等等"], "expect": {"closed": false}
+  },
+  {
+   "id": "A10", "label": "留出集·没听懂就不表态", "goal": "offtopic", "split": "holdout",
+   "max_level": 4, "knows": {"phone_tail": true, "company_name": true},
+   "traits": {"patience": 7}, "style": ["哎呀"], "expect": {"closed": false}
+  }
+ ]
+}

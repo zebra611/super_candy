@@ -41,6 +41,17 @@ from modules import voice
 from modules import wsproto
 
 
+def should_auto_hangup(out):
+    """这一轮说完就该收线：显式 hangup 标志，或任何带 end_reason 的收尾。
+
+    PR #42 最初只判 out["hangup"]，但那个标志只写在 _stage_done 的默认分支；
+    _finish() 的 17 个出口（挂断 / 拒绝 / 打错 / 核身失败 / 转专员 / 工具错误）
+    都只带 end_reason。漏掉它们，客服说完「抱歉打扰您了，再见」后连接仍挂着，
+    正是这个 PR 想修的现象。判据改成「任一收尾信号」才覆盖全路径。
+    """
+    return bool(out.get("hangup") or out.get("end_reason"))
+
+
 class WsCallSession:
     """一条 WebSocket 连接对应的通话会话。协议状态都在这里，socket 不在。
 
@@ -244,7 +255,7 @@ class WsCallSession:
 
         # 这一轮是"说完就结束"（终态/拒绝/挂断）：给一小段缓冲后主动收线。
         # 没有这一步，通话会一直挂着——前端不点挂断就永远不结束。
-        if out.get("hangup"):
+        if should_auto_hangup(out):
             self._schedule_hangup(out.get("end_reason") or "done")
 
     # ---- 服务端主动收线 ---------------------------------------------------
@@ -362,6 +373,9 @@ class WsCallSession:
 
     def close(self):
         """连接结束：清会话引用、关流式识别。幂等，读循环和上层都可调。"""
+        # 上层（前端断开 / 超时 / 异常）先关连接时，收线定时器必须一起撤掉，
+        # 否则 2.5 秒后 _auto_hangup 仍会对一个已结束的会话再记一次 call_ended。
+        self._cancel_hangup()
         if not self.alive:
             return
         self.alive = False
