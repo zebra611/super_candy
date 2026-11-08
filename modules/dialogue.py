@@ -136,7 +136,13 @@ ASK_MARKS = ("吗", "？", "?", "多少", "多久", "怎么", "什么", "能不�
              "到哪", "哪了",
              # "在哪里改""去哪儿补"是赛题里最高频的一类追问（操作路径类），
              # 不含它们，一句真问题会被当成新诉求记进工单。
-             "哪里", "在哪", "哪儿")
+             "哪里", "在哪", "哪儿",
+             # 11-08 接官方 QA 时补的两个疑问词：官方 27 条问法里有
+             # "在职证明有哪些""如何上传联系方式"，这两个词都不在上面的表里，
+             # 于是商家问出官方原话时**反倒判不成提问**，QA 永远接不上。
+             # 只收这两个明确的疑问词，不收"有什么"——"有什么需要我配合"是问句，
+             # 但"我有什么材料"常是陈述自己手上的东西，含糊的别往里加。
+             "哪些", "如何")
 
 # 要求转人工。**故意不含"投诉"**：投诉是情绪信号（见 ANGRY_WORDS），
 # 要致歉承接后继续解决问题，不能一句"帮您转人工"就把电话挂掉。
@@ -304,6 +310,16 @@ def new_session(session_id):
         "last_intent_conf": 0.0,
         # 第几版回写。用户改口时递增，配合幂等键让"同一张工单被更新"而不是新开一张。
         "writeback_version": 0,
+        # 官方 QA 播报记录（11-08）：播过哪几条、播了几条、哪几条命中了但没播。
+        # 前两个用来去重与限额（逐字重念同一句像坏掉的机器人），
+        # answer_blocked 只用于审计——"认出了这个问题，但答案里还有没填的占位"
+        # （官方 5 条带 XX、kb_pop 96 条带【】），所以没念。
+        "qa_answered": [],
+        "qa_count": 0,
+        "answer_blocked": [],
+        # 已经逐字播过的答案原文。跨来源去重用：官方 QA 与 kb_pop 里有几条
+        # 是同一句话（4 号照原文抄进 kb），只按 id 去重会漏掉这种情况。
+        "spoken_answers": [],
     }
 
 
@@ -581,7 +597,8 @@ def _intent_name(flags):
 
 
 def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
-           end_reason="", stage_label=None, kb_hit=None, intent_conf=None):
+           end_reason="", stage_label=None, kb_hit=None, intent_conf=None,
+           qa_hit=None):
     """统一的返回构造：把回复、阶段迁移、事件字段一次组装好。
 
     注意 stage 是"这一轮所处的阶段"（回复归属），next_stage 才是迁移后的阶段。
@@ -592,6 +609,10 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     kb_hit 只在命中知识条目时传入（含 id / source_id / score / matched）。
     这里的意义是**溯源**：赛后如果有人问"这句'有效期十二个月'依据是什么"，
     事件里能直接翻到条目编号和资料小节，而不是只有一串回复文本。
+
+    qa_hit 是同一件事的另一条出处：命中的是**官方 QA 原话**（config/mock/qa.json）。
+    两者分开记，是因为可信度不同——qa 逐字来自官方表格，kb 是我们自己组织的口径，
+    混成一个字段后，答辩时说不清哪句是"官方原话"。
     """
     stage_now = stage_label or session["stage"]
 
@@ -610,7 +631,18 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     #                         核对结果陈述、不是问句，仍照常改写以保留口语自然度。
     _freeze_identity = (str(intent or "").startswith("identity_")
                         and intent != "identity_ok")
-    if not end_reason and intent not in ("error", "empty") and not _freeze_identity:
+    # 官方原话（intent="qa"）同样冻结：`config/mock/qa.json` 里是审核员原话，
+    # 让它过一遍改写，就等于"我们转述官方口径"——被追问依据时站不住。
+    # 冻结的代价是句子偏书面（"可在单据中授权书位置上传"），
+    # 这是刻意的取舍：宁可听起来像念文件，也不要听起来像猜的。
+    #
+    # 判据用 `qa_hit` 而不是只看 intent：GREETING 那句是"官方答案 + 确认公司"，
+    # intent 记的是 greeting_confirm_company，但里面含官方原话——
+    # 11-08 实测，按 intent 判会漏掉它，措辞层把整句压缩成
+    # "麻烦您确认下，您是XX公司的负责人吗"，官方答案被丢掉了。
+    _freeze_official = bool(qa_hit) or intent == "qa"
+    if (not end_reason and intent not in ("error", "empty")
+            and not _freeze_identity and not _freeze_official):
         text = nlg.say(session, _fill_application(text, session["slots"].get("application")),
                        stage_now)
     else:
@@ -641,6 +673,13 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
             "source_id": kb_hit.get("source_id", ""),
             "score": kb_hit.get("score", 0),
             "matched": list(kb_hit.get("matched") or []),
+        }
+    if qa_hit:
+        out["qa"] = {
+            "id": qa_hit.get("id", ""),
+            "source": qa_hit.get("source", ""),
+            "match": qa_hit.get("match", ""),
+            "score": qa_hit.get("score", 0),
         }
     return out
 
@@ -709,6 +748,138 @@ def _promise_block(session, text, flags):
         return _reply(session, _soothe(config_loader.blocked_reply(), flags),
                       intent="compliance_block")
     return None
+
+
+# ---------------------------------------------------------------------------
+# 官方 QA 接入（2026-11-08）
+#
+# 接的是什么：官方资料包 27 条问答（11 条高频 + 16 条特殊场景），
+# 由 `scripts/build_mock_bundle.py` 从两份官方 xlsx 抽成 `config/mock/qa.json`，
+# 经 `tools.lookup_qa()`（适配器层）暴露出来。
+#
+# 为什么不直接用 `modules/kb.py` 那套：两者解决的不是同一个问题。
+#   kb       = 我们自己组织的口径（patterns + answer + source_id），可以改口吻；
+#   官方 QA  = 审核员原话，**逐字可复述**，才敢说"这是官方口径"。
+# 商家问"在职证明有哪些"，念出官方原文和照我们的理解解释，可信度不是一回事。
+# 所以两条库并存，官方优先——能复述原话就先复述原话。
+#
+# 四条硬约束（都落在下面的代码里，不是口头约定）：
+#   1. 只播原话、不改写：所以 intent="qa" 在 `_reply` 里冻结措辞层（nlg）；
+#   2. 答不上来就不答：查不到 / 只命中 2 字泛词 / 答案含未填占位，一律退回原路径；
+#   3. 一通电话最多播 `QA_MAX_ANSWERS` 条、同一条只播一次——逐字重念同一句
+#      比"这个我记下了"更像坏掉的机器人；
+#   4. 接口故障等同"没查到"（适配器层的 read_op 语义），不让查询拖垮一通电话。
+# ---------------------------------------------------------------------------
+QA_MAX_ANSWERS = 4        # 单通电话最多播几条官方原话
+QA_MAX_PER_QID = 1        # 同一条官方答案不重复播
+
+# "这句能直接念吗"的判定：占位符一律不能念。
+#   XX / ＸＸ —— 官方 27 条里 5 条答案的空位（"在商标状态变为XX后重新提交"）；
+#   【】      —— kb_pop 里 96 条驳回话术的槽位标记（"您申请的【】品牌"）。
+# TTS 会把它们念成"叉叉""左括号右括号"，听起来像系统故障；
+# 而自己补词就是编造官方口径。这类一律不播，退回"记下来、稍后专员解答"。
+UNREADABLE_MARKS = ("XX", "ＸＸ", "【", "】")
+
+
+def _unreadable(text):
+    """这条答案里还有没有不能念的占位符。"""
+    return any(m in (text or "") for m in UNREADABLE_MARKS)
+
+
+def _qa_lookup(session, text):
+    """查官方 QA，返回 dict 或 None。
+
+    dict 里的 `readable` 决定调用方能不能播：
+        True   可以逐字播报（`answer` 有值）
+        False  命中了但不能播（`blocked` 说明原因），调用方退回原路径
+
+    返回 None 的三种情况都表示"当没这回事"：没命中、本条已播过、本通已超额。
+    `blocked` 不进对话，只记进 `session["answer_blocked"]`——事后要能回答
+    "这条官方答案为什么没念"，但没必要为了审计在电话里多说一句话。
+    """
+    q = (text or "").strip()
+    if not q:
+        return None
+    try:
+        res = tools.lookup_qa(q)
+    except Exception:                    # 适配器故障不能拖垮对话
+        return None
+    if not isinstance(res, dict) or not res.get("found"):
+        return None
+
+    answer = (res.get("answer") or "").strip()
+    qid = res.get("qid") or ""
+    info = {"id": qid, "source": res.get("source") or "",
+            "match": res.get("match") or "", "score": res.get("score", 0),
+            "readable": True, "blocked": ""}
+
+    # 太短的答案（"是的""不算"）脱离上下文就没信息量，播出去像敷衍。
+    # 这类问题仍旧退回原路径（记下来、稍后专员解答），比硬答一句"是的"安全。
+    if len(answer) < 4:
+        info["readable"], info["blocked"] = False, "too_short"
+        session.setdefault("answer_blocked", []).append(
+            {"via": "qa", "id": qid, "source": info["source"],
+             "reason": "too_short", "missing": []})
+        return info
+
+    # 官方 27 条里有 5 条答案带未填占位（"在商标状态变为XX后重新提交申请"）。
+    # 逐字播报会让 TTS 念出"叉叉"，听起来像系统故障；自行补词就是编造官方口径。
+    # 两害相权：不播。qid 留在 answer_blocked 里，谁补完这 5 条答案，
+    # 谁就能一眼看出是哪几条被跳过。
+    if _unreadable(answer):
+        info["readable"], info["blocked"] = False, "placeholder"
+        session.setdefault("answer_blocked", []).append(
+            {"via": "qa", "id": qid, "source": info["source"],
+             "reason": "placeholder", "missing": []})
+        return info
+
+    if qid and list(session.get("qa_answered") or []).count(qid) >= QA_MAX_PER_QID:
+        return None
+    if int(session.get("qa_count") or 0) >= QA_MAX_ANSWERS:
+        return None
+
+    info["answer"] = answer
+    session.setdefault("qa_answered", []).append(qid)
+    # 记下**原话本身**（不只是 id）：`kb_pop.json` 里有几条条目和官方 QA 逐字相同
+    # （4 号当时是照官方原文抄进去的）。去重只按 qid 记的话，第二次会从 kb 那边
+    # 把同一句话原样再念一遍——用户听到的是一字不差的复读，去重等于没做。
+    session.setdefault("spoken_answers", []).append(answer)
+    session["qa_count"] = int(session.get("qa_count") or 0) + 1
+    return info
+
+
+def _answer_official(session, text, flags):
+    """先用官方原话答，再退回知识条目；都没命中返回 (None, None, None)。
+
+    返回三元组 (answer_text, qa_hit, kb_hit)：`answer_text` 是要播的那句，
+    后两个是溯源信息，原样传给 `_reply`，落进 agent_reply 事件。
+    分开返回是因为两者的**可信度不同**：qa 是官方原话（不可改写），
+    kb 是我们自己的口径（可改写）。调用方不该把两者混成一个字符串。
+
+    知识条目这一路还多做一件事：**把没填的占位符挡在播报之外**。
+    `kb_pop.json` 里 96 条驳回话术都是带【】槽位的模板（"您申请的【】品牌"），
+    以前对话层调 `kb.match(text)` 不传 slots，模板原样念出来就是
+    "您申请的括号括号品牌"——TTS 念成"左括号右括号"。这里做两条：
+        - 传 slots 进去（C2 的渲染能力早就写好了，只是没人接）；
+        - 渲染后仍 `missing` 的，整条不播（念半句模板比不答更糟）。
+    """
+    qa = _qa_lookup(session, text)
+    if qa and qa.get("readable") and qa.get("answer"):
+        return _soothe(qa["answer"], flags), qa, None
+    hit = kb.match(text, slots=session.get("slots") or {}) if kb.enabled() else None
+    if hit and hit.get("answer"):
+        if _unreadable(hit["answer"]) or hit.get("missing"):
+            session.setdefault("answer_blocked", []).append(
+                {"via": "kb", "id": hit.get("id", ""), "source": hit.get("source_id", ""),
+                 "reason": "placeholder", "missing": list(hit.get("missing") or [])})
+        elif hit["answer"] in (session.get("spoken_answers") or []):
+            # 和刚才播过的某句逐字相同：不念第二遍（理由见 _qa_lookup 末尾）。
+            session.setdefault("answer_blocked", []).append(
+                {"via": "kb", "id": hit.get("id", ""), "source": hit.get("source_id", ""),
+                 "reason": "repeated", "missing": []})
+        else:
+            return _soothe(hit["answer"], flags), None, hit
+    return None, None, None
 
 
 def _finish(session, text, reason):
@@ -1590,23 +1761,27 @@ def _stage_greeting(session, text, flags):
             return _finish(session, cfg.get("reply_deny", "抱歉打扰您了，再见。"),
                            "not_me")
         else:
-            _prefix = ""
+            # 还没确认公司时用户提问：先答（官方原话优先），**但仍然要把
+            # "您是XX公司吗"问回去**。赛题数据说明写死了这一环不能省，
+            # 答了问题就不确认公司，等于为了体验丢掉最硬的一条合规要求。
+            _prefix, _qa_hit, _kb_hit = "", None, None
             if flags.get("ask"):
-                _hit = kb.match(text) if kb.enabled() else None
-                if _hit and _hit.get("answer"):
-                    _prefix = _hit["answer"]
+                _ans, _qa_hit, _kb_hit = _answer_official(session, text, flags)
+                _prefix = _ans or ""
             _confirm_q = _fill_outbound(
                 config_loader.stage_config("GREETING").get("reply_confirm_company")
                 or cfg.get("reply", ""), _target)
             return _reply(session, ("%s %s" % (_prefix, _confirm_q)).strip(),
-                          next_stage="GREETING", intent="greeting_confirm_company")
+                          next_stage="GREETING", intent="greeting_confirm_company",
+                          qa_hit=_qa_hit, kb_hit=_kb_hit)
 
     # Q1-D6：第一句就问「号码哪来的 / 我凭什么告诉你」——先正面回答，再核对。
     # 开场不答问题直接要尾号，是最容易被挂断的开场之一（Q1 分诊 Q1-R3）。
     # 回答仍要带核身问题，否则用户答完就沉默了。
     if flags.get("ask") or _refuse_identity(text):
-        hit = kb.match(text) if kb.enabled() else None
-        if hit and hit.get("answer"):
+        # 官方 QA 优先于知识条目：能复述原话就先复述原话（见 _answer_official）。
+        _ans, _qa_hit, _kb_hit = _answer_official(session, text, flags)
+        if _ans:
             identity_cfg = config_loader.stage_config("IDENTITY")
             ask = identity_cfg.get(
                 "reply_ask_tail",
@@ -1614,8 +1789,9 @@ def _stage_greeting(session, text, flags):
             # 手工记一次账：这句既答了问题也问了尾号，下一轮该按「问过 tail」算。
             session["slot_asks"]["tail"] = session["slot_asks"].get("tail", 0) + 1
             session["last_asked_slot"] = "tail"
-            return _reply(session, "%s %s" % (hit["answer"], ask),
-                          next_stage="IDENTITY", intent="greeting_ask")
+            return _reply(session, "%s %s" % (_ans, ask),
+                          next_stage="IDENTITY", intent="greeting_ask",
+                          qa_hit=_qa_hit, kb_hit=_kb_hit)
 
     # 其它任何应答都往下走：核对身份。这里就用"问尾号"那一句——
     # 它是这一环的第一个问题，走同一套话术与记账，别让第一问和后续追问
@@ -1772,14 +1948,14 @@ def _stage_identity(session, text, flags):
                 intent="identity_refuse")
 
         # ② 提问 / 质疑（"你先说号码哪来的"、"核验这么麻烦"）：先正面回答。
-        #    知识库答得上就答（带出处），答不上也要给一句可核实的承诺，
+        #    官方 QA 原话优先，其次知识库（带出处），答不上也要给一句可核实的承诺，
         #    然后把话题拉回核身。绝不回「没听清」——那是把用户的问题当空气。
-        hit = kb.match(text) if kb.enabled() else None
-        if hit and hit.get("answer"):
+        _ans, _qa_hit, _kb_hit = _answer_official(session, text, flags)
+        if _ans:
             return _reply(
                 session,
-                "%s 另外麻烦您报一下手机号后四位，我核对完马上给您办。" % hit["answer"],
-                intent="identity_ask")
+                "%s 另外麻烦您报一下手机号后四位，我核对完马上给您办。" % _ans,
+                intent="identity_ask", qa_hit=_qa_hit, kb_hit=_kb_hit)
         if flags.get("ask") or flags.get("no"):
             return _reply(
                 session,
@@ -1902,12 +2078,20 @@ def _stage_need(session, text, flags):
     if _is_reference_only(text):
         return _clarify(session, "NEED")
 
-    # 用户在提问 → 用查到的订单信息回答，仍停在本阶段
+    # 用户在提问 → 官方 QA 原话 / 查到的事实回答，仍停在本阶段
     if flags["ask"]:
         # 求结果保证（合规红线）在 NEED 阶段同样先拦，见 _promise_block。
         blocked = _promise_block(session, text, flags)
         if blocked:
             return blocked
+        # 这里的顺序是「具体问题优先于通用事实」：
+        # "在职证明有哪些"（官方 QA 能逐字答）必须先于"您这笔申请是…驳回原因是…"，
+        # 否则用户问的是 A，听到的是 B——11-07 那批分诊里 20/24 条挂断都是这个形状。
+        _ans, _qa_hit, _kb_hit = _answer_official(session, text, flags)
+        if _ans:
+            return _reply(session, _ans,
+                          intent="qa" if _qa_hit else "ask",
+                          qa_hit=_qa_hit, kb_hit=_kb_hit)
         app = session["slots"].get("application")
         if app:
             return _reply(session,
@@ -1976,15 +2160,19 @@ def _stage_offer(session, text, flags):
         if _is_reference_only(text):
             return _clarify(session, "OFFER")
 
-    # 提问：先查知识库（带出处），查不到再退回配置里的固定话术
+    # 提问：官方 QA 原话 → 知识条目（带出处）→ 配置里的固定话术
     if flags["ask"]:
         # 求结果保证（框架合规红线）必须先于知识库拦截，见 _promise_block。
         blocked = _promise_block(session, text, flags)
         if blocked:
             return blocked
-        hit = kb.match(text)
-        if hit:
-            return _reply(session, hit["answer"], intent="ask", kb_hit=hit)
+        _ans, _qa_hit, _kb_hit = _answer_official(session, text, flags)
+        if _ans:
+            # 官方原话用 intent="qa"：_reply 会因此冻结措辞层，保证逐字可复述。
+            # 知识条目仍走 intent="ask"（我们自己的口径，允许改写得更口语）。
+            return _reply(session, _ans,
+                          intent="qa" if _qa_hit else "ask",
+                          qa_hit=_qa_hit, kb_hit=_kb_hit)
         # 老路径：knowledge 文件还没落位（或问题确实不在库里）时行为完全不变。
         # 保留它不是为了兼容，是因为「答不上来的问题」和「库里没写的问题」
         # 必须落到同一句 reply_unknown，不能让两种原因产生两种说法。
@@ -2052,6 +2240,27 @@ def _stage_confirm(session, text, flags):
     if flags.get("angry"):
         return _angry_hold(session, "CONFIRM")
 
+    # 提问不等于表态（11-08 接官方 QA 时补的一条）。
+    # 旧行为：确认环节用户一问"这个会不会影响我店铺评分"，就落进下面的
+    # confirm_asks += 1，问两轮记 unknown 转专员——商家问的是一个真问题，
+    # 得到的回答却是"您简单回我一句清楚了或者还有疑问"。这在真实通话里
+    # 是最典型的"客服装听不见"。
+    #
+    # 只在**真的答得上**时才拦（官方 QA 或知识条目命中）：答不上仍走原逻辑，
+    # 否则任何带问号的句子都能免掉一次确认追问，等于把闸门拆了。
+    # 拦截时 confirm_asks 不动——用户没有含糊，只是问了个问题。
+    if flags["ask"]:
+        blocked = _promise_block(session, text, flags)
+        if blocked:
+            return blocked
+        _ans, _qa_hit, _kb_hit = _answer_official(session, text, flags)
+        if _ans:
+            _tail = (cfg.get("reply_after_ask")
+                     or "您看这样解释清楚了吗？")
+            return _reply(session, "%s %s" % (_ans, _tail),
+                          intent="qa" if _qa_hit else "ask",
+                          qa_hit=_qa_hit, kb_hit=_kb_hit)
+
     session["confirm_asks"] += 1
     if session["confirm_asks"] < 2:
         return _reply(session, _soothe(cfg.get("reply_again", cfg.get("reply", "")), flags),
@@ -2096,6 +2305,14 @@ def _stage_done(session, text, flags):
         return _do_writeback(session, target, changed=True)
 
     if flags["ask"]:
+        # 终态里提问：先答（官方原话优先），再把热线与再见说出来。
+        # 旧行为是直接念 reply_ask（"如有疑问请拨热线…再见"）——答非所问，
+        # 但那句热线必须留着：用户挂了电话还想找人，这是唯一的兜底路径。
+        _ans, _qa_hit, _kb_hit = _answer_official(session, text, flags)
+        if _ans:
+            return _reply(session, "%s %s" % (_ans, cfg.get("reply_ask") or cfg.get("reply", "")),
+                          intent="qa" if _qa_hit else "ask",
+                          qa_hit=_qa_hit, kb_hit=_kb_hit)
         return _reply(session, cfg.get("reply_ask") or cfg.get("reply", ""), intent="ask")
 
     return _reply(session, cfg.get("reply", "感谢您的接听，再见。"), intent="done")

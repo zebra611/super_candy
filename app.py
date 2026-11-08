@@ -667,16 +667,23 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
                            turn_id=turn_id)
     reply_text = guard["text"]
 
-    events.write_event(session_id, "agent_reply",
-                       {"text": reply_text, "stage": agent_out["stage"],
-                        "next_stage": agent_out["next_stage"],
-                        "intent": agent_out.get("intent", "unknown"),
-                        # 意图置信度：0~1。默认 0.0 而不是 1.0——老代码路径
-                        # （开场白、空输入）本来就没有置信度，写 1.0 会造出假数据。
-                        "intent_conf": agent_out.get("intent_conf", 0.0),
-                        "source": source,
-                        "blocked": guard["blocked"], "hits": guard["hits"],
-                        "replaced": guard["replaced"]},
+    _reply_payload = {"text": reply_text, "stage": agent_out["stage"],
+                      "next_stage": agent_out["next_stage"],
+                      "intent": agent_out.get("intent", "unknown"),
+                      # 意图置信度：0~1。默认 0.0 而不是 1.0——老代码路径
+                      # （开场白、空输入）本来就没有置信度，写 1.0 会造出假数据。
+                      "intent_conf": agent_out.get("intent_conf", 0.0),
+                      "source": source,
+                      "blocked": guard["blocked"], "hits": guard["hits"],
+                      "replaced": guard["replaced"]}
+    # 溯源字段：只在这句真的引了资料时才写，不写空壳。
+    #   qa —— 官方 27 条原话（config/mock/qa.json），逐字播报、不可改写；
+    #   kb —— 我们自己维护的知识条目（可改写）。
+    # 分开记，是因为答辩时"这句是官方口径"和"这句是我们的解释"必须举证得清。
+    for _k in ("qa", "kb"):
+        if agent_out.get(_k):
+            _reply_payload[_k] = agent_out[_k]
+    events.write_event(session_id, "agent_reply", _reply_payload,
                        turn_id=turn_id, latency_ms=llm_ms)
 
     # ⑧ TTS：只等第一段就返回，剩余段在后台合成、由前端播完首段后来取。
@@ -723,6 +730,10 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
         "intent": agent_out.get("intent", "unknown"),
         "end_reason": agent_out.get("end_reason", ""),
         "intent_conf": agent_out.get("intent_conf", 0.0),
+        # 这句回答引了哪份资料（官方 QA / 知识条目）。测试台直接显示在气泡下方，
+        # 演示时"官方原话"四个字才有依据；没引资料时字段不出现，不写空壳。
+        "qa": agent_out.get("qa"),
+        "kb": agent_out.get("kb"),
         "tool_result": tool_result,
         "closed": sess["closed"],
         "slots": dict(sess["slots"]),

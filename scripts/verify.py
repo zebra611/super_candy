@@ -2579,6 +2579,48 @@ def main():
           and _base_default.lookup_qa("x")["found"] is False,
           ["默认返回可用"])
 
+    # ---- 官方 QA 接进对话（11-08）----------------------------------------
+    # 上面那条验的是"适配器查得到"，这三条验的是"查到了之后在对话里怎么用"：
+    # 该逐字播的原话播了没有、该闭嘴的占位答案闭嘴了没有、提问有没有被当成表态。
+    _ds = dialogue.new_session("verify-qa-offer")
+    _ds["stage"] = "OFFER"
+    _ds["slots"]["identity_confirmed"] = True
+    _dq = dialogue.respond(_ds, "在职证明有哪些")
+    _dq2 = dialogue.respond(_ds, "在职证明有哪些")
+    check("官方 QA 接进对话：OFFER 提问逐字播原话、带溯源、不推进阶段；同一句不复读",
+          _dq["intent"] == "qa" and (_dq.get("qa") or {}).get("id") == "QA-HF-003"
+          and "企微认证" in _dq["reply_text"]
+          and _dq["next_stage"] == "OFFER"
+          and not _dq2.get("qa")
+          and "企微认证" not in _dq2["reply_text"],
+          ["intent=%s qa=%s 阶段=%s 二次qa=%s"
+           % (_dq["intent"], (_dq.get("qa") or {}).get("id"),
+              _dq["next_stage"], _dq2.get("qa"))])
+
+    _dc = dialogue.new_session("verify-qa-confirm")
+    _dc["stage"] = "CONFIRM"
+    _dc["slots"]["identity_confirmed"] = True
+    _dcq = dialogue.respond(_dc, "发票必须要盖开店公司公章吗")
+    check("确认环节提问不计入含糊次数，答完把确认问题放回去（提问不是表态）",
+          _dc["confirm_asks"] == 0
+          and (_dcq.get("qa") or {}).get("id") == "QA-HF-007"
+          and "清楚了吗" in _dcq["reply_text"]
+          and _dcq["next_stage"] == "CONFIRM",
+          ["confirm_asks=%d qa=%s"
+           % (_dc["confirm_asks"], (_dcq.get("qa") or {}).get("id"))])
+
+    _dp = dialogue.new_session("verify-qa-placeholder")
+    _dp["stage"] = "OFFER"
+    _dp["slots"]["identity_confirmed"] = True
+    _dph = dialogue.respond(_dp, "我在哪可以查询到这个商标状态")
+    _dpk = dialogue.respond(_dp, "你们能和品牌方确认吗")
+    _bad = ("XX", "【", "】")
+    check("答案里还有没填的占位（官方 XX / kb 模板【】）一律不念，且留下拦截记录",
+          not any(m in _dph["reply_text"] for m in _bad)
+          and not any(m in _dpk["reply_text"] for m in _bad)
+          and any(b.get("reason") == "placeholder" for b in _dp["answer_blocked"]),
+          ["拦截记录=%d 条" % len(_dp["answer_blocked"])])
+
     import io as _io
     import contextlib as _ctx
     from scripts import check_mock_bundle as _mbmod

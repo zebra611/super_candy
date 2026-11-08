@@ -37,6 +37,41 @@ GitHub 的 Contributors 只显示账号名，看不出是谁，所以这里给�
 
 > 最新在最上面。每条改动都附当时的回归结果，断言数即验收标准。
 
+**2026-11-08 · 官方 QA 接进对话（27 条原话真的能回答商家了）**：
+上一轮把官方资料包转成了 `config/mock/qa.json`，但只做到"接口可查"——
+商家在电话里问"在职证明有哪些"，客服仍然回 `reply_unknown`。这轮把它接进状态机，
+**六个阶段、七个提问出口**都改了，代价是全套断言要重跑一遍。
+
+接的时候发现四个必须当场定的问题（都记在 [docs/34](docs/34_mock数据包.md) §8）：
+
+- **官方优先于 `kb.json`**：官方是审核员原话，能逐字复述；kb 是我们自己的口径。
+  同一句两边都能答时，能复述原话的优先。
+- **原话不过措辞层**：`_reply` 里只要带 `qa_hit` 就冻结 nlg 改写。
+  改一个字就不再是"官方原话"，被追问依据时站不住。
+- **占位答案整条不播**：官方 27 条里 **5 条**带未填的 `XX`（"在商标状态变为XX后重新提交"），
+  `kb_pop.json` 里 **96 条**驳回话术带 `【】` 槽位。逐字播报会让 TTS 念出
+  "叉叉""左右括号"；自己补词就是编造口径。改成不播 + 记进 `answer_blocked`，
+  补完数据就自动生效，不用改代码。
+- **同一句不重复播**：按 `qid` 和**原文**双重去重——`kb_pop` 里有几条是照官方原文抄的，
+  只按 id 去重的话第二次会从 kb 那边把同一句话原样再念一遍。
+
+顺手修掉两个真实缺陷：
+
+- **CONFIRM 阶段把提问当成了含糊**：商家问"这个会不会影响我店铺评分"，
+  旧路径回"您简单回我一句清楚了或者还有疑问"，两轮后工单记 `unknown` 转专员。
+  现在答得上就先答、再把确认问题放回去，且**不计 `confirm_asks`**；
+  答不上仍走原逻辑（否则任何带问号的句子都能免掉一次确认追问）。
+- **`ASK_MARKS` 缺"哪些/如何"**：官方问法"在职证明有哪些""如何上传联系方式"
+  **判不成提问**，QA 永远接不上。这两个词是这轮补的。
+
+`agent_reply` 事件新增 `qa` / `kb` 两个可选字段（只在真的引了资料时才写），
+把"这句是官方原话还是我们的解释"落进事件流，答辩时可举证。
+
+回归：`verify.py` **203/203**（新增 3 条对话侧证据）、`run_eval.py` **88/88**
+（应闭环 56/56、误闭环 0/27、留出集 18/18）、`test_qa_dialogue.py` **14/14**（新）、
+`test_tools` 34/34、`test_nlg` 25/25、`test_kb` 28/28、`sim_eval` 8/10 不变。
+文档：`docs/34` §6 边界与 §8 实现说明。
+
 **2026-11-08 · mock 数据包补全（官方 68 场景全覆盖，原文件零删除）**：
 原来 mock 的驳回原因只有 **8 条自造说法**，与官方资料包对不上——商家说"商标状态不符合要求"，
 系统却回另一套原因，评委一眼能看穿。这次把两份官方 xlsx **机械转成结构化数据**：
@@ -578,14 +613,15 @@ web/dashboard.html  指标看板：KPI、时延双口径、事件分布、质检
 mock_business/      独立 Mock 业务服务：查客户 / 查订单 / 建工单（幂等）
 config/mock/        完整 mock 数据包：188 条档案（原集 120 + 官方场景 68）、68 条场景目录、
                     52 条驳回话术、27 条 QA、12 客户、16 订单（全部可复算，见 docs/34）
-scripts/            verify（200 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
+scripts/            verify（203 条自检）/ run_eval（跑批）/ bench_voice（30 轮基准）
                     sim_eval（模拟用户跑批）/ evolve（init·propose·gate·promote·rollback）
                     bench_speaker_gate（声纹阈值标定）/ gen_speaker_corpus（多音色语料）
                     build_mock_bundle（官方 xlsx → 场景目录/话术/QA）
                     gen_mock_applications + gen_mock_catalog_applications（原集 / 官方场景档案）
                     check_mock_applications + check_mock_bundle（两套数据校验，均带反向自测）
                     task2_metrics（四项指标出数）/ check_realtime_asr（流式识别连通验证）
-                    test_*（八套离线自测，已作为证据 16/30 挂进 verify）
+                    test_*（离线自测，八套已作为证据 16/30 挂进 verify；
+                     test_qa_dialogue 专测官方 QA 接进对话后的边界，14 条）
                     clean_events · archive_events（库体检/归档）/ check_key / 试听 / 录音验识别
 CODEOWNERS          谁的文件谁审（GitHub 账号对照）
 .githooks/          pre-push：禁止直接推 main（要 git config core.hooksPath .githooks）
@@ -599,7 +635,7 @@ reviews/            PR 审核记录
 ## 七、怎么验证我改的东西没坏
 
 ```bash
-python scripts/verify.py       # 200 条行为断言，用临时库，不污染 data/
+python scripts/verify.py       # 203 条行为断言，用临时库，不污染 data/
 python scripts/run_eval.py     # 30 条用例跑批（离线，不调云端）
 python scripts/sim_eval.py     # 10 类模拟用户跑完整通话 + 逐轮归因（不调云端）
 python scripts/evolve.py status            # 现在线上是哪一版话术、分数多少、能不能回滚
@@ -653,11 +689,13 @@ git config core.hooksPath .githooks
 场景路径与日志落盘（#16）、落库开关文档化（#19）、团队对照与密钥提示（#20）、
 评测与质检工具链（#17）、语音线 Z6/Z7/V1（#35–#37）、端到端跑通脚本（#38）、
 默认场景改赛题 POP（#39）、**四段式开场**（#40）、**档案补全 + 随机纯预览 + 纯文字模式 +
-macOS 启动**（#41）、**完整 mock 数据包**（官方 68 场景），自检 **200/200**。**当前没有开着的 PR**。
+macOS 启动**（#41）、**完整 mock 数据包**（官方 68 场景）、**官方 QA 接进对话**，自检 **203/203**。**当前没有开着的 PR**。
 
-2026-11-08 的 L2 自进化、说话人门、mock 数据包这批改动，按队长要求**直接进 main**（未开 PR），
+2026-11-08 的 L2 自进化、说话人门、mock 数据包、官方 QA 接进对话这批改动，
+按队长要求**直接进 main**（未开 PR），
 用的是 `.githooks/pre-push` 里写明的逃生舱 `ALLOW_MAIN_PUSH=1`；
-进之前跑了 `verify.py` **200/200**、`test_nlg.py` 25/25、`run_eval.py` 88/88、`sim_eval` 8/10。
+进之前跑了 `verify.py` **203/203**、`test_nlg.py` 25/25、`test_tools.py` 34/34、
+`test_qa_dialogue.py` 14/14、`run_eval.py` 88/88、`sim_eval` 8/10。
 规矩仍然是"改动走 PR"（见 §八），这次是明确的一次性例外，不是流程失效。
 
 > 已合并/已关闭的分支（`feat/platform-m5-m8`、`feat/task2-*`、`feat/r1-stage0-unlock`、
