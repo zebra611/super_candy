@@ -4,6 +4,7 @@
 跑法：python scripts/test_train_api.py
 """
 
+import json
 import os
 import shutil
 import sys
@@ -33,9 +34,14 @@ def check(name, ok, detail=""):
 
 def main():
     personas = adv.load_personas()
-    check("画像清单 10 条且都有 label",
-          len(personas) == 10 and all(p.get("label") for p in personas),
-          "实际 %d 条" % len(personas))
+    # 不变量是「API 清单与画像文件一致」，不是某个固定条数——
+    # 挑战集会加人（11-08 加到 16），硬编码条数只会变成假红。
+    _file_n = len((json.load(open(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "eval", "personas_adversarial.json"), encoding="utf-8"))).get("personas") or [])
+    check("画像清单与画像文件一致且都有 label",
+          len(personas) == _file_n and all(p.get("label") for p in personas),
+          "API %d 条 / 文件 %d 条" % (len(personas), _file_n))
 
     p = next(x for x in personas if x["id"] == "A03")
     before_n = len(events.recent_sessions(limit=200))

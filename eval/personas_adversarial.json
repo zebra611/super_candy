@@ -1,5 +1,5 @@
 {
- "_comment": "自适应对抗画像集：客户按客服暴露的弱点主动升级难度。与 eval/personas_sim.json（10 通 L2 基线）、eval/personas_temperament.json（12 性格画像）完全分开；往那两份里加人会让既有分母失真。",
+ "_comment": "自适应对抗画像集：客户按客服暴露的弱点主动升级难度。与 eval/personas_sim.json（10 通 L2 基线）、eval/personas_temperament.json（12 性格画像）完全分开；往那两份里加人会让既有分母失真。11-08 晚新增 A11~A16 挑战画像（引擎未动，A01~A10 逐字节不变）：低耐心 confirm 画像专打「浪费轮次」（每复读/丢槽位都吃耐心，耐心耗尽即挂断，业务上本可闭环的电话闭不了环）；高耐心 offtopic 画像专打「长通话韧性」（多轮问答不重复、不把配合当成同意）。",
  "_schema": {
   "max_level": "压力上限 1~4；实际等级由客服弱点命中数驱动，不是固定脚本",
   "knows": "受知约束：false 的字段不会出现在 facts 里，模拟器编不出这个值",
@@ -57,6 +57,42 @@
    "id": "A10", "label": "留出集·没听懂就不表态", "goal": "offtopic", "split": "holdout",
    "max_level": 4, "knows": {"phone_tail": true, "company_name": true},
    "traits": {"patience": 7}, "style": ["哎呀"], "expect": {"closed": false}
+  },
+  {
+   "id": "A11", "label": "赶时间的供货商（挑战）", "goal": "confirm", "split": "train",
+   "max_level": 2, "knows": {"phone_tail": true, "contact_name": true, "application_id": true, "company_name": true},
+   "traits": {"patience": 5}, "style": ["急"], "expect": {"closed": true},
+   "_why": "业务上这通电话完全可闭环：四项事实都肯给、也愿意确认。耐心只有 5，客服每复读一次（-2）、每丢一次槽位或答非所问（-1）都在吃预算，耗尽即挂断。考的不是态度是效率：不许有浪费轮次。"
+  },
+  {
+   "id": "A12", "label": "开口就质疑的老店主（挑战）", "goal": "offtopic", "split": "train",
+   "max_level": 4, "knows": {"phone_tail": true, "contact_name": true, "application_id": true, "company_name": true},
+   "traits": {"patience": 14}, "style": ["老哥"], "expect": {"closed": false},
+   "_why": "耐心 14 的长通话：客服每答对一次质疑就能多留一轮，考的是十轮以上的问答不复读、不把配合当同意；客服但凡衰退就立刻升级到 L4。"
+  },
+  {
+   "id": "A13", "label": "答完就催结果（挑战）", "goal": "offtopic", "split": "train",
+   "max_level": 4, "knows": {"phone_tail": true, "contact_name": true, "application_id": true, "company_name": true},
+   "traits": {"patience": 10}, "style": ["快点"], "expect": {"closed": false},
+   "_why": "核身信息给得痛快，但从不明确表态同意——考客服不把配合当成同意回写（premature 判据在这类画像上最容易现形）。"
+  },
+  {
+   "id": "A14", "label": "一边干活一边应付（挑战）", "goal": "offtopic", "split": "train",
+   "max_level": 4, "knows": {"phone_tail": true, "contact_name": true},
+   "traits": {"patience": 12}, "style": ["等下"], "expect": {"closed": false},
+   "_why": "手里有活的店主：老说没听清、跑题，考客服对杂音与跑题的持续接住能力；缺两项事实，回不了环是画像设计不是系统错。"
+  },
+  {
+   "id": "A15", "label": "留出集·半信半疑的财务（挑战）", "goal": "offtopic", "split": "holdout",
+   "max_level": 4, "knows": {"phone_tail": true, "contact_name": true, "application_id": true, "company_name": true},
+   "traits": {"patience": 11}, "style": ["呵呵"], "expect": {"closed": false},
+   "_why": "留出集只验收：全程带刺但耐心不短，考客服在不给任何把柄的前提下把电话体面收线。"
+  },
+  {
+   "id": "A16", "label": "留出集·三次机会的急性子（挑战）", "goal": "confirm", "split": "holdout",
+   "max_level": 2, "knows": {"phone_tail": true, "contact_name": true, "application_id": true, "company_name": true},
+   "traits": {"patience": 4}, "style": ["麻利点"], "expect": {"closed": true},
+   "_why": "A11 的极限版：耐心只有 4，等于客服只有约两轮容错。留出集只验收，不得据它调话术。"
   }
  ]
 }

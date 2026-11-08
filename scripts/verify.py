@@ -2764,6 +2764,42 @@ def main():
           not _a and _b,
           ["yes=True → %s（应 False）；yes=False → %s（应 True）" % (_a, _b)])
 
+    # 客户在确认阶段报**新**单号（对抗集 A15 的形状）：必须接住并留在
+    # CONFIRM，不许被当成含糊攒两次回写 unknown 工单。
+    _of = dialogue.new_session("verify-order-fact")
+    _of["stage"] = "CONFIRM"
+    _of["slots"]["identity_confirmed"] = True
+    _o1 = dialogue.respond(_of, "单号后六位QZ202611060001")
+    check("客户报新单号：接住并重问确认，不产生回写",
+          not _o1.get("end_reason") and _o1["next_stage"] == "CONFIRM"
+          and _of["slots"].get("consent") in ("", None)
+          and ("收到" in _o1["reply_text"] or "记下" in _o1["reply_text"]),
+          ["next_stage=%s consent=%r reply=%s"
+           % (_o1["next_stage"], _of["slots"].get("consent"),
+              _o1["reply_text"][:30])])
+    _o2 = dialogue.respond(_of, "我刚不是说了吗，单号就是QZ202611060001")
+    check("连续报信息：接住话术交替不复读，且不追加「要信息型」后缀",
+          not _o2.get("end_reason")
+          and _o2["reply_text"][:12] != _o1["reply_text"][:12]
+          and "对照申请单编号核实" not in _o2["reply_text"],
+          ["两轮主干是否相同=%s 后缀是否漏拦=%s"
+           % (_o2["reply_text"][:12] == _o1["reply_text"][:12],
+              "对照申请单编号核实" in _o2["reply_text"])])
+
+    # 性格适配层守卫：客户刚递上信息的那一轮，「要信息型」后缀不许追加
+    # （11-08 A15：skeptical 的 suffix 紧跟在客户报完单号之后，被对抗器
+    # 判成 slot_loss）。反向：没递信息时不拦，suffix 照常追加。
+    _pf = dialogue.new_session("verify-persona-factack")
+    _pf["persona_code"] = "skeptical"
+    _base = "好的，收到。咱们回到正题，您可以简单回我一句清楚了或者还有疑问。"
+    _pf["fact_ack_turn"] = True
+    _g1, _a1 = _pm.adapt(_pf, _base, "CONFIRM")
+    _pf.pop("fact_ack_turn")
+    _g2, _a2 = _pm.adapt(_pf, _base, "CONFIRM")
+    check("适配层：客户刚给信息时不追加要信息型后缀（反向：平时照常追加）",
+          "对照申请单编号核实" not in _g1 and "对照申请单编号核实" in _g2,
+          ["拦后=%r 放后=%r" % (_g1[-16:], _g2[-16:])])
+
     # ---- PR #42 收线覆盖（合并审查后补的守卫） ----
     import ws_channel as _wsc
     check("PR #42：挂断/拒绝/转专员等所有收尾出口都会触发服务端收线",

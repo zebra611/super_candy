@@ -2283,22 +2283,41 @@ _ENGAGED_MARKS = ("凭什么", "你谁", "哪来的", "怎么信", "别是", "�
 
 
 def _still_engaged(session, text, flags):
-    """客户这一轮还在主动沟通（而不是含糊表态）？只看字面，不猜意图。"""
+    """客户这一轮还在主动沟通（而不是含糊表态）？只看字面，不猜意图。
+
+    返回 ""（含糊）或原因分类：
+        "fact" —— 在提供/重报实质信息（数字、已给过的尾号姓名、重申身份），
+                  客服应当**接住**再继续确认；
+        "talk" —— 在提问或质疑，客服应当先回应。
+    调用方按分类给不同回复；空串才走「含糊计数」。
+    """
     # 已经明确表态就不能算「还在谈」。「哦免费啊，那还是要吧」里带「免费」，
     # 旧词表把它当成质疑，转专员收线，整通电话一张工单都没有（L07 实测）。
     if flags.get("yes") or flags.get("no"):
-        return False
+        return ""
     if flags.get("ask"):
-        return True
+        return "talk"
     if any(w in text for w in _ENGAGED_MARKS):
-        return True
+        return "talk"
+    # 客户重申身份（"对，是我，你说"）：这是在推进核验，不是对确认问题的表态。
+    # 旧判据把它计入含糊，隔着实质回合攒满两次就回写 unknown——客户明明
+    # 还在积极配合（11-08 对抗集 A15 实测）。否定变体（"不是我"）必须先拦。
+    i = text.find("是我")
+    if i >= 0 and not any(neg in text[max(0, i - 2):i] for neg in ("不", "别", "没")):
+        return "fact"
     # 反复报已经给过的尾号/姓名：客服没接住，不是客户没表态。
     # 用 slot_history 而不是当前值：核不上时当前值会被清空，历史不会。
     for values in (session.get("slot_history") or {}).values():
         for v in values or []:
             if len(str(v)) >= 2 and str(v) in text:
-                return True
-    return False
+                return "fact"
+    # 客户在报一串数字（尾号 4 位起、单号、完整号码）：这是在主动提供新信息，
+    # 更不是含糊。旧判据只认「重新报已给过的值」，客户给一个**新**单号
+    # （如对抗集 A15 在确认阶段报申请单号）就落不进来，两次之后被当成
+    # 含糊回写 unknown 工单——客户明明还在积极配合（11-08 A15 实测）。
+    if re.search(r"\d{4}", text):
+        return "fact"
+    return ""
 
 
 def _stage_confirm(session, text, flags):
@@ -2386,11 +2405,37 @@ def _stage_confirm(session, text, flags):
                           intent="qa" if _qa_hit else "ask",
                           qa_hit=_qa_hit, kb_hit=_kb_hit)
 
-    # 客户还在提问 / 质疑 / 重复给信息，而这一轮答不上：这不是「含糊表态」。
+    # 客户还在提问 / 质疑 / 提供信息，而这一轮没有明确表态：这不是「含糊表态」。
     # 旧逻辑把它计入 confirm_asks，两次就回写 unknown 收线，等于替一个还没
-    # 谈完的客户编结论。第一次如实说明确认不到并留在 CONFIRM；第二次转专员
+    # 谈完的客户编结论。第一次如实回应并留在 CONFIRM；第二次转专员
     # 收线，全程不产生回写事件——工单里不该出现凭空猜出来的「不确定」。
-    if _still_engaged(session, text, flags):
+    engaged = _still_engaged(session, text, flags)
+    if engaged:
+        # 客户拿回了实质内容：「连续两次含糊」的观察窗口重开。
+        session["confirm_asks"] = 0
+        if engaged == "fact":
+            # 客户在给信息（报单号、重申身份）：接住，再把确认问题摆回去。
+            # 不计入任何升级计数——配合不该被「配合两次」送走；旧版两轮
+            # 实质回合就转专员收线，客户正按客服建议报单号却被挂了
+            # （11-08 A15 实测）。也不把确认问题摆回去之外的结论编出来。
+            # 话术交替：客户连续两轮给信息时，逐字相同的「好的，收到」
+            # 就是复读（对抗器按主干比对会命中 repeat，归因器按缺陷扣）。
+            _acks = [
+                cfg.get("reply_fact_ack")
+                or "好的，收到。咱们回到正题，您可以简单回我一句清楚了或者还有疑问。",
+                cfg.get("reply_fact_ack_alt")
+                or "记下了。那回到正题，您可以简单回我一句清楚了或者还有疑问。",
+            ]
+            _k = int(session.get("fact_ack_n", 0))
+            session["fact_ack_n"] = _k + 1
+            # 本轮客户刚递上信息：性格适配层不得再追加「要信息型」后缀，
+            # 否则「记下了……您也可以对照申请单编号核实」读起来像又要一遍，
+            # 对抗器按 detect_asks 判成 slot_loss（11-08 A15 实测）。
+            session["fact_ack_turn"] = True
+            return _reply(session, _acks[_k % len(_acks)],
+                          next_stage="CONFIRM", intent="ambiguous")
+        # 提问/质疑且这一轮答不上：第一次如实说明，第二次转专员收线，
+        # 全程不产生回写事件——工单里不该出现凭空猜出来的「不确定」。
         n = int(session.get("confirm_engaged", 0)) + 1
         session["confirm_engaged"] = n
         if n >= 2:
@@ -2696,6 +2741,8 @@ def respond(session, user_text):
     text = (user_text or "").strip()
     session["turn"] += 1
     session["slots"]["last_user_text"] = text
+    # 轮内标志先清：上一轮「客户刚给过信息」的状态不能带进这一轮。
+    session.pop("fact_ack_turn", None)
     # 性格证据：只看这一句用户话的字面（不读 stage / intent / 画像标签）。
     # 放在所有分支之前，空输入与直接收尾的路径也能正确累积证据。
     persona.observe(session, text)

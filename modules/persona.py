@@ -241,6 +241,13 @@ def adapt(session, text, stage="", freeze=False):
     last = session.get("last_reply_text") or ""
     repeated = (text == last)
     n = int(session.get("persona_repeat_n") or 0)
+    # 客户这一轮刚递上信息（报单号、重申身份）时，跳过「要信息型」后缀：
+    # 规则表的后缀有些是在向客户要东西（如「您也可以对照申请单编号核实」），
+    # 紧跟在客户刚报完单号之后读出来，等于当面又要一遍。
+    # 由 dialogue 的接住分支置 fact_ack_turn，每轮开头清除。
+    if session.get("fact_ack_turn"):
+        rule = dict(rule)
+        rule["suffix"] = ""
     try:
         new = _apply_actions(text, rule, freeze=freeze,
                              repeated=repeated, repeat_n=n)
