@@ -4,7 +4,8 @@
 #
 # 双击运行：1 体检 → 2 读基线 → 3 提案 → 4 闸门 → 5 上架提示。
 # 不会自动改线上话术；结束前停住，方便看完整输出。
-# 去掉下面的 --llm 就不调用大模型起草，改为手工填候选话术。
+# 默认用本地确定性模板起草：不联网、不花钱、不依赖密钥。
+# 想改由大模型起草，在终端执行：./自进化.command --llm
 # 首次双击若被文本编辑器打开，先在终端执行一次：chmod +x 自进化.command
 # ---------------------------------------------------------------------------
 
@@ -24,11 +25,11 @@ fi
 
 echo ""
 echo "  Python：$PY"
-echo "  运行 scripts/auto_evolve.py --llm ..."
+echo "  运行 scripts/auto_evolve.py ..."
 echo ""
 
 export PYTHONUNBUFFERED=1
-"$PY" scripts/auto_evolve.py --llm "$@"
+"$PY" scripts/auto_evolve.py "$@"
 RC=$?
 
 echo ""

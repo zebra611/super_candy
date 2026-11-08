@@ -2,22 +2,26 @@
 """一键自进化：把「体检 → 读基线 → 提案 → 闸门」固定成一条命令。
 
 用法（项目根目录）：
-    python scripts/auto_evolve.py             # 跑一轮，出候选草稿
-    python scripts/auto_evolve.py --llm       # 顺带用大模型起草话术，然后直接过闸门
+    python scripts/auto_evolve.py             # 一轮：本地模板草案 → 闸门 → 上架提示
+    python scripts/auto_evolve.py --llm       # 改由大模型起草，坏文案仍由本地模板兜底
     python scripts/auto_evolve.py --no-gate   # 只到提案，不跑闸门
 
 顺序写在输出的第 1～5 步里，对外只暴露这一行命令。
 上架（promote）永远不自动做，必须单独一条命令。
-每轮候选按 auto_001.json 递增，已填好的草稿不会被覆盖。
+空草稿或被静态拒绝的草稿会就地重做，不累积垃圾候选。
 """
 
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+from scripts import evolve as _evo  # noqa: E402  复用同一套候选静态校验
+
 _PY = sys.executable
 _L2_DIR = os.path.join(_ROOT, "config", "evolution", "candidates")
 _P_DIR = os.path.join(_ROOT, "config", "evolution", "persona", "candidates")
@@ -32,6 +36,46 @@ def _rel(path):
 def _read(path):
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+def _write(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+
+
+#: 确定性兜底文案：不调模型也能把草稿填成「可以送闸门」的形状。
+#: 硬约束与静态校验一致——不新增花括号变量、保留该阶段的「核对」关键词、不承诺结果。
+_LOCAL_DRAFTS = {
+    "stages.IDENTITY.reply_offtopic":
+        "没关系，号码记不住也常见。您报一下联系人姓名，或者申请单编号后六位，"
+        "我都能核对上；不方便的话，我让专员用官方号码再联系您。",
+    "stages.IDENTITY.reply_ask_tail":
+        "核对申请单需要预留手机号的后四位，说四个数字就行；"
+        "不方便的话报联系人姓名，我也能核对上。",
+    "stages.IDENTITY.reply_ask_identity":
+        "您的号码是商家入驻时预留的联系方式，官方审核只用来核对这笔资质申请。"
+        "您报手机号后四位，或者说联系人姓名，都可以。",
+}
+
+
+def _draft_fallback(cand, base_cfg):
+    """空草稿 / 模型起草出坏文案时，用本地模板补齐；返回替换条数。
+
+    11-08 实跑：双击入口沿用了上一轮的空草稿，跳过提案，于是既不调模型、
+    也永远进不了闸门，屏幕上只留一句「待填」。这里保证第 3 步结束后
+    草稿一定填好且过静态校验，第 4 步一定能真的跑起来。
+    """
+    n = 0
+    for p in cand.get("patches") or []:
+        val, old = str(p.get("value") or ""), str(p.get("old") or "")
+        extra = set(re.findall(r"\{[^}]+\}", val)) - set(re.findall(r"\{[^}]+\}", old))
+        bad = (not val.strip() or bool(extra)
+               or bool(_evo.validate_candidate({"patches": [p]}, base_cfg)))
+        if bad:
+            p["value"] = _LOCAL_DRAFTS.get(p.get("path"), old)
+            p["rationale"] = "本地模板草案（确定性兜底）：保留核对关键词，不新增变量"
+            n += 1
+    return n
 
 
 def _run(label, cmd, allow_fail=False):
@@ -57,13 +101,14 @@ def _next_path(directory):
 
 
 def _pending(directory):
-    """最近一份还没进闸门的草稿；没有就返回 (None, None)。"""
+    """最近一份可继续处理的草稿：没进过闸门，或只被静态拒绝过。"""
     for p in reversed(sorted(glob.glob(os.path.join(directory, "auto_*.json")))):
         try:
             c = _read(p)
         except Exception:
             continue
-        if "gate" not in c:
+        g = c.get("gate") or {}
+        if "gate" not in c or g.get("result") == "rejected_static":
             return p, c
     return None, None
 
@@ -121,16 +166,30 @@ def main():
     print("\n第 3 步｜按失败聚类出候选")
     l2_path, l2_cand = _pending(_L2_DIR)
     p_path, p_cand = _pending(_P_DIR)
-    if l2_cand is not None:
-        print("  [沿用] 上一轮草稿还没进闸门：%s" % _rel(l2_path))
+    stale = l2_cand is not None and (
+        not _l2_ready(l2_cand)
+        or (l2_cand.get("gate") or {}).get("result") == "rejected_static")
+    if l2_cand is not None and not stale:
+        print("  [沿用] 上一轮草稿已填好，直接送闸门：%s" % _rel(l2_path))
     else:
-        l2_path = _next_path(_L2_DIR)
+        if l2_cand is None:
+            l2_path = _next_path(_L2_DIR)
+            print("  [新建] 本轮候选：%s" % _rel(l2_path))
+        else:
+            print("  [重做] 上一轮草稿是空的或被静态拒绝，覆盖重提：%s" % _rel(l2_path))
         cmd = [_PY, "scripts/evolve.py", "propose", "--from", _rel(l2_report),
                "--out", _rel(l2_path)]
         if use_llm:
             cmd.append("--llm")
         _run("L2 提案", cmd)
         l2_cand = _read(l2_path) if os.path.exists(l2_path) else {}
+    # 无论沿用、重做还是模型起草，送闸门前的草稿必须填好且过静态校验。
+    if l2_cand and l2_cand.get("patches"):
+        base_cfg = _read(os.path.join(_ROOT, "config", "scenes", "pop_reject.json"))
+        n = _draft_fallback(l2_cand, base_cfg)
+        if n:
+            _write(l2_path, l2_cand)
+            print("  [完成] %d 句改写用本地模板填好（不调模型也能进闸门）" % n)
     if p_cand is not None:
         print("  [沿用] 上一轮性格草稿：%s" % _rel(p_path))
     else:

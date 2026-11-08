@@ -2705,6 +2705,22 @@ def main():
     check("数据包校验器的反向自测：6 种改坏都能被抓到（校验器不假绿）",
           _self_ok, ["变异用例全部报红" if _self_ok else "有变异没被抓到"])
 
+    # ---- 双击入口（11-08 晚）：.bat 里混进一个中文字符，cmd 会吞掉后续命令 ----
+    # 真踩过：把「自进化.bat」写进注释后，整份批处理被逐行拆碎执行。
+    def _bat_bad(raw):
+        return raw.startswith(b"\xef\xbb\xbf") or any(x > 127 for x in raw)
+
+    _bats = sorted(f for f in os.listdir(ROOT) if f.lower().endswith(".bat"))
+    _bad_bats = [f for f in _bats
+                 if _bat_bad(open(os.path.join(ROOT, f), "rb").read())]
+    _probe_ok = (_bat_bad("rem 中文".encode("utf-8"))
+                 and not _bat_bad(b"rem ascii\n"))
+    check("Windows 双击入口：所有 .bat 纯 ASCII 无 BOM（含中文探针反向自测）",
+          bool(_bats) and not _bad_bats and _probe_ok,
+          ["检查 %d 个；异常：%s；探针=%s"
+           % (len(_bats), "、".join(_bad_bats) or "无",
+              "能抓到" if _probe_ok else "失效")])
+
     print()
     print("=" * 74)
     total = len(results)

@@ -11,8 +11,8 @@ rem Microsoft Store stub, so each candidate is really executed once.
 rem Keep this file pure ASCII. A single non-ASCII char here makes cmd eat the
 rem next few characters of the line and every command breaks.
 rem Double click = one full evolution round. No command line needed.
-rem Remove --llm below to skip the model draft step (then edit the candidate
-rem by hand and double click again to run the gate).
+rem Default draft is a local deterministic template: no key, no network, no cost.
+rem To let the model draft instead, append --llm when launching from a terminal.
 rem ---------------------------------------------------------------------------
 
 for %%C in (python python3) do (
@@ -53,10 +53,10 @@ if not defined PYEXE (
 
 echo.
 echo   Python: !PYEXE!
-echo   Running scripts\auto_evolve.py --llm ...
+echo   Running scripts\auto_evolve.py ...
 echo.
 
-!PYEXE! scripts\auto_evolve.py --llm %*
+!PYEXE! scripts\auto_evolve.py %*
 set "RC=%ERRORLEVEL%"
 
 echo.
