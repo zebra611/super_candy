@@ -425,6 +425,12 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
 
     if args.all_scenes:
+        # --cases 是"只跑这一份"，--all-scenes 是"按场景全都跑一遍"，语义互斥。
+        # 静默忽略其中一个会让 CI 以为跑了全套、实际只跑了一份。
+        if args.cases:
+            print("--all-scenes 不能和 --cases 同时用：前者按场景跑全部批次，后者只跑指定用例",
+                  file=sys.stderr)
+            return 2
         return run_all_scenes(args)
 
     if args.rounds < 1:
@@ -454,7 +460,21 @@ def main(argv=None):
                     _skipped.append((os.path.basename(path), want or "(默认)"))
                     continue
                 cases.extend(load_cases(path))
-            validate_cases(cases)
+    except CaseError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    if not cases:
+        # 场景名拼错 / 新批次没登记时，过滤后会是空集。先于 validate_cases 判：
+        # 那个校验只会说「当前是 list」，看不出是场景没对上。
+        print("没有属于场景 %s 的用例：检查 --scene 拼写，或把新批次登记到 "
+              "SCENE_OF_FILE（当前登记：%s）"
+              % (_SCENE or "(默认)", "、".join("%s→%s" % kv for kv in SCENE_OF_FILE.items())
+                 or "无"), file=sys.stderr)
+        return 2
+
+    try:
+        validate_cases(cases)
     except CaseError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -463,8 +483,12 @@ def main(argv=None):
         print("场景：%s（跳过 %d 批不属于本场景的用例集）"
               % (_SCENE or "(默认)", len(_skipped)))
         for name, want in _skipped:
-            print("  跳过 %-34s 属于 %s，请用 --scene %s 单独跑"
-                  % (name, want, want if want != "(默认)" else "<默认>"))
+            if want == "(默认)":
+                # `--scene <默认>` 不是一条能敲的命令：默认场景就是不传 --scene。
+                print("  跳过 %-34s 属于默认场景，请不带 --scene 单独跑" % name)
+            else:
+                print("  跳过 %-34s 属于 %s，请用 --scene %s 单独跑"
+                      % (name, want, want))
 
     case_map = {c["id"]: c for c in cases}
     if not args.quiet:

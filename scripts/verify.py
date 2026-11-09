@@ -48,7 +48,7 @@ from app import (_acquire, _audio_state, _auth, _has_interrupt_content,  # noqa:
                  probe_speech, record_barge_in,
                  report_client_metric, start_call)
 from modules import dialogue, eval as eval_mod, kb, nlg, tools, voice  # noqa: E402
-from modules import attribution, user_sim  # noqa: E402  L2：模拟用户与失败归因
+from modules import attribution, user_sim, policy  # noqa: E402  L2：模拟用户与失败归因
 
 # 自检默认不真的调云端合成：既慢又要花钱，还会让"没有密钥的队友"跑不过。
 # TTS 的真实请求构造与失败回落，下面用本地假接口单独测（见证据 9 之后那段）。
@@ -2599,19 +2599,20 @@ def main():
     _si = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
                                                        "test_scene_isolation.py")],
                          cwd=ROOT, capture_output=True, text=True, timeout=180)
-    check("场景隔离 / 收尾话术 / 修复请求边界（11 条自测）",
+    check("场景隔离 / 收尾话术 / 修复请求边界（12 条自测）",
           _si.returncode == 0,
           ["退出码 %d；末行：%s" % (_si.returncode,
                                     ((_si.stdout or "").strip().splitlines() or ["无输出"])[-1][:80])])
 
-    # 直接读文件，不经 config_loader：verify 前面会替换几个 config 取值函数，
-    # 走 load() 拿到的对象不保证是原样的场景配置。
-    _scene_cfg = json.load(open(os.path.join(ROOT, "config", "scene.json"),
-                                encoding="utf-8"))
-    _repair = ((_scene_cfg.get("evolution_policy") or {}).get("repair") or {})
-    check("OFFER 阶段的修复请求分支已打开（关着时'信号不好再说一遍'会被答成'确认不到'）",
-          bool(_repair.get("OFFER")),
-          ["config/scene.json evolution_policy.repair=%r" % (_repair,)])
+    # 修复请求的边界：只收带重说动作的说法。
+    # 「不是说了吗」曾经被收进来，评审实测把对抗集从 16/16 拉到 14/16
+    # （A09/A14 复述打断确认计数 → unknown 误闭环），已撤回；这条守住别再加回去。
+    _repair_ok = (policy.is_repair_request("信号不好，你再说一遍")
+                  and not policy.is_repair_request("我刚不是说了吗，就那几个数"))
+    check("修复请求只认重说动作：「不是说了吗」是抱怨不是修复（已被 16/16→14/16 实测否掉）",
+          _repair_ok,
+          ["classic=%r plead=%r" % (policy.is_repair_request("信号不好，你再说一遍"),
+                                    policy.is_repair_request("我刚不是说了吗，就那几个数"))])
 
     # ---- 官方 QA 接进对话（11-08）----------------------------------------
     # 上面那条验的是"适配器查得到"，这三条验的是"查到了之后在对话里怎么用"：

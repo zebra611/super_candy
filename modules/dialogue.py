@@ -2380,7 +2380,13 @@ def _stage_offer(session, text, flags):
     # 于是走了下面的知识库分支，没命中就回"这个我这边确认不到"，
     # 客户只好一遍遍重复要求，客服一遍遍说确认不到（A01 第 4~7 轮、A04 第 7 轮）。
     # 正确动作是把刚才讲过的内容再说一遍——修复请求要的是复述，不是答案。
-    if policy.repair_enabled("OFFER") and policy.is_repair_request(text):
+    #
+    # 明确表态优先：客户说"没听清，不要了"时，要的是挂断，不是再听一遍。
+    # 评审实测：不加这个守卫时"我不是说了吗，不要了"会被复述分支拦走，
+    # 整个会话不回写、继续留在 OFFER（该记的"拒绝"没记）。
+    if (policy.repair_enabled("OFFER") and policy.is_repair_request(text)
+            and not flags.get("no") and not flags.get("deny")
+            and not flags.get("hangup")):
         _rep = _repair_reply(session, cfg, "OFFER", flags)
         if _rep:
             return _reply(session, _rep, intent="repair")

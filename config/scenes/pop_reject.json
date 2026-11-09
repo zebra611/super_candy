@@ -484,7 +484,7 @@
  "evolution_policy": {
   "_why": "自进化闭环的可学习面：分支路由 + 话术变体，不是代码。默认全关=未学习前的行为；scripts/self_evolve.py 依据逐轮正负反馈把开关逐条打开，并用同一批客户复跑验证收益。",
   "repair": {
-   "OFFER": true,
+   "OFFER": false,
    "CONFIRM": true
   },
   "answer_routes": {

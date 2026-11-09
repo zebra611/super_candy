@@ -10,10 +10,14 @@
 2. **收尾那一轮不许加性格后缀**。A01 第 9 轮客户已经说"清楚了，我按你说的弄"，
    客服却回"…感谢您的配合，再见。我放慢一点说。"——告别语后面挂一句"放慢一点说"
    逻辑上说不通，而且这是整通电话最后一句话，客户一定会听见。
+   判据必须在 `_reply` 里（next_stage=DONE 自己冻结），不能靠调用方传 freeze：
+   评审时把判据删掉，原来的测试 11/11 照过，是假绿。
 
-3. **"我刚不是说了吗"算修复请求**。客户没说"再说一遍"，但要的是同一件事。
-   不含这类说法时，客服会回"这个我这边确认不到"，客户只好一遍遍重复。
-   但"我说过了不要"是拒绝，不能被当成修复请求——两条边界都钉住。
+3. **"不是说了吗"不是修复请求**（初版曾收进来，评审按实测撤回）。
+   它是抱怨"已经问过了"。判成修复请求后，16 通对抗画像从 16/16 掉到 14/16：
+   复述那一轮不推进确认，A09/A14 最后以 unknown 回写收线（误闭环）。
+   同时钉住"明确拒绝优先于修复请求"：客户说"我没听清，不过不要了"必须回写拒绝，
+   不能被复述分支拦走。
 
 用法：python3 scripts/test_scene_isolation.py
 """
@@ -30,6 +34,7 @@ import adversarial_run as A            # noqa: E402
 from modules import dialogue as D      # noqa: E402
 from modules import persona            # noqa: E402
 from modules import policy             # noqa: E402
+from modules import tools              # noqa: E402
 
 
 class SceneOfFileTest(unittest.TestCase):
@@ -88,26 +93,42 @@ class ClosingReplyNoSuffixTest(unittest.TestCase):
         self.assertEqual(out, bye)
         self.assertNotIn("放慢", out)
 
-    def test_done_turn_keeps_reply_clean(self):
-        """真跑一轮到 DONE，回复不得以补救语结尾。"""
+    def test_done_reply_is_frozen_at_reply_level(self):
+        """真正守 `_reply` 的判据：next_stage=DONE 时必须自己冻结，而不是靠调用方传 freeze。
+
+        这条替代了原来的 `D.respond(...)+if 以再见结尾` 写法——那样写在
+        `_reply` 的 DONE 判据被删掉后依然全绿（实测：去掉 `next_stage == "DONE"`
+        后 11/11 照过），是假绿。这里同时断言对照组：同一句在 WRITEBACK
+        （非 DONE）时性格确实会加后缀，否则性格规则失效也会让断言假过。
+        """
+        bye = "感谢您的配合，再见。"
         s = D.new_session("t-done")
         s["persona_code"] = "hard_of_hearing"
-        # 直接构造一个收尾回复：走到 WRITEBACK 并结束
-        r = D.respond(s, "是我，尾号0086")
-        # 这里只断言：任何以"再见"结尾的回复后面都不许再挂补救语
-        txt = r.get("reply_text") or ""
-        if txt.endswith("再见。"):
-            self.assertNotIn("放慢一点说", txt)
+        done = D._reply(s, bye, next_stage="DONE", intent="consent")
+        self.assertEqual(done.get("reply_text"), bye,
+                         "DONE 是整通电话最后一句，不许挂补救语")
+
+        s2 = D.new_session("t-wb")
+        s2["persona_code"] = "hard_of_hearing"
+        wb = D._reply(s2, bye, next_stage="WRITEBACK", intent="consent")
+        self.assertIn("放慢一点说", wb.get("reply_text") or "",
+                      "对照组必须真的加后缀，否则这条断言测不到东西")
 
 
 class RepairMarkTest(unittest.TestCase):
-    """修复请求的边界：收抱怨重复，不收拒绝。"""
+    """修复请求的边界：只收带重说动作的说法；抱怨重复与拒绝都不算。"""
 
-    def test_plead_repeat_is_repair(self):
+    def test_plead_repeat_is_not_repair(self):
+        """「不是说了吗」是抱怨已问过，不是请再说一遍。
+
+        评审实测：收进 REPAIR_MARKS 后，16 通对抗画像从 16/16 掉到 14/16
+        （A09/A14 被复述打断确认计数，最后以 unknown 回写收线）。
+        它该走「接住抱怨再继续确认」，不该复用修复请求的复述话术。
+        """
         for t in ("我刚不是说了吗，就那几个数",
                   "我刚才不是说了嘛",
                   "我不是说了么，你记一下"):
-            self.assertTrue(policy.is_repair_request(t), t)
+            self.assertFalse(policy.is_repair_request(t), t)
 
     def test_classic_repair_still_works(self):
         for t in ("信号不好，你再说一遍", "没听清", "再说一次"):
@@ -117,6 +138,24 @@ class RepairMarkTest(unittest.TestCase):
         # 这两句是拒绝，判成修复请求会让客服把方案再念一遍，而客户要的是挂断。
         for t in ("我说过了不要", "我不需要了", "别再问了"):
             self.assertFalse(policy.is_repair_request(t), t)
+
+    def test_refusal_with_repair_word_still_writes_back(self):
+        """「没听清，不要了」同时像修复请求与拒绝：拒绝优先，必须回写。
+
+        评审实测的原始缺陷：OFFER 的修复分支在 `flags["no"]` 之前，
+        会把"我不是说了吗，不要了"答成一段复述，整通电话不回写。
+        """
+        tools._reset_for_test()
+        s = D.new_session("t-refuse")
+        s["stage"] = "OFFER"
+        s["slots"]["application"] = {"brand": "闻樾", "category": "家用电器",
+                                     "reject_reason": "授权链路不完整",
+                                     "materials": "品牌授权书"}
+        s["slots"]["identity_confirmed"] = True
+        r = D.respond(s, "我没听清，不过不要了")
+        self.assertEqual(s["slots"].get("consent"), False,
+                         "客户明确拒绝时必须回写拒绝，不能被复述分支拦走")
+        self.assertEqual(r.get("next_stage"), "DONE")
 
 
 def main():
