@@ -2579,6 +2579,40 @@ def main():
           and _base_default.lookup_qa("x")["found"] is False,
           ["默认返回可用"])
 
+    # ---- 证据 33：对抗跑批按场景分批 + 收尾话术不带补救语（11-09）----
+    # 起因是 11-09 线上实测（train API）暴露的两件事，都不在单条用例的射程里：
+    #
+    # 1) 对抗跑批把 340 条 C4（POP 关单场景）用例混进默认售后场景跑，全部卡在
+    #    IDENTITY，跑出 31/374 = 8.3%；同一批数据切到 pop_reject 是 340/340。
+    #    这个数字会直接喂给 CI 卡口（--fail-under），错一次就是"系统看起来很烂"。
+    #    它属于**跑批工具的属性**，任何一条用例都测不出来，只能单独守。
+    #
+    # 2) A01 第 9 轮客户已经说"清楚了，我按你说的弄"，客服回
+    #    "…感谢您的配合，再见。我放慢一点说。"——补救语挂到了告别语上。
+    #    只有"客户被听成听不清 + 这一轮正好收尾"同时成立才出现，
+    #    普通用例不会踩到这个组合。
+    print()
+    print("=" * 74)
+    print("证据 33：对抗跑批按场景分批，收尾话术不带补救语")
+    print("=" * 74)
+
+    _si = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                       "test_scene_isolation.py")],
+                         cwd=ROOT, capture_output=True, text=True, timeout=180)
+    check("场景隔离 / 收尾话术 / 修复请求边界（11 条自测）",
+          _si.returncode == 0,
+          ["退出码 %d；末行：%s" % (_si.returncode,
+                                    ((_si.stdout or "").strip().splitlines() or ["无输出"])[-1][:80])])
+
+    # 直接读文件，不经 config_loader：verify 前面会替换几个 config 取值函数，
+    # 走 load() 拿到的对象不保证是原样的场景配置。
+    _scene_cfg = json.load(open(os.path.join(ROOT, "config", "scene.json"),
+                                encoding="utf-8"))
+    _repair = ((_scene_cfg.get("evolution_policy") or {}).get("repair") or {})
+    check("OFFER 阶段的修复请求分支已打开（关着时'信号不好再说一遍'会被答成'确认不到'）",
+          bool(_repair.get("OFFER")),
+          ["config/scene.json evolution_policy.repair=%r" % (_repair,)])
+
     # ---- 官方 QA 接进对话（11-08）----------------------------------------
     # 上面那条验的是"适配器查得到"，这三条验的是"查到了之后在对话里怎么用"：
     # 该逐字播的原话播了没有、该闭嘴的占位答案闭嘴了没有、提问有没有被当成表态。

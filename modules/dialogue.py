@@ -664,8 +664,16 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     # 核身问句不整体冻结：它要冻结的是**措辞层改写**（nlg，见上），
     # 而性格层只删句首"好的，"这类客套、不动指代与事实。
     # 官方原话 / 挂断 / 出错话术则全冻结，连形式都不动。
+    #
+    # 收尾那一轮（next_stage=DONE）也算挂断话术，必须一起冻结。
+    # 11-09 线上实测 A01：客户第 9 轮说「好的，清楚了，我按你说的弄」，
+    # 客服回「…感谢您的配合，再见。我放慢一点说。」——客户已经说清楚了，
+    # 还要「放慢一点说」，逻辑上说不通，而且告别语是整通电话最后一句话，
+    # 尾巴会被完整听见，比中间任何一轮都刺眼。
+    # 之前的判据只看 end_reason 与 intent，正常闭环的 end_reason 是空串
+    # （闭环不是异常结束），intent 又是 consent，两条都不命中，所以漏了。
     _persona_freeze = (bool(end_reason) or intent in ("error", "empty")
-                       or _freeze_official)
+                       or _freeze_official or str(next_stage or "") == "DONE")
     text, _persona_applied = persona.adapt(
         session, text, stage_now, freeze=_persona_freeze)
     # 记的是**实际播出去**的那句（含适配后的引导语），下一轮判重复才准。
