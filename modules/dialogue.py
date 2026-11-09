@@ -2021,11 +2021,49 @@ def _stage_identity(session, text, flags):
                 "%s 另外麻烦您报一下手机号后四位，我核对完马上给您办。" % _ans,
                 intent="identity_ask", qa_hit=_qa_hit, kb_hit=_kb_hit)
         if flags.get("ask") or flags.get("no"):
+            # 提问分两类（11-09 真实通话 s_32c93/s_a1fd 挖出来的）：
+            #   「为什么驳回 / 要补什么材料」是实质问题——核身前不能答，等于把
+            #     别人申请的信息讲给还没核验的来电人；但必须**说明为什么先核身份**。
+            #     旧实现拿「号码是预留联系方式」把两类问题一起挡回去，用户连问两轮，
+            #     客服两轮一字不差，等于把问题当空气。
+            #   「你哪来的我号码 / 核验怎么这么麻烦」可以直接解释。
+            if any(w in text for w in _RESULT_ASK_MARKS):
+                n = int(session.get("identity_result_ask_n", 0)) + 1
+                session["identity_result_ask_n"] = n
+                # 两个键各自独立的默认文案：别的场景没配这两个键时也不能落成同一句，
+                # 否则「不复读」这条在未配场景里立刻失效（自检实测踩到）。
+                if n % 2 == 1:
+                    return _reply(
+                        session,
+                        _identity_text(
+                            "reply_ask_before_identity",
+                            "您问的驳回原因和材料，我得先核对身份才能讲，不然不能把别人"
+                            "申请里的信息说给您听。麻烦报一下申请时预留手机号的后四位，"
+                            "或者联系人姓名，核对上我马上说给您。"),
+                        intent="identity_ask")
+                return _reply(
+                    session,
+                    _identity_text(
+                        "reply_ask_before_identity_2",
+                        "我知道您着急，但按规定这些得核完身份才能讲，一核对上我就把原因"
+                        "和要补的材料说清楚。您报一下预留手机号后四位，或者联系人姓名就行。"),
+                    intent="identity_ask")
+            n2 = int(session.get("identity_ask_n", 0)) + 1
+            session["identity_ask_n"] = n2
+            # 循环交替而不是「第一次 A、之后永远 B」：问到第三轮又落回 B 的话，
+            # 相邻两轮还是逐字相同（性格集 T10 连问三轮实测复读）。
+            if n2 % 2 == 1:
+                return _reply(
+                    session,
+                    _identity_text("reply_ask_identity",
+                                   "您问的这个问题我记下了，稍后专员给您详细解答。"
+                                   "这边先把身份核对一下，方便说一下手机号后四位吗？"),
+                    intent="identity_ask")
             return _reply(
                 session,
-                _identity_text("reply_ask_identity",
-                               "您问的这个问题我记下了，稍后专员给您详细解答。"
-                               "这边先把身份核对一下，方便说一下手机号后四位吗？"),
+                _identity_text("reply_ask_identity_2",
+                               "这个问题我记下了，专员会跟您解释得更细。咱们先把身份核对"
+                               "一下——申请时预留手机号的后四位，四个数字就行。"),
                 intent="identity_ask")
 
         # ③ 跑题 / 絮叨（有实义、既不是提问也不是拒绝）：中性承接 + 拉回话题。
@@ -2274,6 +2312,12 @@ def _stage_offer(session, text, flags):
                   next_stage="CONFIRM", intent=_intent_name(flags))
 
 
+#: 核身前用户在问「结果/材料」：这类问题不能答（会把别人申请的信息讲给未核验的
+#: 来电人），但必须说明为什么先核身份。真实通话 s_32c93/s_a1fd 里，用户连问
+#: 「为什么会驳回」「那我要补什么材料」，客服两轮都回同一句「号码是预留联系方式」。
+_RESULT_ASK_MARKS = ("为什么", "为啥", "驳回", "原因", "补什么", "材料", "怎么处理",
+                     "怎么改", "整改", "什么情况", "没过", "没通过")
+
 # 「客户还在谈」的信号：提问、质疑来电或费用、重复报已给过的核身信息。
 # 这些都不是表态。旧逻辑把它们一并算成「含糊」，追问两次就回写 unknown——
 # 客户还在问「你哪来的我号码」，工单却已经记了「不确定」并收线
@@ -2503,7 +2547,18 @@ def _stage_done(session, text, flags):
             return _reply(session, "%s %s" % (_ans, cfg.get("reply_ask") or cfg.get("reply", "")),
                           intent="qa" if _qa_hit else "ask",
                           qa_hit=_qa_hit, kb_hit=_kb_hit)
-        return _reply(session, cfg.get("reply_ask") or cfg.get("reply", ""), intent="ask")
+        # 答不上时的兜底：第一次给热线，之后不再逐字复读同一句。
+        # 真实通话 s_69aca7 里用户连问三个问题，客服把「如有疑问请拨热线」一字不差
+        # 念了三遍（11-09 真实通话挖掘 real_loop3）——用户以为电话卡住了。
+        n = int(session.get("done_ask_n", 0)) + 1
+        session["done_ask_n"] = n
+        if n == 1:
+            return _reply(session, cfg.get("reply_ask") or cfg.get("reply", ""), intent="ask")
+        return _reply(
+            session,
+            cfg.get("reply_ask_again")
+            or "这个细节我这边说不全，专员回访时会跟您讲清楚；着急的话拨 4006180092 也能找到我们。",
+            intent="ask")
 
     # 已经说过再见了：用户这句只是"再见""嗯""一个字"这种收尾词，不再重复整段。
     # 旧行为是每来一句就把整段结束语再念一遍（线上实测：说"再见"重复一次，
@@ -2536,17 +2591,35 @@ _HANDLERS = {
 def _handle_empty(session):
     """用户这一轮没说话（沉默 / 空输入）。
 
-    规则：第一次重问一句，连续第二次仍无应答就收尾挂断。
-    这条路径以前是死代码——app.py 把空输入替换成"（空输入）"这个非空字符串，
-    于是永远走不到这里。现在 app.py 会如实传空串，并由它记 no_answer 事件。
+    规则：连续第二次仍无应答就收尾挂断；此外**总沉默次数**也有上限。
+
+    为什么加总次上限：连续计数 `empty_count` 在任意一句非空输入时归零，于是
+    「沉默 → 说一个字 → 沉默」能无限循环，每次都是同一句「您还在吗」。真实通话
+    s_a63565 里这句一字不差出现 4 次（11-09 真实通话挖掘 real_silence_repeat）：
+    用户听到的是卡带，业务侧拿到的是 8 轮无效通话。
 
     _todo 真实实现应区分两种情况：完全没声音（网络/静音）vs 有声音但 ASR 没识别出字。
     后者不该直接挂断，应该重播一次并提示"没听清"。
     """
     cfg = config_loader.silence_config()
-    if session["empty_count"] >= 2:
+    # 已经收线了：再沉默不该把收尾长句再念一遍。真实链路里这时连接已断，
+    # 但重放/回放会继续喂输入，同一句会被念两次（11-09 重放 s_a63565 复现）。
+    if session.get("stage") == "DONE":
+        out = _reply(session, cfg.get("reply_done") or "好的，再见。",
+                     intent="empty", end_reason="silence")
+        out["hangup"] = True
+        return out
+    total = int(session.get("silence_total", 0)) + 1
+    session["silence_total"] = total
+    if session["empty_count"] >= 2 or total >= 3:
         return _finish(session, cfg.get("reply_final", "看来信号不太好，稍后再联系您，再见。"), "silence")
-    return _reply(session, cfg.get("reply", "您还在吗？"), intent="empty")
+    if total == 1:
+        return _reply(session, cfg.get("reply", "您还在吗？"), intent="empty")
+    # 第二次起换说法：同样的问题问两遍可以，一字不差地念两遍不行。
+    return _reply(session,
+                  cfg.get("reply_again")
+                  or "我这边还是没听到声音，您方便时喂一声就行；实在不方便，我稍后让专员再打给您。",
+                  intent="empty")
 
 
 def forced_end(session, reason):

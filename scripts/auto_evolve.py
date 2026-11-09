@@ -222,6 +222,15 @@ def main():
 
     print("一键自进化｜三条链（L2 话术 / 性格 / 自适应对抗）：1 体检 → 2 读基线 → 3 提案 → 4 闸门 → 5 上架")
 
+    print("\n第 0 步｜真实通话体检（有真实数据才跑：先看用户实际踩到什么问题）")
+    # 只做展示，不产出候选：真实通话给的是「改什么」的优先级，能不能上仍由闸门说了算。
+    # allow_fail：没有真实通话库（新克隆、纯离线环境）不应该挡住整个闭环。
+    _rc = _run("真实通话体检", [_PY, "scripts/mine_calls.py", "mine", "--verify",
+                               "--json", "eval/reports/auto/real_calls.json"],
+               allow_fail=True)
+    if _rc != 0:
+        print("  [跳过] 没有可用的真实通话数据，不影响后面的模拟链")
+
     print("\n第 1 步｜地基体检（三条链都要过，不过就不往下跑）")
     _run("L2 链", [_PY, "scripts/evolve.py", "doctor", "--deep"])
     _run("性格链", [_PY, "scripts/evolve_persona.py", "doctor", "--deep"])
@@ -368,7 +377,8 @@ def main():
     print("  对抗链：闸门通过后需人工评估，不提供自动上架命令")
 
     print("\n本轮结论：三处地基健康；没有新失败样本时，闸门会如实拒绝无收益的改动。")
-    print("想让它继续进化：往 eval/personas_adversarial.json 加更难的画像（独立挑战集，")
+    print("想让它继续进化：先看第 0 步里『仍会复现』的真实缺陷（那是用户真踩到的），")
+    print("再往 eval/personas_adversarial.json 加更难的画像（独立挑战集，")
     print("不动 10 通与 12 画像的分母），或修掉只改代码那几簇里的缺陷；")
     print("代码或画像改完先重定基线，再双击同一个文件。")
     return 0

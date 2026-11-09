@@ -2800,6 +2800,57 @@ def main():
           "对照申请单编号核实" not in _g1 and "对照申请单编号核实" in _g2,
           ["拦后=%r 放后=%r" % (_g1[-16:], _g2[-16:])])
 
+    # ---- 真实通话挖掘出来的三处缺陷（11-09，证据来自 data/events.db） ----
+    # 1) 核身前用户问「为什么驳回 / 要补什么材料」：不能答（会泄露别人申请信息），
+    #    但必须说明为什么先核身份；旧实现拿「号码是预留联系方式」挡回去，
+    #    用户连问两轮、客服两轮一字不差（真实会话 s_32c93 / s_a1fd）。
+    _id = dialogue.new_session("verify-before-identity-ask")
+    _id["stage"] = "IDENTITY"
+    _id["slots"]["identity_confirmed"] = False
+    _i1 = dialogue.respond(_id, "为什么会驳回")
+    _i2 = dialogue.respond(_id, "那我要补什么材料")
+    check("核身前问驳回原因/材料：说明为什么先核身份，且两轮不复读",
+          "核对身份" in _i1["reply_text"] and "才能讲" in _i1["reply_text"]
+          and _i1["reply_text"] != _i2["reply_text"]
+          and "号码是商家入驻时预留的联系方式" not in _i1["reply_text"],
+          ["一轮=%s" % _i1["reply_text"][:26], "二轮=%s" % _i2["reply_text"][:26]])
+
+    # 2) 沉默：交错的沉默（沉默→说话→沉默）不许每次念同一句，总次数到上限收尾。
+    #    真实会话 s_a63565 里「您还在吗」一字不差出现 4 次。
+    _sm = dialogue.new_session("verify-silence-vary")
+    _sm["stage"] = "IDENTITY"
+    _s1 = dialogue.respond(_sm, "")
+    dialogue.respond(_sm, "在")
+    _s2 = dialogue.respond(_sm, "")
+    dialogue.respond(_sm, "嗯")
+    _s3 = dialogue.respond(_sm, "")
+    check("交错沉默：第二次换说法，第三次总次数到上限收尾",
+          _s1["reply_text"] != _s2["reply_text"]
+          and bool(_s3.get("end_reason")) and _s3["next_stage"] == "DONE",
+          ["一轮=%s" % _s1["reply_text"][:18], "二轮=%s" % _s2["reply_text"][:18],
+           "三轮 end=%r" % _s3.get("end_reason")])
+
+    # 3) 终态里连续提问答不上：不许把「如有疑问请拨热线」逐字念三遍
+    #    （真实会话 s_69aca7 里念了三遍，用户以为电话卡住）。
+    _dn = dialogue.new_session("verify-done-ask-vary")
+    _dn["stage"] = "DONE"
+    _dn["slots"]["consent"] = "unknown"
+    _dn["writeback_version"] = 1
+    _d1 = dialogue.respond(_dn, "你们公司在几楼？")
+    _d2 = dialogue.respond(_dn, "你们食堂几点开饭？")
+    check("终态连续答不上的提问：第二句换说法，不逐字复读热线话术",
+          _d1["reply_text"] != _d2["reply_text"],
+          ["一句=%s" % _d1["reply_text"][:20], "二句=%s" % _d2["reply_text"][:20]])
+
+    # 4) 真实审计器的反向自测（造缺陷必须抓到、干净通话必须不报），
+    #    与 scripts/mine_calls.py check 同一套判据，接进全量自检防退化。
+    import subprocess as _sp
+    _mr = _sp.run([sys.executable, os.path.join("scripts", "mine_calls.py"), "check"],
+                  cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                  capture_output=True, text=True, timeout=120)
+    check("真实通话审计器自测（11 项）全过", _mr.returncode == 0,
+          [(_mr.stdout or "").strip().splitlines()[-1:] or ["无输出"]][0])
+
     # ---- PR #42 收线覆盖（合并审查后补的守卫） ----
     import ws_channel as _wsc
     check("PR #42：挂断/拒绝/转专员等所有收尾出口都会触发服务端收线",

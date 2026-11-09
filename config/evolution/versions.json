@@ -1,10 +1,10 @@
 {
- "active": "v15",
+ "active": "v17",
  "scene_file": "config/scenes/pop_reject.json",
  "sync_targets": [
   "config/scene.json"
  ],
- "baseline_json": "eval/reports/sim_baseline_v15.json",
+ "baseline_json": "eval/reports/sim_baseline_v17.json",
  "history": [
   {
    "version": "v1",
@@ -935,6 +935,126 @@
    "version": "v15",
    "parent": "v11",
    "created": "2026-11-08 22:50:44",
+   "status": "superseded",
+   "source": "rebase：线上场景内容变更，重定基线",
+   "candidate": null,
+   "metrics": {
+    "all_ok": 10,
+    "all_total": 10,
+    "train_ok": 7,
+    "train_total": 7,
+    "holdout_ok": 3,
+    "holdout_total": 3,
+    "agent_defect_sessions": 2,
+    "case_defect_sessions": 0,
+    "codes": {
+     "agent_slot_loss": 1,
+     "agent_loop": 1,
+     "agent_no_progress": 1
+    },
+    "defect_total": 3
+   },
+   "scene_sha": "90ce94ee96f588f3",
+   "superseded_at": "2026-11-09 12:31:14"
+  },
+  {
+   "version": "v16",
+   "parent": "v15",
+   "created": "2026-11-08 22:53:33",
+   "status": "rejected",
+   "source": "候选 config/evolution/candidates/auto_008.json",
+   "candidate": {
+    "patches": [
+     {
+      "path": "stages.IDENTITY.reply_offtopic",
+      "old": "没关系，记不住号码也正常。您说个联系人姓名，或者申请单编号后六位，任意一个我都能核对上；实在不方便，我让专员用官方号码再联系您。",
+      "value": "没关系，号码记不住也常见。您报一下联系人姓名，或者申请单编号后六位，我都能核对上；不方便的话，我让专员用官方号码再联系您。",
+      "cluster": "agent_loop|IDENTITY|refuse_info|identity_offtopic",
+      "clusters": [
+       "agent_loop|IDENTITY|refuse_info|identity_offtopic"
+      ],
+      "rationale": "本地模板草案（确定性兜底）：保留核对关键词，不新增变量"
+     },
+     {
+      "path": "stages.IDENTITY.reply_ask_tail",
+      "old": "好的，核对申请单需要您预留手机号的后四位，说四个数字就行。",
+      "value": "核对申请单需要预留手机号的后四位，说四个数字就行；不方便的话报联系人姓名，我也能核对上。",
+      "cluster": "agent_slot_loss|IDENTITY|answer_name|identity_ok",
+      "clusters": [
+       "agent_slot_loss|IDENTITY|answer_name|identity_ok"
+      ],
+      "rationale": "本地模板草案（确定性兜底）：保留核对关键词，不新增变量"
+     }
+    ],
+    "targets": [
+     "agent_loop|IDENTITY|refuse_info|identity_offtopic",
+     "agent_slot_loss|IDENTITY|answer_name|identity_ok"
+    ]
+   },
+   "metrics": {
+    "all_ok": 10,
+    "all_total": 10,
+    "train_ok": 7,
+    "train_total": 7,
+    "holdout_ok": 3,
+    "holdout_total": 3,
+    "agent_defect_sessions": 2,
+    "case_defect_sessions": 0,
+    "codes": {
+     "agent_slot_loss": 1,
+     "agent_loop": 1,
+     "agent_no_progress": 1
+    },
+    "defect_total": 3
+   },
+   "baseline_metrics": {
+    "all_ok": 10,
+    "all_total": 10,
+    "train_ok": 7,
+    "train_total": 7,
+    "holdout_ok": 3,
+    "holdout_total": 3,
+    "agent_defect_sessions": 2,
+    "case_defect_sessions": 0,
+    "codes": {
+     "agent_slot_loss": 1,
+     "agent_loop": 1,
+     "agent_no_progress": 1
+    },
+    "defect_total": 3
+   },
+   "gate": [
+    {
+     "check": "train 不降",
+     "pass": true,
+     "detail": "7 → 7"
+    },
+    {
+     "check": "holdout 不降",
+     "pass": true,
+     "detail": "3 → 3"
+    },
+    {
+     "check": "有实际收益",
+     "pass": false,
+     "detail": "总通过 10→10，系统缺陷会话 2→2"
+    },
+    {
+     "check": "无个体回退",
+     "pass": true,
+     "detail": "无"
+    },
+    {
+     "check": "缺陷总数不增",
+     "pass": true,
+     "detail": "3 → 3"
+    }
+   ]
+  },
+  {
+   "version": "v17",
+   "parent": "v15",
+   "created": "2026-11-09 12:31:14",
    "status": "active",
    "source": "rebase：线上场景内容变更，重定基线",
    "candidate": null,
@@ -954,14 +1074,108 @@
     },
     "defect_total": 3
    },
-   "scene_sha": "90ce94ee96f588f3"
+   "scene_sha": "9d2af5e16de32920"
   },
   {
-   "version": "v16",
-   "parent": "v15",
-   "created": "2026-11-08 22:53:33",
+   "version": "v18",
+   "parent": "v17",
+   "created": "2026-11-09 12:34:06",
    "status": "rejected",
-   "source": "候选 config/evolution/candidates/auto_008.json",
+   "source": "候选 config/evolution/candidates/auto_009.json",
+   "candidate": {
+    "patches": [
+     {
+      "path": "stages.IDENTITY.reply_offtopic",
+      "old": "没关系，记不住号码也正常。您说个联系人姓名，或者申请单编号后六位，任意一个我都能核对上；实在不方便，我让专员用官方号码再联系您。",
+      "value": "没关系，号码记不住也常见。您报一下联系人姓名，或者申请单编号后六位，我都能核对上；不方便的话，我让专员用官方号码再联系您。",
+      "cluster": "agent_loop|IDENTITY|refuse_info|identity_offtopic",
+      "clusters": [
+       "agent_loop|IDENTITY|refuse_info|identity_offtopic"
+      ],
+      "rationale": "本地模板草案（确定性兜底）：保留核对关键词，不新增变量"
+     },
+     {
+      "path": "stages.IDENTITY.reply_ask_tail",
+      "old": "好的，核对申请单需要您预留手机号的后四位，说四个数字就行。",
+      "value": "核对申请单需要预留手机号的后四位，说四个数字就行；不方便的话报联系人姓名，我也能核对上。",
+      "cluster": "agent_slot_loss|IDENTITY|answer_name|identity_ok",
+      "clusters": [
+       "agent_slot_loss|IDENTITY|answer_name|identity_ok"
+      ],
+      "rationale": "本地模板草案（确定性兜底）：保留核对关键词，不新增变量"
+     }
+    ],
+    "targets": [
+     "agent_loop|IDENTITY|refuse_info|identity_offtopic",
+     "agent_slot_loss|IDENTITY|answer_name|identity_ok"
+    ]
+   },
+   "metrics": {
+    "all_ok": 10,
+    "all_total": 10,
+    "train_ok": 7,
+    "train_total": 7,
+    "holdout_ok": 3,
+    "holdout_total": 3,
+    "agent_defect_sessions": 2,
+    "case_defect_sessions": 0,
+    "codes": {
+     "agent_slot_loss": 1,
+     "agent_loop": 1,
+     "agent_no_progress": 1
+    },
+    "defect_total": 3
+   },
+   "baseline_metrics": {
+    "all_ok": 10,
+    "all_total": 10,
+    "train_ok": 7,
+    "train_total": 7,
+    "holdout_ok": 3,
+    "holdout_total": 3,
+    "agent_defect_sessions": 2,
+    "case_defect_sessions": 0,
+    "codes": {
+     "agent_slot_loss": 1,
+     "agent_loop": 1,
+     "agent_no_progress": 1
+    },
+    "defect_total": 3
+   },
+   "gate": [
+    {
+     "check": "train 不降",
+     "pass": true,
+     "detail": "7 → 7"
+    },
+    {
+     "check": "holdout 不降",
+     "pass": true,
+     "detail": "3 → 3"
+    },
+    {
+     "check": "有实际收益",
+     "pass": false,
+     "detail": "总通过 10→10，系统缺陷会话 2→2"
+    },
+    {
+     "check": "无个体回退",
+     "pass": true,
+     "detail": "无"
+    },
+    {
+     "check": "缺陷总数不增",
+     "pass": true,
+     "detail": "3 → 3"
+    }
+   ]
+  },
+  {
+   "version": "v19",
+   "parent": "v17",
+   "created": "2026-11-09 12:34:58",
+   "status": "rejected",
+   "source": "候选 config/evolution/candidates/auto_010.json",
    "candidate": {
     "patches": [
      {
