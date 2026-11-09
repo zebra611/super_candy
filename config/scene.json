@@ -117,7 +117,10 @@
    "must_say": [
     "资质审核"
    ],
-   "_why": "开场按赛题四段式：① 自报身份 → ② 确认「您是XX公司的XX吗」。官方 52 条话术的固定格式就是「请问您是（商家公司名/店铺名）…吗？」，公司名由外呼名单填进来（见 tools.next_outbound_target）。**不在开场就报驳回**——商家还没确认是找谁，先被告知被驳回，凭什么信这通电话；打错了人也要照样念一遍驳回理由。"
+   "_why": "开场按赛题四段式：① 自报身份 → ② 确认「您是XX公司的XX吗」。官方 52 条话术的固定格式就是「请问您是（商家公司名/店铺名）…吗？」，公司名由外呼名单填进来（见 tools.next_outbound_target）。**不在开场就报驳回**——商家还没确认是找谁，先被告知被驳回，凭什么信这通电话；打错了人也要照样念一遍驳回理由。",
+   "reply_confirm_company_2": "我这边有一笔资质申请需要跟您核实，您只要回我一句：是这家公司的负责人吗？",
+   "reply_confirm_company_3": "那您方便让负责人接一下吗？我等半分钟；不方便的话，我晚点再打给负责人。",
+   "reply_before_confirm": "这个问题我得先确认您是哪家公司才能讲，不然不能把别人申请里的信息说给您听。"
   },
   "IDENTITY": {
    "reply": "好的，我这边核对一下申请单。为了确认是您本人在办理这笔申请，麻烦您报一下申请时预留的手机号后四位，可以吗？",
@@ -164,7 +167,15 @@
    "must_say": [
     "重新提交"
    ],
-   "_why": "追问应对走 kb_pop 检索（17 条追问剧本已补触发词）；结果预期固定口径不许承诺通过（合规红线）"
+   "_why": "追问应对走 kb_pop 检索（17 条追问剧本已补触发词）；结果预期固定口径不许承诺通过（合规红线）",
+   "reply_repair": "不好意思，刚才可能说得快了点。我再说一遍：{application_desc}没有通过审核，原因是{reason}，需要补充{materials}，然后在后台重新提交。您还有哪儿不清楚，我再说。",
+   "reply_repair_2": "那我放慢一点重说：这批申请的问题是{reason}，要补的是{materials}，补完在后台重新提交就行。",
+   "reply_application_answer": "您这笔申请是{application_desc}，驳回原因是{reason}，需要补充{materials}。",
+   "reply_application_detail_2": "这次驳回的具体问题是{reason}，要补的是{materials}，补完在后台重新提交就行。",
+   "reply_provenance": "您的号码是商家入驻时预留的联系方式，我们是官方审核，只用来核对这笔资质申请，不会外传。",
+   "reply_provenance_2": "这个号码是您提交这笔申请时留的，我们只用于资质审核这一件事，不会拿去做别的。",
+   "reply_application_detail": "您这笔申请是{application_desc}，驳回原因是{reason}，需要补充{materials}。",
+   "reply_ask_fee_2": "我们这边不收费，审核和重新提交都不收费，您放心。"
   },
   "CONFIRM": {
    "reply": "我跟您复述一下：您这笔申请是因为材料问题被驳回，需要按刚才说的补充材料后重新提交，您清楚了吗？",
@@ -182,7 +193,16 @@
    "must_say": [
     "复述"
    ],
-   "_why": "必答要素④：商家理解确认；两次不确认记 merchant_understood=unknown 转专员。confirm_yes_words 是本场景的确认说法（问的是清楚不是同意），命中即闭环；'没明白'等否定变体由 dialogue 层拦截"
+   "_why": "必答要素④：商家理解确认；两次不确认记 merchant_understood=unknown 转专员。confirm_yes_words 是本场景的确认说法（问的是清楚不是同意），命中即闭环；'没明白'等否定变体由 dialogue 层拦截",
+   "reply_repair": "刚才可能说得太快了。我再复述一遍：{application_desc}没有通过审核，原因是{reason}，需要补充{materials}，然后在后台重新提交。",
+   "reply_repair_2": "我再说清楚一点：驳回原因是{reason}，要补的材料是{materials}，补完重新提交就行。您清楚了吗？",
+   "reply_application_answer": "您这笔申请是{application_desc}，驳回原因是{reason}，需要补充{materials}。",
+   "reply_specific": "我跟您复述一下：您这笔申请是因为{reason}没有通过审核，需要补充{materials}，然后在后台重新提交，您清楚了吗？",
+   "reply_application_answer_2": "驳回的具体问题是{reason}，要补的材料是{materials}，补完在后台重新提交。",
+   "reply_provenance": "您的号码是商家入驻时预留的联系方式，我们是官方审核，只用来核对这笔资质申请，不会外传。",
+   "reply_provenance_2": "这个号码是您提交这笔申请时留的，我们只用于资质审核这一件事，不会拿去做别的。",
+   "reply_ask_fee": "整个审核和重新提交都不收取任何费用，您不用担心。",
+   "reply_ask_fee_2": "我们这边不收费，审核和重新提交都不收费，您放心。"
   },
   "WRITEBACK": {
    "reply": "好的，刚才说的驳回原因和补充材料的要求，我都已经记录下来了，稍后会有短信同步到您的商家后台，感谢您的配合，再见。",
@@ -461,5 +481,23 @@
   "kb": "config/kb_pop.json（96 条官方原文）",
   "c5_done": "申请单定位已接：query_application 四路径核身 → reply_ok 精准告知品牌/类目/原因/材料；裸报公司名收槽已启用",
   "c3_done": "close_mode=京麦 / call_status=无需外呼 的档案核上即收尾，不进六阶段"
+ },
+ "evolution_policy": {
+  "_why": "自进化闭环的可学习面：分支路由 + 话术变体，不是代码。默认全关=未学习前的行为；scripts/self_evolve.py 依据逐轮正负反馈把开关逐条打开，并用同一批客户复跑验证收益。",
+  "repair": {
+   "OFFER": false,
+   "CONFIRM": true
+  },
+  "answer_routes": {
+   "OFFER": {
+    "material": "reply_application_detail"
+   },
+   "CONFIRM": {
+    "fee": "reply_ask_fee",
+    "material": "reply_application_answer"
+   }
+  },
+  "confirm_specific": true,
+  "greeting_company_alt": true
  }
 }

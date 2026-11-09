@@ -2885,6 +2885,27 @@ def main():
            % (_adv.returncode,
               ((_adv.stdout or "").strip().splitlines() or ["无输出"])[-1][:80])])
 
+    # ---- 逐轮反馈闭环（11-09）：判据、四道验收、日志结构、隔离 ----
+    # 单独一条断言，理由和对抗链一样：自测里既有"必须退回"的反例，也有一次
+    # 真跑两轮的迷你训练；只要判据被放宽或验收被跳过，这里就会红。
+    _se = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                       "self_evolve.py"), "check"],
+                         cwd=ROOT, capture_output=True, text=True, timeout=420)
+    _se_last = ((_se.stdout or "").strip().splitlines() or ["无输出"])[-1][:80]
+    check("逐轮反馈闭环自测：判据/四道验收/日志结构/不写线上配置全过",
+          _se.returncode == 0, ["退出码 %d；末行：%s" % (_se.returncode, _se_last)])
+
+    # 两份场景文件必须同源：只改一份是这台机器最容易踩的坑。
+    # 比整份相等更严——整份不等可能只差 nlg.provider（刻意的），
+    # 所以只比"线上真正会读到"的两块：stages 与 evolution_policy。
+    _sc_a = json.load(open(os.path.join(ROOT, "config", "scenes", "pop_reject.json"),
+                           encoding="utf-8"))
+    _sc_b = json.load(open(os.path.join(ROOT, "config", "scene.json"), encoding="utf-8"))
+    _drift = [k for k in ("stages", "evolution_policy")
+              if _sc_a.get(k) != _sc_b.get(k)]
+    check("两份场景文件的 stages / evolution_policy 一致（只改一份等于没改）",
+          not _drift, ["不一致：%s" % "、".join(_drift) if _drift else "一致"])
+
     # ---- 双击入口（11-08 晚）：.bat 里混进一个中文字符，cmd 会吞掉后续命令 ----
     # 真踩过：把「自进化.bat」写进注释后，整份批处理被逐行拆碎执行。
     def _bat_bad(raw):

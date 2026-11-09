@@ -1,0 +1,502 @@
+{
+ "_comment": "场景 B：京东 POP 商家资质审核驳回外呼（赛题真实场景）。六阶段状态机与主场景一致，内容层按《电话答复框架_C1.md》施工：NEED/OFFER 的具体驳回原因走 kb_pop.json 检索，骨架话术只承载流程。申请单定位（哪笔申请、哪个原因）依赖 C5 mock 换业务后生效。",
+ "scene_name": "商家资质审核驳回外呼（POP 资审）",
+ "application_mode": true,
+ "_application_mode_why": "C5：只有赛题场景走 query_application 档案核身。售后主场景仍走 query_customer，两个业务域的核身键空间（4 位尾号）互不污染——否则档案里的 1234 会被主场景当成'错误尾号'却意外核上。",
+ "agent_name": "小采",
+ "company": "京东商家资质审核组",
+ "apology_prefix": "非常抱歉给您带来不好的体验，",
+ "silence": {
+  "reply": "您还在吗？我这边听不到声音，您方便的时候说一声就行。",
+  "reply_final": "看来信号不太好，我先不打扰您了，稍后再联系您，再见。",
+  "_todo": "真实实现要区分『完全没声音』和『有声音但识别不出』，后者应重播一次而不是直接挂断",
+  "reply_again": "我这边还是没听到声音，您方便时喂一声就行；实在不方便，我稍后让专员再打给您。"
+ },
+ "asr": {
+  "provider": "dashscope",
+  "model": "qwen3-asr-flash",
+  "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+  "realtime_model": "paraformer-realtime-v2",
+  "realtime_endpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+  "realtime": true,
+  "_realtime_why": "Z7：这个场景包是演示默认场景，流式字幕必须在这里也打开——只改 config/scene.json 时实测 ready.realtime 仍是 false（场景包整体覆盖 asr 段），字幕一条都不出。失败自动回落批式，不影响通话。",
+  "language": "zh",
+  "itn": true,
+  "_timeout_why": "识别不再用单一超时值。实测两段几乎等长的音频（2080ms / 2040ms）耗时 398ms 与 5404ms，是云端长尾，与音频长度无关；而 urllib 的 timeout 只管单次 socket 操作，管不住总时长。现在改成两轮「socket 2s/墙钟 2s → socket 3s/墙钟 3s」，超时即重试，见 modules/voice.py 的 plan。",
+  "hints": [
+   "京东",
+   "资质",
+   "授权书",
+   "商标",
+   "类目",
+   "驳回",
+   "发票",
+   "营业执照",
+   "入驻",
+   "审核",
+   "重新提交",
+   "4006180092"
+  ],
+  "_todo": "provider 改成 placeholder 就回到假识别；没配 dashscope_api_key 时也会自动回落，保证队友 clone 下来能跑",
+  "_why_nonrealtime": "现在是半双工（一轮说完才识别），非实时接口一次 HTTP 就够，不需要 WS 与 SDK；S2 上流式后再换成 realtime_model",
+  "_hints_todo": "qwen3-asr-flash 的 HTTP 接口没有热词字段，hints 目前不生效；换 Paraformer 实时接口时才会用到",
+  "silence_rms": 0.003,
+  "_silence_rms_todo": "0.003 是保守初值（约 -50dBFS）。真实录音的 rms 会写进 asr_result 事件，用几段真人录音标定后再调；S3 换 Silero VAD 后这一项失效"
+ },
+ "tts": {
+  "provider": "dashscope",
+  "model": "qwen3-tts-flash",
+  "endpoint": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+  "voice_name": "Serena",
+  "language_type": "Chinese",
+  "timeout_sec": 4,
+  "voice": "zh-CN-XiaoxiaoNeural",
+  "rate": 1.05,
+  "_why_two_voice_fields": "voice_name 是云端音色 ID（Cherry 是中文女声），voice 是浏览器 speechSynthesis 的音色名。两者不能混用：合成失败退回浏览器时，用的必须是后者，否则会静默无声。",
+  "_todo": "现在是整句合成（非流式），首字要等整句出完。若实测首字逼近 2000ms 门槛，改成 X-DashScope-SSE 流式，首包就推给前端。"
+ },
+ "nlg": {
+  "provider": "template",
+  "model": "qwen-flash",
+  "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+  "timeout_ms": 600,
+  "max_chars": 45,
+  "temperature": 0.3,
+  "_why": "provider=template 表示不改写，直接用 config 里的骨架话术。默认必须关着：队友 clone 下来没密钥也要能跑，自检和跑批也不能每跑一次调 30 次模型。",
+  "_budget": "400ms 是硬上限不是参考值：服务端 P50 现在 974ms，加上 P50<=1300ms 才留得住余量。超了就降级回骨架话术，别等。",
+  "_doc": "完整契约（prompt 结构、降级顺序、验收标准）见 docs/17_任务2接口契约.md"
+ },
+ "tools": {
+  "provider": "mock",
+  "timeout_ms": 300,
+  "base_url": "http://127.0.0.1:8100",
+  "_why": "mock = modules/tools.py 里写死的假数据；real = 走 modules/adapters/ 下的真实适配器。默认 mock，理由同上：clone 下来就能跑。",
+  "_doc": "见 docs/17 第 4 节"
+ },
+ "fallback": {
+  "reply": "抱歉，我这边刚才没处理好，麻烦您再说一遍好吗？",
+  "reply_asr_fail": "不好意思，我这边没听清，您能再说一遍吗？",
+  "reply_orchestrator_error": "抱歉，系统刚刚卡了一下，我们再试一次好吗？",
+  "reply_tool_timeout": "我这边查得有点慢，稍后让专员给您回电说明，可以吗？",
+  "reply_business_reject": "这个情况我这边处理不了，我帮您转给专员跟进，可以吗？",
+  "reply_handoff": "好的，我把您的情况记录下来，稍后会有专员跟您联系，感谢您的接听，再见。",
+  "reply_tool": "这个信息我这边暂时查不到，稍后让专员核实了再跟您说，可以吗？",
+  "reply_unclear_need": "不好意思，我这边没太听清。您方便再说一下主要想了解什么吗？",
+  "reply_unclear_need_2": "可能信号不太好。您是想了解产品使用，还是售后这方面的问题呢？",
+  "reply_unclear_offer": "我这边可能没讲清楚。您是想让我再讲一遍这个方案，还是有别的顾虑？",
+  "reply_unclear_offer_2": "那我确认一下您的意思：您现在是同意，还是暂时不需要？简单回我一句就行。",
+  "reply_writeback": "我这边登记时出了点问题，稍后会有专员联系您确认。感谢您的接听，再见。",
+  "_comment": "五类兜底（含回写失败）+ 转人工各一句，互不相同；reply_tool 是「查不到」、reply_tool_timeout 是「查得慢」——两条必须不同，否则按原因细分就是空话。"
+ },
+ "budget": {
+  "max_turns": 40,
+  "max_call_seconds": 300,
+  "session_ttl_sec": 1800,
+  "max_sessions": 200,
+  "daily_warn_cny": 5.0,
+  "price_per_min_asr": 0.0144,
+  "price_per_1k_chars_tts": 0.08,
+  "price_per_1m_tokens": 0.6,
+  "_todo": "单价按 2026-11 公开价格折算，仅用于估算告警；真实成本按账单核对",
+  "daily_hard_limit_cny": 50.0,
+  "rate_limit_per_min": 60,
+  "guard_enabled": false,
+  "_guard_todo": "guard_enabled=false 是刻意的：骨架阶段硬熔断会让演示莫名失败。要真的限流/限成本，把它改成 true，再按需调 daily_hard_limit_cny 与 rate_limit_per_min。"
+ },
+ "privacy": {
+  "mask_digits_in_events": true,
+  "_todo": "事件库用于分析，不用于还原身份，所以入库前把连续数字打码；原始文本只留在内存会话里"
+ },
+ "stages": {
+  "GREETING": {
+   "reply": "您好，我是京东商家资质审核专员，请问您是{company_name}的{contact_role}吗？",
+   "reply_confirm_company": "麻烦您确认一下，您是{company_name}的{contact_role}吗？我这边有一笔资质申请需要跟您核实。",
+   "reply_deny": "抱歉打扰您了，麻烦您转告贵公司负责人，我们会再联系，再见。",
+   "reply_hangup": "抱歉打扰您了，再见。",
+   "must_say": [
+    "资质审核"
+   ],
+   "_why": "开场按赛题四段式：① 自报身份 → ② 确认「您是XX公司的XX吗」。官方 52 条话术的固定格式就是「请问您是（商家公司名/店铺名）…吗？」，公司名由外呼名单填进来（见 tools.next_outbound_target）。**不在开场就报驳回**——商家还没确认是找谁，先被告知被驳回，凭什么信这通电话；打错了人也要照样念一遍驳回理由。",
+   "reply_confirm_company_2": "我这边有一笔资质申请需要跟您核实，您只要回我一句：是这家公司的负责人吗？",
+   "reply_confirm_company_3": "那您方便让负责人接一下吗？我等半分钟；不方便的话，我晚点再打给负责人。",
+   "reply_before_confirm": "这个问题我得先确认您是哪家公司才能讲，不然不能把别人申请里的信息说给您听。"
+  },
+  "IDENTITY": {
+   "reply": "好的，我这边核对一下申请单。为了确认是您本人在办理这笔申请，麻烦您报一下申请时预留的手机号后四位，可以吗？",
+   "reply_retry": "没关系，那方便说一下您的姓名吗？我核对一下申请单信息。",
+   "reply_ok": "核对上了，感谢配合。{application_desc}没有通过审核，原因是{reason}，需要补充{materials}，具体我马上跟您说明。",
+   "reply_fail": "实在抱歉，这边暂时核对不上申请单，我稍后让专员联系您，感谢您的接听。",
+   "reply_ask_tail": "好的，核对申请单需要您预留手机号的后四位，说四个数字就行。",
+   "reply_ask_tail_2": "那我换个方式核对：申请单编号后六位，或者申请时预留手机号的后四位，任意一个都行。",
+   "reply_ask_name": "没关系，那方便说一下您的姓名吗？我核对一下申请单。",
+   "reply_ask_name_2": "您怎么称呼？说个姓也可以，我这边核对一下。",
+   "reply_refuse_identity": "理解您谨慎，核对只是为了确认是您本人在处理这笔申请。您不方便报手机号后四位的话，报一下申请单编号、公司名，或者联系人姓名，任意一个都可以。",
+   "reply_refuse_final": "理解您的顾虑，那我不勉强。稍后会有专员用官方号码联系您，您可以先核实身份。再见。",
+   "reply_ask_identity": "您的号码是商家入驻时预留的联系方式，我们这边是官方审核，只用来核对这笔资质申请，不会外传。您报一下手机号后四位，或者说联系人姓名，都可以。",
+   "reply_offtopic": "没关系，记不住号码也正常。您说个联系人姓名，或者申请单编号后六位，任意一个我都能核对上；实在不方便，我让专员用官方号码再联系您。",
+   "reply_ask_tail_short": "您报的数字好像少了几位，我再核对一下。麻烦说一下预留手机号的后四位，四个数字就行，不着急。",
+   "reply_noise": "不好意思，这边有点杂音没听清，您方便再说一次吗？不着急。",
+   "reply_complain_hold": "不好意思打扰您了，我是京东商家资质审核组的专员，来电不是推销，是想跟您同步资质申请的审核结果。先简单核对一下申请单，麻烦您说一下申请时预留手机号的后四位。",
+   "reply_noise_final": "可能信号不太好，我先不打扰您了，稍后让专员与您联系，感谢您的接听，再见。",
+   "reply_reask": "实在不好意思，这边一直没核对上。麻烦您再报一次：申请时预留手机号的后四位，或者您的姓名、申请单编号，任意一个都可以，我再核对一次。",
+   "reply_jingmai_no_call": "核对上了。您这笔申请属于京麦驳回场景，按商家后台的站内指引补充材料即可，电话这边就不占用您时间了，稍后会有站内消息同步，感谢您的接听，再见。",
+   "must_say": [
+    "核对"
+   ],
+   "_why": "赛题四段式②：先讲清「核对哪一个数字」——申请时预留手机号后四位。此前写「店铺或公司信息后四位」是内部术语：商家名下有手机号、统一社会信用代码、店铺编号、对公账户等多个后四位，「信息后四位」等于让商家猜，属于指代不明；且「店铺或公司」二选一却只收一个数字，逻辑也对不上。申请单核身走 C5 四路径（姓名/手机后四位/公司名/申请单号）。",
+   "reply_ask_before_identity": "您问的驳回原因和要补的材料，我得先核对身份才能讲——不然不能把别人申请里的信息说给您听。麻烦报一下申请时预留手机号的后四位，或者联系人姓名，核对上我马上说给您。",
+   "reply_ask_before_identity_2": "我知道您着急想知道原因和材料。按规定这些得核完身份才能讲，我一核对上就把原因和要补的东西从头到尾说清楚。您报一下预留手机号后四位，或者联系人姓名就行。",
+   "reply_ask_identity_2": "您这个问题我记下了，专员会给您更细的解释。咱们先把身份核对一下——申请时预留手机号的后四位，四个数字就行。"
+  },
+  "NEED": {
+   "reply": "{application_desc}没有通过审核，驳回原因是{reason}。需要我把要补的材料再说一遍，还是直接说重新提交的步骤？",
+   "reply_application_detail": "您这笔申请是{application_desc}，驳回原因是{reason}，需要补充{materials}。",
+   "reply_no_order": "今天联系您，主要是同步您资质申请的审核结果，方便听一下吗？",
+   "reply_order_detail": "您这笔申请提交的【材料类型】存在问题，具体要求我马上跟您说明。",
+   "must_say": [
+    "没有通过审核"
+   ],
+   "_why": "NEED 先问业务域（框架 2.2 五域路由），商家回答后由 OFFER/知识检索给出对应官方话术"
+  },
+  "OFFER": {
+   "reply": "针对{reason}，您需要补充{materials}，然后在后台重新提交申请。您还有什么想具体了解的吗？",
+   "reply_ask_fee": "整个审核和重新提交都不收取任何费用，您不用担心。",
+   "reply_ask_validity": "材料上传之后，我们会完整审核后才能确定结果，有问题会再跟您联系。",
+   "reply_unknown": "这个我这边确认不到，稍后让专员给您回电说明，可以吗？",
+   "must_say": [
+    "重新提交"
+   ],
+   "_why": "追问应对走 kb_pop 检索（17 条追问剧本已补触发词）；结果预期固定口径不许承诺通过（合规红线）",
+   "reply_repair": "不好意思，刚才可能说得快了点。我再说一遍：{application_desc}没有通过审核，原因是{reason}，需要补充{materials}，然后在后台重新提交。您还有哪儿不清楚，我再说。",
+   "reply_repair_2": "那我放慢一点重说：这批申请的问题是{reason}，要补的是{materials}，补完在后台重新提交就行。",
+   "reply_application_answer": "您这笔申请是{application_desc}，驳回原因是{reason}，需要补充{materials}。",
+   "reply_application_detail_2": "这次驳回的具体问题是{reason}，要补的是{materials}，补完在后台重新提交就行。",
+   "reply_provenance": "您的号码是商家入驻时预留的联系方式，我们是官方审核，只用来核对这笔资质申请，不会外传。",
+   "reply_provenance_2": "这个号码是您提交这笔申请时留的，我们只用于资质审核这一件事，不会拿去做别的。",
+   "reply_application_detail": "您这笔申请是{application_desc}，驳回原因是{reason}，需要补充{materials}。",
+   "reply_ask_fee_2": "我们这边不收费，审核和重新提交都不收费，您放心。"
+  },
+  "CONFIRM": {
+   "reply": "我跟您复述一下：您这笔申请是因为材料问题被驳回，需要按刚才说的补充材料后重新提交，您清楚了吗？",
+   "reply_again": "您可以简单回我一句清楚了或者还有疑问就行。",
+   "reply_after_ask": "您看这样解释清楚了吗？您可以简单回我一句清楚了或者还有疑问。",
+   "confirm_yes_words": [
+    "清楚了",
+    "清楚",
+    "明白",
+    "明白了",
+    "知道了",
+    "懂了",
+    "记住了"
+   ],
+   "must_say": [
+    "复述"
+   ],
+   "_why": "必答要素④：商家理解确认；两次不确认记 merchant_understood=unknown 转专员。confirm_yes_words 是本场景的确认说法（问的是清楚不是同意），命中即闭环；'没明白'等否定变体由 dialogue 层拦截",
+   "reply_repair": "刚才可能说得太快了。我再复述一遍：{application_desc}没有通过审核，原因是{reason}，需要补充{materials}，然后在后台重新提交。",
+   "reply_repair_2": "我再说清楚一点：驳回原因是{reason}，要补的材料是{materials}，补完重新提交就行。您清楚了吗？",
+   "reply_application_answer": "您这笔申请是{application_desc}，驳回原因是{reason}，需要补充{materials}。",
+   "reply_specific": "我跟您复述一下：您这笔申请是因为{reason}没有通过审核，需要补充{materials}，然后在后台重新提交，您清楚了吗？",
+   "reply_application_answer_2": "驳回的具体问题是{reason}，要补的材料是{materials}，补完在后台重新提交。",
+   "reply_provenance": "您的号码是商家入驻时预留的联系方式，我们是官方审核，只用来核对这笔资质申请，不会外传。",
+   "reply_provenance_2": "这个号码是您提交这笔申请时留的，我们只用于资质审核这一件事，不会拿去做别的。",
+   "reply_ask_fee": "整个审核和重新提交都不收取任何费用，您不用担心。",
+   "reply_ask_fee_2": "我们这边不收费，审核和重新提交都不收费，您放心。"
+  },
+  "WRITEBACK": {
+   "reply": "好的，刚才说的驳回原因和补充材料的要求，我都已经记录下来了，稍后会有短信同步到您的商家后台，感谢您的配合，再见。",
+   "reply_declined": "好的，那我先把您的情况记录下来，稍后让专员再和您对接。感谢您的接听，再见。",
+   "reply_unknown": "好的，我先按现在的沟通情况记录，稍后专员再和您确认一次。感谢您的接听，再见。",
+   "reply_changed": "好的，我按您刚才补充的说法更新记录。感谢您的接听，再见。",
+   "reply_changed_declined": "好的，那我把您补充的情况一并记录，稍后专员再和您对接。感谢您的接听，再见。",
+   "reply_fail": "实在抱歉，记录这边暂时没成功，我稍后让专员直接联系您处理。感谢您的接听，再见。",
+   "must_say": [
+    "记录"
+   ]
+  },
+  "DONE": {
+   "reply": "感谢您的配合，再见。",
+   "reply_ask": "如有疑问，您也可以拨打热线 4006180092，感谢您的接听，再见。",
+   "reply_budget_turns": "抱歉，今天通话时间比较长了，我先把您的情况记录下来，稍后让专员联系您，再见。",
+   "reply_budget_time": "抱歉，通话时间有点长了，我先把您的情况记录下来，稍后让专员联系您，再见。",
+   "must_say": [
+    "再见"
+   ],
+   "_why": "热线兜底从话术里挪到 DONE 收尾（框架⑥段），官方书面腔改口语",
+   "reply_ask_again": "这些细节我这边说不全，专员回访时会跟您讲清楚；着急的话拨 4006180092 也能找到我们。"
+  }
+ },
+ "speaker_gate": {
+  "enabled": true,
+  "mode": "shadow",
+  "_why": "判断'这句是不是刚才那位说的'，挡住旁人插话（电视台词、店主家人）被当成商家回答。现在只做影子模式：判完写一条 speaker_gate 事件，不改变任何对话行为。",
+  "_why_shadow": "本机只在 TTS 五个音色的语料上标定过（零误杀 / 漏放 15%，见 docs/33），没有真人双人语料。没有真机数据就拦截，等于拿演示赌一个没测过的阈值。",
+  "_how_to_check": "python scripts/bench_speaker_gate.py 看分数分布；事件库里 speaker_gate 的 decision/score 攒够真机样本后再谈 enforce。",
+  "_requires": "onnxruntime + data/models/wespeaker_zh_cnceleb_resnet34.onnx（python scripts/fetch_speaker_model.py）。缺任一条件自动 abstain，主链路行为不变。"
+ },
+ "slots": [
+  {
+   "name": "identity_confirmed",
+   "desc": "是否已核对申请单信息",
+   "type": "bool"
+  },
+  {
+   "name": "need",
+   "desc": "商家当前想解决的问题",
+   "type": "str"
+  },
+  {
+   "name": "consent",
+   "desc": "是否清楚整改要求（true/false/unknown）",
+   "type": "str"
+  },
+  {
+   "name": "customer",
+   "desc": "查到的申请联系人信息",
+   "type": "object"
+  },
+  {
+   "name": "order",
+   "desc": "查到的申请单信息（C5 换业务后为资质申请单）",
+   "type": "object"
+  },
+  {
+   "name": "order_queried",
+   "desc": "本通电话是否已查过申请单",
+   "type": "bool"
+  },
+  {
+   "name": "reject_code",
+   "desc": "命中的驳回条目（KB-POP-0XX）",
+   "type": "str"
+  },
+  {
+   "name": "close_mode",
+   "desc": "关单方式（电话/京麦）",
+   "type": "str"
+  }
+ ],
+ "knowledge": {
+  "enabled": true,
+  "path": "config/kb_pop.json",
+  "min_score": 1,
+  "max_answer_chars": 300,
+  "_why": "官方话术 120~200 字，上限放到 300；占位符两套体系判别见框架文档一节"
+ },
+ "answers": {
+  "_comment": "OFFER 阶段 fee/validity 关键词兜底（kb_pop 检索不中时用）；pop 语义下 validity=时效",
+  "fee": [
+   "多少钱",
+   "收费",
+   "花钱",
+   "要钱",
+   "费用",
+   "免费"
+  ],
+  "validity": [
+   "多久",
+   "多长时间",
+   "几个工作日",
+   "期限",
+   "什么时候"
+  ],
+  "unknown": "unknown"
+ },
+ "writeback_template": {
+  "_comment": "赛题回写字段：驳回原因分类、关单方式、商家理解度（框架 3.2 WRITEBACK 段）。全部 required 带 default，摊平不丢字段。",
+  "required": {
+   "call_result": {
+    "type": "enum",
+    "values": [
+     "connected",
+     "no_answer",
+     "refused",
+     "invalid"
+    ],
+    "default": "connected",
+    "desc": "通话结果"
+   },
+   "identity_confirmed": {
+    "type": "bool",
+    "default": false,
+    "desc": "申请单信息是否核对通过"
+   },
+   "reject_category": {
+    "type": "enum",
+    "values": [
+     "品牌-授权",
+     "品牌-商标",
+     "品牌-全球购",
+     "商品与行业资质",
+     "入驻与主体店铺",
+     "京麦驳回",
+     "未定位"
+    ],
+    "default": "未定位",
+    "desc": "驳回业务域（框架 2.2 五域）"
+   },
+   "reject_summary": {
+    "type": "str",
+    "max_chars": 200,
+    "default": "未获取",
+    "desc": "驳回原因摘要（官方话术关键句）"
+   },
+   "merchant_understood": {
+    "type": "enum",
+    "values": [
+     true,
+     false,
+     "unknown"
+    ],
+    "default": "unknown",
+    "desc": "商家是否清楚整改要求（CONFIRM 复述结果）"
+   },
+   "agent_version": {
+    "type": "str",
+    "default": "v1",
+    "desc": "话术版本，进化学溯源"
+   }
+  },
+  "optional": {
+   "close_mode": {
+    "type": "enum",
+    "values": [
+     "电话",
+     "京麦"
+    ],
+    "default": "电话",
+    "desc": "关单方式"
+   },
+   "callback_needed": {
+    "type": "bool",
+    "default": false,
+    "desc": "是否需要专员回电"
+   },
+   "hotline": {
+    "type": "str",
+    "default": "4006180092",
+    "desc": "兜底热线（官方话术⑥段）"
+   },
+   "notes": {
+    "type": "str",
+    "max_chars": 200,
+    "default": "",
+    "desc": "补充记录"
+   }
+  }
+ },
+ "reject_rules": [
+  {
+   "category": "品牌-授权",
+   "keywords": [
+    "品牌授权",
+    "授权书",
+    "授权"
+   ]
+  },
+  {
+   "category": "品牌-商标",
+   "keywords": [
+    "商标",
+    "商标注册证"
+   ]
+  },
+  {
+   "category": "品牌-全球购",
+   "keywords": [
+    "全球购",
+    "海外",
+    "跨境"
+   ]
+  },
+  {
+   "category": "商品与行业资质",
+   "keywords": [
+    "行业资质",
+    "营业执照",
+    "发票",
+    "质检",
+    "生产许可",
+    "食品",
+    "化妆品",
+    "3C"
+   ]
+  },
+  {
+   "category": "入驻与主体店铺",
+   "keywords": [
+    "入驻",
+    "主体",
+    "店铺信息",
+    "个体工商"
+   ]
+  },
+  {
+   "category": "京麦驳回",
+   "keywords": [
+    "京麦"
+   ]
+  }
+ ],
+ "_reject_rules_why": "C1 框架 2.2 五域：申请单级定位依赖 C5，但 need 文本的关键词足以判域。规则顺序即优先级（品牌-授权 在 商标 前，'品牌授权没过'应落授权域）。未命中任何规则 = 未定位（转专员核实）",
+ "compliance": {
+  "forbidden_words": [
+   "保证通过",
+   "百分百过审",
+   "包过",
+   "一定通过",
+   "必须现在",
+   "不提交就"
+  ],
+  "reply_blocked": "审核结果以我们的完整审核为准，我这边不能给您保证，具体要求我请专员再和您说明，可以吗？",
+  "categories": {
+   "insult": [
+    "你这个傻",
+    "闭嘴",
+    "神经病",
+    "爱审不审"
+   ],
+   "false_promise": [
+    "一定通过",
+    "绝对没问题",
+    "保证过审",
+    "保证通过",
+    "保证能",
+    "能保证",
+    "包过",
+    "百分百"
+   ],
+   "inducement": [
+    "不提交就",
+    "错过就没",
+    "最后一天",
+    "今天必须"
+   ]
+  },
+  "_why": "红线=不许承诺审核结果（官方 S07/S13 口径）；与官方话术一一对应"
+ },
+ "_scene_meta": {
+  "source": "competition/官方资料包/电话答复框架_C1.md",
+  "kb": "config/kb_pop.json（96 条官方原文）",
+  "c5_done": "申请单定位已接：query_application 四路径核身 → reply_ok 精准告知品牌/类目/原因/材料；裸报公司名收槽已启用",
+  "c3_done": "close_mode=京麦 / call_status=无需外呼 的档案核上即收尾，不进六阶段"
+ },
+ "evolution_policy": {
+  "_why": "自进化闭环的可学习面：分支路由 + 话术变体，不是代码。默认全关=未学习前的行为；scripts/self_evolve.py 依据逐轮正负反馈把开关逐条打开，并用同一批客户复跑验证收益。",
+  "repair": {
+   "OFFER": false,
+   "CONFIRM": true
+  },
+  "answer_routes": {
+   "OFFER": {
+    "material": "reply_application_detail"
+   },
+   "CONFIRM": {
+    "fee": "reply_ask_fee",
+    "material": "reply_application_answer"
+   }
+  },
+  "confirm_specific": true,
+  "greeting_company_alt": true
+ }
+}

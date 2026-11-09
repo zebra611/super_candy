@@ -24,7 +24,7 @@
 import re
 
 import config_loader
-from modules import intent, kb, nlg, official_script, persona, tools
+from modules import intent, kb, nlg, official_script, persona, policy, tools
 
 # ---------------------------------------------------------------------------
 # 意图关键词表
@@ -1828,8 +1828,35 @@ def _stage_greeting(session, text, flags):
             if flags.get("ask"):
                 _ans, _qa_hit, _kb_hit = _answer_official(session, text, flags)
                 _prefix = _ans or ""
+                if not _prefix:
+                    # 答不上来时至少要说明「为什么现在不能答」。
+                    # 11-09 反馈：客户还没确认公司就先问"补什么材料"，
+                    # 客服一句不解释、直接把"您是XX公司吗"再问一遍，
+                    # 听起来像没听见。合规上确实不能讲，但必须把原因说出来。
+                    _prefix = (config_loader.stage_config("GREETING")
+                               .get("reply_before_confirm") or "")
+            # 公司确认这一环不能省（赛题写死"打错人是重大事故"），但可以换问法。
+            # 11-09 逐轮反馈：A07/A09 的客户在开场说"那号我一时真想不起来"，
+            # 客服连续 3~4 轮逐字重复同一句"请问您是XX的法定代表人吗"。
+            # 换问法不降低合规要求：第一次问全称确认，第二次缩成一句是/否，
+            # 第三次给出"让负责人接听/稍后再打"的出口——仍然是同一道闸门。
+            _n = int(session.get("company_ask_n", 0)) + 1
+            session["company_ask_n"] = _n
+            _keys = ("reply_confirm_company", "reply_confirm_company_2",
+                     "reply_confirm_company_3")
+            _key = _keys[0]
+            if policy.enabled("greeting_company_alt"):
+                if _n == 1:
+                    _key = _keys[0]
+                elif _n == 2:
+                    _key = _keys[1]
+                else:
+                    # 第三次起在「一句是/否」与「让负责人接/稍后再打」之间交替，
+                    # 不再逐字重复同一句；两条都不越过公司确认这道闸门。
+                    _key = _keys[2] if _n % 2 else _keys[1]
             _confirm_q = _fill_outbound(
-                config_loader.stage_config("GREETING").get("reply_confirm_company")
+                config_loader.stage_config("GREETING").get(_key)
+                or config_loader.stage_config("GREETING").get("reply_confirm_company")
                 or cfg.get("reply", ""), _target)
             return _reply(session, ("%s %s" % (_prefix, _confirm_q)).strip(),
                           next_stage="GREETING", intent="greeting_confirm_company",
@@ -2138,7 +2165,72 @@ def _apply_need_correction(session, text):
                   intent="corrected_need")
 
 
+def _confirm_restatement(session, cfg):
+    """确认环节的复述内容。
+
+    默认仍是配置里那句通用复述（"因为材料问题被驳回"）。打开
+    `confirm_specific` 后改用带 {reason}/{materials} 的版本——11-09 逐轮
+    反馈里 A02 第 4 轮就是这么被标出来的：前面已经讲过"授权链路不完整"，
+    复述时却降级成"材料问题"，客户听到的是"你根本没在听我这一单"。
+    取不到档案时一律回落通用句，绝不为了具体而念出花括号。
+    """
+    app = session["slots"].get("application")
+    if policy.enabled("confirm_specific") and app:
+        tpl = cfg.get("reply_specific") or ""
+        if tpl:
+            return _fill_application(tpl, app)
+    return cfg.get("reply", "")
+
+
+def _repair_reply(session, cfg, stage, flags):
+    """客户要求「再说一遍」时的回复：如实复述，而不是回一句「确认不到」。
+
+    两条话术交替使用：同一句连说两次，客户听到的就是卡带（对抗器也会记 repeat）。
+    两条都没有配置时返回空串，调用方回落原有分支——开关打开但场景没写话术，
+    不能因此让客服哑火。
+    """
+    n = int(session.get("repair_n", 0))
+    session["repair_n"] = n + 1
+    keys = ("reply_repair", "reply_repair_2")
+    tpl = cfg.get(keys[n % len(keys)]) or cfg.get("reply_repair") or ""
+    if not tpl:
+        return ""
+    app = session["slots"].get("application")
+    return _fill_application(_soothe(tpl, flags), app)
+
+
+def _route_answer(session, cfg, stage, text, flags, tail=""):
+    """答不上来时，按「阶段 + 问题类别」的路由表兜底；没学过返回 None。
+
+    为什么不是又一个 if：路由是**学出来的**。自进化闭环从逐轮负反馈里看出
+    “确认环节被问补什么材料，客服答确认不到”，把这条路由写进配置；
+    下次复跑同一批客户，这条负面反馈就消失。代码只提供一次查表与填槽，
+    不预置任何一条路线——预置了就等于把答案写死在代码里，闭环没得学。
+
+    路由值必须指向 `reply_` 开头的话术键（见 policy.ROUTE_KEY_PREFIX）：
+    优化器可以改「说什么」，不能借这个口子改 must_say 这类合规结构。
+    """
+    app = session["slots"].get("application")
+    if not app:
+        return None
+    cls = policy.question_class(text)
+    key = policy.answer_route(stage, cls)
+    if not key or not cfg.get(key):
+        return None
+    # 同一类问题连续问两次时换一条说法，避免逐字复读（对抗器会记 repeat）。
+    alt = key + "_2"
+    n = session.setdefault("route_n", {})
+    k = int(n.get(key, 0))
+    n[key] = k + 1
+    tpl = cfg.get(alt) if (k % 2 and cfg.get(alt)) else cfg.get(key)
+    _txt = _fill_application(_soothe(tpl, flags), app)
+    if tail:
+        _txt = "%s %s" % (_txt, tail)
+    return _reply(session, _txt, intent="ask")
+
+
 def _stage_need(session, text, flags):
+
     """NEED：先查业务数据，再问诉求。绝不能"没查就问"。
 
     顺序很关键：进入本阶段先调 query_order 拿真实订单，
@@ -2275,6 +2367,16 @@ def _stage_offer(session, text, flags):
         if _is_reference_only(text):
             return _clarify(session, "OFFER")
 
+    # 修复请求（"信号不好，你再说一遍"）先于提问处理。
+    # 11-09 逐轮反馈：这句话被 classify 判成 ask（"说一遍"里带提问信号），
+    # 于是走了下面的知识库分支，没命中就回"这个我这边确认不到"，
+    # 客户只好一遍遍重复要求，客服一遍遍说确认不到（A01 第 4~7 轮、A04 第 7 轮）。
+    # 正确动作是把刚才讲过的内容再说一遍——修复请求要的是复述，不是答案。
+    if policy.repair_enabled("OFFER") and policy.is_repair_request(text):
+        _rep = _repair_reply(session, cfg, "OFFER", flags)
+        if _rep:
+            return _reply(session, _rep, intent="repair")
+
     # 提问：官方 QA 原话 → 知识条目（带出处）→ 配置里的固定话术
     if flags["ask"]:
         # 求结果保证（框架合规红线）必须先于知识库拦截，见 _promise_block。
@@ -2295,6 +2397,13 @@ def _stage_offer(session, text, flags):
             return _reply(session, _soothe(cfg.get("reply_ask_fee", ""), flags), intent="ask")
         if any(w in text for w in config_loader.answer_keywords("validity")):
             return _reply(session, _soothe(cfg.get("reply_ask_validity", ""), flags), intent="ask")
+        # 答不上来的问题：先查学到的路由表（阶段 + 问题类别 → 话术键）。
+        # 11-09 逐轮反馈：A14/A06 在 OFFER 被问“补什么材料/为什么驳回”，
+        # 客服回“确认不到”，而这单的原因与材料就在 slots.application 里。
+        # 路由表默认空 = 行为不变；自进化闭环依据反馈逐条学出来。
+        _routed = _route_answer(session, cfg, "OFFER", text, flags)
+        if _routed:
+            return _routed
         return _reply(session, _soothe(cfg.get("reply_unknown", ""), flags), intent="ask")
 
     # 明确拒绝 → 回写（拒绝也留痕）
@@ -2308,7 +2417,7 @@ def _stage_offer(session, text, flags):
     # N206 的真实根因是用例轮数与规格不匹配（见 seed_cases.json N206._note），
     # 不是意图判定缺陷；T10 否定作用域对「不要钱啊，那办吧」判的是 yes，正确。
     confirm = config_loader.stage_config("CONFIRM")
-    return _reply(session, _soothe(confirm.get("reply", ""), flags),
+    return _reply(session, _soothe(_confirm_restatement(session, confirm), flags),
                   next_stage="CONFIRM", intent=_intent_name(flags))
 
 
@@ -2383,6 +2492,16 @@ def _stage_confirm(session, text, flags):
     """
     cfg = config_loader.stage_config("CONFIRM")
 
+    # 修复请求（"信号不好，你再说一遍"）走复述，而不是走下面「没听懂」那条两次收线。
+    # 位置必须在 NOT_CLEAR_MARKS 之前：那张表里有"再说一遍/没听清"，
+    # 先命中就会把"请你再说一遍"当成"我听不懂"，第二次直接收线（A04 第 7 轮实测）。
+    # 明确表态（"不要了，再说一遍"）仍由下面的拒绝分支回写，不被复述拦走。
+    if (policy.repair_enabled("CONFIRM") and policy.is_repair_request(text)
+            and not flags.get("no") and not flags.get("deny")):
+        _rep = _repair_reply(session, cfg, "CONFIRM", flags)
+        if _rep:
+            return _reply(session, _rep, next_stage="CONFIRM", intent="repair")
+
     # 用户明确说没听懂：不回写同意、也不记拒绝，先把复述再讲一遍。
     # 第二次仍没听懂就转专员收线，**不产生回写事件**——回写会把
     # 「客户同意 / 拒绝」写进工单，而这通电话客户只是没听清，
@@ -2395,7 +2514,7 @@ def _stage_confirm(session, text, flags):
                               "需要补充的材料清单也会同步到商家后台，感谢您的接听，再见。",
                            "unclear")
         session["reexplain_used"] = True
-        return _reply(session, cfg.get("reply", ""),
+        return _reply(session, _confirm_restatement(session, cfg),
                       next_stage="CONFIRM", intent="ambiguous")
 
     # 场景确认词（pop："清楚了""明白了"）。CONFIRM 问的是什么由场景话术决定：
@@ -2448,6 +2567,15 @@ def _stage_confirm(session, text, flags):
             return _reply(session, "%s %s" % (_ans, _tail),
                           intent="qa" if _qa_hit else "ask",
                           qa_hit=_qa_hit, kb_hit=_kb_hit)
+
+    # 答不上来的提问：查学到的路由表，用本单事实正面回答，再回到确认问题。
+    # 11-09 逐轮反馈：A03/A06/A10/A14/A15 都在这里连问两次、客服两次“确认不到”、
+    # 第二次直接收线；而这单的驳回原因与材料清单就在 slots.application 里。
+    _routed = _route_answer(session, cfg, "CONFIRM", text, flags,
+                            tail=(cfg.get("reply_after_ask")
+                                  or "您看这样解释清楚了吗？"))
+    if _routed:
+        return _routed
 
     # 客户还在提问 / 质疑 / 提供信息，而这一轮没有明确表态：这不是「含糊表态」。
     # 旧逻辑把它计入 confirm_asks，两次就回写 unknown 收线，等于替一个还没

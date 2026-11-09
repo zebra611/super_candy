@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""一键自进化：把「体检 → 读基线 → 提案 → 闸门」固定成一条命令。
+"""一键自进化：把「体检 → 读基线 → 提案 → 闸门 → 多轮反馈闭环」固定成一条命令。
 
 用法（项目根目录）：
-    python scripts/auto_evolve.py             # 一轮：三条链各跑一遍，本地模板草案 → 闸门 → 上架提示
+    python scripts/auto_evolve.py             # 一轮：三条链 + 3 轮反馈闭环 + 闸门 → 上架提示
     python scripts/auto_evolve.py --llm       # 改由大模型起草，坏文案仍由本地模板兜底
     python scripts/auto_evolve.py --no-gate   # 只到提案，不跑闸门
+    python scripts/auto_evolve.py --no-selfevolve        # 跳过多轮反馈闭环
+    python scripts/auto_evolve.py --selfevolve-rounds 5  # 反馈闭环跑几轮（默认 3）
 
-三条链：L2 话术链、性格链、自适应对抗链。顺序写在输出的第 1～5 步里，
-对外只暴露这一行命令。上架（promote）永远不自动做，必须单独一条命令。
+四条链：L2 话术链、性格链、自适应对抗链、逐轮反馈闭环（self_evolve）。
+第 5 步的反馈闭环与前三链分开记账：它只改 `evolution_policy` 里的分支开关，
+每轮改一处、复跑同一批客户，收益过不了四道验收就退回。上架（promote）
+永远不自动做，必须单独一条命令。
 空草稿或被静态拒绝的草稿会就地重做，不累积垃圾候选。
 对抗链会先复算基线分数：代码或模拟器改过却没重定基线时直接中止，
 不许拿旧基线把别处的收益算到话术候选头上。
@@ -217,10 +221,19 @@ def main():
     argv = sys.argv[1:]
     use_llm = "--llm" in argv
     no_gate = "--no-gate" in argv
+    no_selfev = "--no-selfevolve" in argv
+    se_rounds = 3
+    for i, a in enumerate(argv):
+        if a == "--selfevolve-rounds" and i + 1 < len(argv):
+            try:
+                se_rounds = max(1, int(argv[i + 1]))
+            except ValueError:
+                se_rounds = 3
     for d in (_L2_DIR, _P_DIR):
         os.makedirs(d, exist_ok=True)
 
-    print("一键自进化｜三条链（L2 话术 / 性格 / 自适应对抗）：1 体检 → 2 读基线 → 3 提案 → 4 闸门 → 5 上架")
+    print("一键自进化｜四条链（L2 话术 / 性格 / 自适应对抗 / 逐轮反馈）：")
+    print("  1 体检 → 2 读基线 → 3 提案 → 4 闸门 → 5 多轮反馈闭环 → 6 上架")
 
     print("\n第 0 步｜真实通话体检（有真实数据才跑：先看用户实际踩到什么问题）")
     # 只做展示，不产出候选：真实通话给的是「改什么」的优先级，能不能上仍由闸门说了算。
@@ -365,7 +378,17 @@ def main():
         else:
             print("  [完成] 对抗集没有可改话术的失败簇，本轮无需闸门")
 
-    print("\n第 5 步｜上架（永远单独一条命令，脚本不会自己上线）")
+    print("\n第 5 步｜多轮反馈闭环（每轮只改一处策略开关，复跑同一批客户验证）")
+    if no_selfev:
+        print("  [跳过] 本轮用了 --no-selfevolve")
+    else:
+        rc = _run("反馈闭环（%d 轮）" % se_rounds,
+                  [_PY, "scripts/self_evolve.py", "run", "--rounds", str(se_rounds)],
+                  allow_fail=True)
+        if rc != 0:
+            print("  [跳过] 反馈闭环没跑完，不影响前面三条链的结论；原因见上面的输出")
+
+    print("\n第 6 步｜上架（永远单独一条命令，脚本不会自己上线）")
     v = _newest_gated(_L2_VERSIONS)
     pv = _newest_gated(_P_VERSIONS)
     if v:
@@ -375,8 +398,12 @@ def main():
     if not v and not pv:
         print("  没有待上架版本：闸门没过的候选只留档，线上话术一个字都没动")
     print("  对抗链：闸门通过后需人工评估，不提供自动上架命令")
+    print("  反馈闭环：最新一次运行可用 python scripts/self_evolve.py report 查看；")
+    print("            学到的策略要上线：python scripts/self_evolve.py promote <运行编号> --yes")
 
     print("\n本轮结论：三处地基健康；没有新失败样本时，闸门会如实拒绝无收益的改动。")
+    print("反馈闭环的结论看它自己的日志：每一轮的正负反馈条数、改了哪一处、")
+    print("复跑后降了多少，都写在 training_log.md 与 feedback.jsonl 里。")
     print("想让它继续进化：先看第 0 步里『仍会复现』的真实缺陷（那是用户真踩到的），")
     print("再往 eval/personas_adversarial.json 加更难的画像（独立挑战集，")
     print("不动 10 通与 12 画像的分母），或修掉只改代码那几簇里的缺陷；")

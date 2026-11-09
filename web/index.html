@@ -67,6 +67,20 @@
   .weakcell { background: var(--gray-bg); border-radius: 8px; padding: 8px 10px; }
   .weakcell .k { font-size: 11px; color: var(--muted); }
   .weakcell .v { font-size: 15px; font-weight: 500; }
+  #evolveBody { margin-top: 12px; }
+  .evtable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .evtable th, .evtable td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+  .evtable th { color: var(--muted); font-weight: 400; }
+  .evtable tr.latest td { background: #f7fbf9; }
+  .evtag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; margin-left: 4px; }
+  .evtag.ok { background: #e3f4ec; color: #0f6e56; }
+  .evtag.no { background: #fcebeb; color: #a32d2d; }
+  .evround { border-top: 1px dashed var(--line); padding: 8px 0; }
+  .evround:first-child { border-top: 0; }
+  .evcheck { font-size: 12px; color: var(--muted); padding-left: 10px; }
+  .evcheck b { font-weight: 500; color: var(--ink); }
+  .evwhy { font-size: 12px; color: var(--ink); }
+  .evquote { font-size: 11px; color: var(--muted); padding-left: 10px; }
 </style>
 </head>
 <body>
@@ -126,6 +140,20 @@
     <div class="hint" style="margin-top:6px">现场真跑一场，逐轮播放客户与客服的对话：客户按客服露出的破绽把难度从 L1 拉到 L4，红标是这一轮被抓住的弱点。训练用独立事件库、强制模板话术，结果可复现、不写生产数据；有通话进行中会被拒绝。</div>
     <div id="trainFlow"></div>
     <div id="trainSummary"></div>
+  </div>
+
+  <div class="card" id="evolveCard">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <strong style="font-weight:500">自进化训练日志 · 多轮反馈闭环</strong>
+      <span class="hint" id="evolveState">未加载</span>
+    </div>
+    <div class="row">
+      <select id="evolveRun" class="sel"></select>
+      <button id="btnEvolveView">查看记录</button>
+      <button id="btnEvolveRun" class="primary">跑 3 轮</button>
+    </div>
+    <div class="hint" style="margin-top:6px">每轮只改一处策略开关，改完复跑同一批客户：目标缺陷与负面反馈总量必须同时下降、通过数与 holdout 不降，才采纳；否则退回并记原因。训练只写运行记录，不改线上配置。</div>
+    <div id="evolveBody"></div>
   </div>
 
   <div class="card" id="randomCard" style="display:none">
@@ -1653,6 +1681,157 @@ function renderTrainSummary(d) {
 
 $("btnTrain").onclick = runTrain;
 loadTrainPersonas();
+
+// ---------------------------------------------------------------------------
+// 自进化训练日志：多轮「反馈 → 改一处 → 复跑」的记录
+//
+// 数据来自 GET /api/evolve/runs 与 /api/evolve/run?id=，都是只读快照。
+// 这里刻意把「改了什么、哪条判据没过」铺开：只看曲线会以为在进步，
+// 看判据才知道某处改动其实是拆东墙补西墙被退回的。
+// ---------------------------------------------------------------------------
+const EV_CODE = {
+  repeat: "复读上一句", no_answer: "问题没被回答", generic_summary: "复述丢了具体原因",
+  slot_loss: "已给信息又被要一遍", noise_on_question: "把提问当杂音",
+  placeholder: "播出占位符", stalled: "原地打转"
+};
+let _evolveBusy = false;
+
+function evCodes(o) {
+  const ks = Object.keys(o || {});
+  if (!ks.length) return "—";
+  return ks.map(k => (EV_CODE[k] || k) + " " + o[k]).join("、");
+}
+
+async function loadEvolveRuns(keep) {
+  try {
+    const r = await fetch("/api/evolve/runs");
+    const d = await r.json();
+    const sel = $("evolveRun");
+    const old = sel.value;
+    sel.innerHTML = "";
+    (d.runs || []).forEach(x => {
+      const o = document.createElement("option");
+      o.value = x.run_id;
+      o.textContent = x.run_id + "｜" + (x.at || "") + "｜负面 " +
+        (x.neg ? x.neg.join("→") : "-") + "｜" + x.rounds + " 轮";
+      sel.appendChild(o);
+    });
+    if (!sel.options.length) {
+      $("evolveState").textContent = "还没有训练记录：点「跑 3 轮」现场跑一次";
+      return;
+    }
+    if (keep && old) sel.value = old;
+    $("evolveState").textContent = "共 " + sel.options.length + " 次运行";
+  } catch (e) {
+    $("evolveState").textContent = "训练记录加载失败：" + e;
+  }
+}
+
+async function viewEvolve() {
+  const id = $("evolveRun").value;
+  if (!id) return;
+  $("evolveState").textContent = "读取 " + id + " …";
+  try {
+    const r = await fetch("/api/evolve/run?id=" + encodeURIComponent(id));
+    const d = await r.json();
+    if (d.error) { $("evolveState").textContent = d.error + "：" + (d.detail || ""); return; }
+    renderEvolve(d);
+    $("evolveState").textContent = "已加载 " + id;
+  } catch (e) {
+    $("evolveState").textContent = "读取失败：" + e;
+  }
+}
+
+function renderEvolve(run) {
+  const b = run.base_metrics || {};
+  const f = run.final_metrics || {};
+  const rows = (run.rounds || []).map(rd => {
+    const m = (rd.after || {}).metrics || {};
+    const att = rd.attempt || {};
+    const tag = att.decision === "accepted"
+      ? '<span class="evtag ok">采纳</span>'
+      : (att.decision ? '<span class="evtag no">退回</span>' : "");
+    return '<tr' + (rd.round === (run.rounds || []).length ? ' class="latest"' : '') + '>' +
+      "<td>第 " + rd.round + " 轮</td>" +
+      "<td>" + (m.neg == null ? "—" : m.neg) + "</td>" +
+      "<td>" + (m.pos == null ? "—" : m.pos) + "</td>" +
+      "<td>" + (m.pass ? m.pass.ok + "/" + m.pass.total : "—") + "</td>" +
+      "<td>" + escapeHtml(att.adjustment || "—") + tag + "</td>" +
+      "<td>" + escapeHtml(att.why || "") + "</td></tr>";
+  }).join("");
+
+  const details = (run.rounds || []).map(rd => {
+    const att = rd.attempt;
+    if (!att) return "";
+    const checks = (att.checks || []).map(c =>
+      '<div class="evcheck">[' + (c.pass ? "通过" : "不过") + '] <b>' +
+      escapeHtml(c.name) + "</b>：" + escapeHtml(c.detail) + "</div>").join("");
+    const cl = (rd.clusters || []).slice(0, 2).map(c => {
+      const ex = (c.examples || []).map(e =>
+        '<div class="evquote">' + escapeHtml(e.session) + " 第 " + e.turn + " 轮｜客户：" +
+        escapeHtml(e.user) + "｜客服：" + escapeHtml(e.agent) + "</div>").join("");
+      return '<div class="evwhy">簇 ' + escapeHtml(c.target) + "（" + c.count + " 条｜" +
+        evCodes(c.codes) + "）</div>" + ex;
+    }).join("");
+    return '<div class="evround"><div class="evwhy">第 ' + rd.round + " 轮：" +
+      escapeHtml(att.decision === "accepted" ? "采纳 " : "退回 ") + escapeHtml(att.adjustment) +
+      (att.reason ? "（" + escapeHtml(att.reason) + "）" : "") + "</div>" +
+      checks + cl + "</div>";
+  }).join("");
+
+  const codeOnly = (run.code_only || []).length
+    ? '<div class="hint" style="margin-top:10px">只能改代码、闭环没有自动动的缺陷：' +
+      run.code_only.map(c => escapeHtml(c.key) + "×" + c.count).join("、") + "</div>"
+    : "";
+
+  $("evolveBody").innerHTML =
+    '<div class="verdict ' + ((f.neg != null && b.neg != null && f.neg <= b.neg) ? "ok" : "bad") + '">' +
+    "负面反馈 " + (b.neg == null ? "—" : b.neg) + " → " + (f.neg == null ? "—" : f.neg) +
+    " 条｜正面 " + (b.pos == null ? "—" : b.pos) + " → " + (f.pos == null ? "—" : f.pos) +
+    "｜通过 " + (b.pass ? b.pass.ok + "/" + b.pass.total : "—") + " → " +
+    (f.pass ? f.pass.ok + "/" + f.pass.total : "—") + "</div>" +
+    '<div class="hint" style="margin-top:4px">学到的策略：' +
+    escapeHtml(run.policy_desc || "无") + "（配置 " + escapeHtml(run.base_sha || "") +
+    " → " + escapeHtml((run.final_sha || "").slice(0, 16)) + "）</div>" +
+    '<table class="evtable" style="margin-top:10px"><thead><tr><th>轮次</th><th>负面</th>' +
+    "<th>正面</th><th>通过</th><th>调整</th><th>为什么改这里</th></tr></thead><tbody>" +
+    rows + "</tbody></table>" + details + codeOnly +
+    '<div class="hint" style="margin-top:8px">训练只写运行记录；上线需人工执行 ' +
+    "python scripts/self_evolve.py promote " + escapeHtml(run.run_id) + " --yes</div>";
+}
+
+async function runEvolve() {
+  if (_evolveBusy) return;
+  _evolveBusy = true;
+  $("btnEvolveRun").disabled = true;
+  $("evolveState").textContent = "正在跑 3 轮（每轮真跑一批客户，约 20–40 秒）…";
+  try {
+    const r = await fetch("/api/evolve/train", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rounds: 3 })
+    });
+    const d = await r.json();
+    if (d.error) { $("evolveState").textContent = d.error + "：" + (d.detail || ""); return; }
+    await loadEvolveRuns(false);
+    if (d.run && d.run.run_id) {
+      $("evolveRun").value = d.run.run_id;
+      renderEvolve(d.run);
+      $("evolveState").textContent = "完成：" + d.run.run_id;
+    } else {
+      $("evolveState").textContent = "完成，但没读到运行记录";
+    }
+  } catch (e) {
+    $("evolveState").textContent = "训练失败：" + e;
+  } finally {
+    _evolveBusy = false;
+    $("btnEvolveRun").disabled = false;
+  }
+}
+
+$("btnEvolveView").onclick = viewEvolve;
+$("btnEvolveRun").onclick = runEvolve;
+loadEvolveRuns(false).then(() => { if ($("evolveRun").options.length) viewEvolve(); });
+
 </script>
 </body>
 </html>

@@ -28,6 +28,7 @@ import re
 import secrets
 import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -193,6 +194,53 @@ def active_session_count():
 #: 训练回放串行化：跑一场要独占状态机与工具层，两场并行会串台。
 _TRAIN_LOCK = threading.Lock()
 _TRAIN_MAX_TURNS = 14
+
+
+_EVOLVE_LOCK = threading.Lock()
+_EVOLVE_ROOT = os.path.join(_ROOT, "eval", "reports", "self_evolve")
+_EVOLVE_ID_OK = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _evolve_runs(limit=12):
+    """自进化运行清单（读 index.jsonl，最新在前）。
+
+    只回展示必需字段：运行编号、时间、轮数、负/正面变化、通过数、采纳的调整。
+    训练细节（逐句反馈、配置快照）走单次详情接口，不塞进列表里。
+    """
+    path = os.path.join(_EVOLVE_ROOT, "index.jsonl")
+    if not os.path.exists(path):
+        return []
+    rows = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if row.get("kind", "train") != "train":
+                continue    # 上架记录单独一行，不进训练下拉框
+            rows.append(row)
+    return list(reversed(rows))[:limit]
+
+
+def _evolve_run(run_id):
+    """单次运行的完整记录：每轮指标、改了什么、判定与原因、只能改代码的缺陷。"""
+    if not _EVOLVE_ID_OK.match(run_id or ""):
+        return None
+    path = os.path.join(_EVOLVE_ROOT, run_id, "run.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        run = json.load(f)
+    # 绝对路径不出浏览器：把报告路径换成仓库相对路径
+    for k in ("final_scene", "base_scene"):
+        v = run.get(k) or ""
+        if os.path.isabs(v):
+            run[k] = os.path.relpath(v, _ROOT).replace("\\", "/")
+    return run
 
 
 def _train_personas():
@@ -1370,6 +1418,19 @@ class Handler(BaseHTTPRequestHandler):
             # 前端只需要展示用的字段，档案细节不该顺手回给浏览器。
             self._send_json({"personas": _train_personas()})
             return
+        if path == "/api/evolve/runs":
+            # 自进化训练记录清单：只读，不含个人信息（客户是模拟画像）
+            self._send_json({"runs": _evolve_runs()})
+            return
+        if path == "/api/evolve/run":
+            rid = (qs.get("id") or [""])[0]
+            run = _evolve_run(rid)
+            if run is None:
+                self._send_json({"error": "UNKNOWN_RUN",
+                                 "detail": "没有这次训练记录：%s" % (rid or "(空)")}, 404)
+                return
+            self._send_json(run)
+            return
         if path == "/api/company/random":
             # 纯预览：随机抽一条可电话外呼的档案回传，**不创建会话**。
             # 用途：测试页"随机"按钮先看清这家公司的信息，再决定用哪家与客服对话——
@@ -1525,6 +1586,39 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 _TRAIN_LOCK.release()
             self._send_json(out)
+            return
+
+        if path == "/api/evolve/train":
+            # 现场跑多轮反馈闭环。只写 eval/reports（运行记录），**不碰线上配置**：
+            # 学到的策略要上线必须走 self_evolve.py promote <run> --yes 这一条人工命令。
+            # 为什么放在子进程：训练里每轮都要用不同配置起一次跑批，同进程会命中
+            # app 的场景缓存，出现“改了配置分数没动”的假结论（evolve.py 踩过）。
+            try:
+                rounds = int(body.get("rounds") or 3)
+            except (TypeError, ValueError):
+                rounds = 3
+            rounds = max(1, min(8, rounds))
+            if not _EVOLVE_LOCK.acquire(blocking=False):
+                self._send_json({"error": "EVOLVE_BUSY",
+                                 "detail": "上一轮自进化还没跑完"}, 409)
+                return
+            try:
+                r = subprocess.run(
+                    [sys.executable, os.path.join(_ROOT, "scripts", "self_evolve.py"),
+                     "run", "--rounds", str(rounds)],
+                    cwd=_ROOT, capture_output=True, text=True, timeout=600)
+            except Exception as e:
+                self._send_json({"error": "EVOLVE_FAILED", "detail": str(e)}, 500)
+                return
+            finally:
+                _EVOLVE_LOCK.release()
+            if r.returncode != 0:
+                self._send_json({"error": "EVOLVE_FAILED",
+                                 "detail": (r.stderr or r.stdout)[-800:]}, 500)
+                return
+            latest = _evolve_runs(limit=1)
+            run = _evolve_run((latest[0] or {}).get("run_id") or "")
+            self._send_json({"ok": True, "run": run, "log_tail": r.stdout[-1200:]})
             return
 
         if path == "/api/call/start":

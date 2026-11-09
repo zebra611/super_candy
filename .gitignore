@@ -33,6 +33,9 @@ config/secrets.json
 .DS_Store
 Thumbs.db
 
+# 上架前留的线上原件（本机回滚用，不进仓库）
+*.bak_*
+
 # 评测每日归档（本地运行产物；趋势数据不进仓库，报告另存 eval/reports/）
 /eval/runs/
 
