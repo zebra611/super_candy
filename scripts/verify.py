@@ -2484,6 +2484,44 @@ def main():
           "no_answer" not in _j2["codes"],
           ["极性=%s 码=%s" % (_j2["polarity"], _j2["codes"])])
 
+    # 30.8h NEED 阶段第二次追问必须正面答，不能改口去催"清楚了"。
+    # 11-10 实测 A11/A16 第 4 轮：客户没拿到材料清单，被催一句就回"清楚了"，
+    # 电话闭环了，问题一个字没答——这类"配合式确认"最容易被当成好数据。
+    # 前面的证据把场景切走过，这里显式切到 pop 场景再切回，否则读到的是
+    # 售后场景的 NEED（它没有 reply_application_detail，会测到别的分支）。
+    _cl = dialogue.config_loader
+    _prev_scene = _cl.scene_path()
+    _ap = (tools.get_application("QZ202611060001").get("application") or {})
+    if _ap.get("company_name"):
+        try:
+            _cl.set_scene("pop_reject")
+            _sN = dialogue.new_session("V30N")
+            _sN["stage"] = "NEED"
+            _sN["slots"]["identity_confirmed"] = True
+            _sN["slots"]["application"] = _ap
+            _sN["official_line_spoken"] = True
+            _q1 = "那我具体要补什么材料"
+            dialogue._stage_need(_sN, _q1, dialogue.classify(_q1))   # 第一次：官方话术
+            _q2 = "急，那我具体要补什么材料"
+            _oN = dialogue._stage_need(_sN, _q2, dialogue.classify(_q2))
+            _xN = _oN.get("reply_text") or ""
+            _mat = (_ap.get("required_materials") or [""])[0]
+            check("NEED 第二次追问材料 → 正面给清单（不再催「清楚了」）",
+                  bool(_mat) and _mat in _xN and "解释清楚了吗" not in _xN
+                  and (_oN.get("next_stage") or "") != "CONFIRM",
+                  ["回复=%s｜next=%s" % (_xN[:40], _oN.get("next_stage"))])
+            _q3 = "你哪来的我号码，怎么信你"
+            _oN2 = dialogue._stage_need(_sN, _q3, dialogue.classify(_q3))
+            _xN2 = _oN2.get("reply_text") or ""
+            check("NEED 第二次被质疑号码来源 → 答来源，不回「确认不到」",
+                  ("预留" in _xN2 or "申请时留" in _xN2 or "审核" in _xN2)
+                  and "确认不到" not in _xN2,
+                  ["回复=%s" % _xN2[:40]])
+        finally:
+            _cl.set_scene(_prev_scene)
+    else:
+        mark_uncovered("NEED 二次追问", "取不到档案，无法真跑")
+
     # 30.9 版本库：上线过的版本必须留快照，且补丁只能落在话术上。
     _vs_path = os.path.join(ROOT, "config", "evolution", "versions.json")
     if not os.path.exists(_vs_path):

@@ -1,320 +1,326 @@
 {
-  "_comment": "场景 B：会员复购召回。业务文案是本场景自己的，tools / nlg / knowledge / writeback 结构以 config/scene.json 为基准同步——这四段是契约，不能各写各的。",
-  "scene_name": "会员复购召回（到店礼包）",
-  "agent_name": "小惠",
-  "company": "京东到家会员中心",
-  "apology_prefix": "非常抱歉让您久等了，",
-  "silence": {
-    "reply": "您还在吗？这边听不到声音，您方便的时候说一声就行。",
-    "reply_final": "看来信号不太好，我先不打扰您了，稍后再联系您，再见。",
-    "_todo": "真实实现要区分『完全没声音』和『有声音但识别不出』"
-  },
-  "asr": {
-    "provider": "dashscope",
-    "model": "qwen3-asr-flash",
-    "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    "realtime": true,
-    "realtime_model": "paraformer-realtime-v2",
-    "realtime_endpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
-    "language": "zh",
-    "itn": true,
-    "_timeout_why": "识别不再用单一超时值。实测两段几乎等长的音频（2080ms / 2040ms）耗时 398ms 与 5404ms，是云端长尾，与音频长度无关；而 urllib 的 timeout 只管单次 socket 操作，管不住总时长。现在改成两轮「socket 2s/墙钟 2s → socket 3s/墙钟 3s」，超时即重试，见 modules/voice.py 的 plan。",
-    "hints": [
-      "张伟",
-      "李娜",
-      "延保",
-      "京东",
-      "订单号",
-      "工单",
-      "权益"
-    ],
-    "_todo": "provider 改成 placeholder 就回到假识别；没配 dashscope_api_key 时也会自动回落，保证队友 clone 下来能跑",
-    "_why_nonrealtime": "现在是半双工（一轮说完才识别），非实时接口一次 HTTP 就够，不需要 WS 与 SDK；S2 上流式后再换成 realtime_model",
-    "_hints_todo": "qwen3-asr-flash 的 HTTP 接口没有热词字段，hints 目前不生效；换 Paraformer 实时接口时才会用到",
-    "silence_rms": 0.003,
-    "_silence_rms_todo": "0.003 是保守初值（约 -50dBFS）。真实录音的 rms 会写进 asr_result 事件，用几段真人录音标定后再调；S3 换 Silero VAD 后这一项失效"
-  },
-  "tts": {
-    "provider": "dashscope",
-    "model": "qwen3-tts-flash",
-    "endpoint": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
-    "voice_name": "Serena",
-    "language_type": "Chinese",
-    "timeout_sec": 4,
-    "voice": "zh-CN-XiaoxiaoNeural",
-    "rate": 1.05,
-    "_why_two_voice_fields": "voice_name 是云端音色 ID（Cherry 是中文女声），voice 是浏览器 speechSynthesis 的音色名。两者不能混用：合成失败退回浏览器时，用的必须是后者，否则会静默无声。",
-    "_todo": "现在是整句合成（非流式），首字要等整句出完。若实测首字逼近 2000ms 门槛，改成 X-DashScope-SSE 流式，首包就推给前端。"
-  },
-  "nlg": {
-    "provider": "template",
-    "model": "qwen-flash",
-    "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    "timeout_ms": 600,
-    "max_chars": 45,
-    "temperature": 0.3,
-    "_why": "provider=template 表示不改写，直接用 config 里的骨架话术。默认必须关着：队友 clone 下来没密钥也要能跑，自检和跑批也不能每跑一次调 30 次模型。",
-    "_budget": "400ms 是硬上限不是参考值：服务端 P50 现在 974ms，加上 P50<=1300ms 才留得住余量。超了就降级回骨架话术，别等。",
-    "_doc": "完整契约（prompt 结构、降级顺序、验收标准）见 docs/17_任务2接口契约.md"
-  },
-  "tools": {
-    "provider": "mock",
-    "timeout_ms": 300,
-    "base_url": "http://127.0.0.1:8100",
-    "_why": "mock = modules/tools.py 里写死的假数据；real = 走 modules/adapters/ 下的真实适配器。默认 mock，理由同上：clone 下来就能跑。",
-    "_doc": "见 docs/17 第 4 节"
-  },
-  "fallback": {
-    "reply": "抱歉，我这边刚才没处理好，麻烦您再说一遍好吗？",
-    "reply_asr_fail": "不好意思，我这边没听清，您能再说一遍吗？",
-    "reply_orchestrator_error": "抱歉，系统刚刚卡了一下，我们再试一次好吗？",
-    "reply_tool_timeout": "我这边查得有点慢，稍后让专员给您回电说明，可以吗？",
-    "reply_business_reject": "这个情况我这边处理不了，我帮您转给专员跟进，可以吗？",
-    "reply_handoff": "好的，我把您的情况记录下来，稍后会有专员跟您联系，感谢您的接听，再见。",
-    "reply_tool": "这个信息我这边暂时查不到，稍后让专员核实了再跟您说，可以吗？",
-    "reply_unclear_need": "不好意思，我这边没太听清。您方便再说一下主要想了解什么吗？",
-    "reply_unclear_need_2": "可能信号不太好。您是想了解产品使用，还是售后这方面的问题呢？",
-    "reply_unclear_offer": "我这边可能没讲清楚。您是想让我再讲一遍这个方案，还是有别的顾虑？",
-    "reply_unclear_offer_2": "那我确认一下您的意思：您现在是同意，还是暂时不需要？简单回我一句就行。",
-    "reply_writeback": "我这边登记时出了点问题，稍后会有专员联系您确认。感谢您的接听，再见。",
-    "_comment": "五类兜底（含回写失败）+ 转人工各一句，互不相同；reply_tool 是「查不到」、reply_tool_timeout 是「查得慢」——两条必须不同，否则按原因细分就是空话。"
-  },
-  "budget": {
-    "max_turns": 40,
-    "max_call_seconds": 300,
-    "session_ttl_sec": 1800,
-    "max_sessions": 200,
-    "daily_warn_cny": 5.0,
-    "price_per_min_asr": 0.0144,
-    "price_per_1k_chars_tts": 0.08,
-    "price_per_1m_tokens": 0.6,
-    "_todo": "单价按 2026-11 公开价格折算，仅用于估算告警；真实成本按账单核对",
-    "daily_hard_limit_cny": 50.0,
-    "rate_limit_per_min": 60,
-    "guard_enabled": false,
-    "_guard_todo": "guard_enabled=false 是刻意的：骨架阶段硬熔断会让演示莫名失败。要真的限流/限成本，把它改成 true，再按需调 daily_hard_limit_cny 与 rate_limit_per_min。"
-  },
-  "privacy": {
-    "mask_digits_in_events": true,
-    "_todo": "事件库用于分析，不用于还原身份，所以入库前把连续数字打码；原始文本只留在内存会话里"
-  },
-  "stages": {
-    "GREETING": {
-      "reply": "您好，我是京东到家会员中心的小惠，请问是李女士吗？",
-      "reply_deny": "抱歉打错了，打扰您了，祝您生活愉快，再见。",
-      "reply_hangup": "抱歉打扰您了，再见。",
-      "must_say": [
-        "会员中心",
-        "李女士"
-      ],
-      "_todo": "话术待按企业《话术规范》替换"
-    },
-    "IDENTITY": {
-      "reply": "好的，为保护您的账户安全，方便说一下您手机号后四位吗？",
-      "reply_retry": "没关系，那方便说一下您注册时用的姓名吗？我核对一下。",
-      "reply_ok": "核对上了，感谢配合。您有一份到店礼包本周日到期，想跟您说一下，现在方便吗？",
-      "reply_fail": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
-      "reply_ask_tail": "好的，为了核对身份，方便说一下您手机号的尾号吗？就是后四位。",
-      "reply_ask_tail_2": "那我换个方式核对：您手机号的最后四位是多少？说数字就行。",
-      "reply_ask_name": "没关系，那方便说一下您的姓名吗？我核对一下。",
-      "reply_ask_name_2": "您怎么称呼？说个姓也可以，我这边核对一下。",
-      "must_say": [
-        "核对身份"
-      ]
-    },
-    "NEED": {
-      "reply": "您上周在门店消费过一次，想问问用得还顺心吗？有没有哪里需要改进的？",
-      "reply_no_order": "感谢配合。今天联系您主要是会员回访，方便说两句吗？",
-      "reply_order_detail": "您那笔消费金额是 {amount} 元，目前状态是{status}。您用着还顺心吗？",
-      "must_say": [
-        "消费"
-      ]
-    },
-    "OFFER": {
-      "reply": "了解了，我们给会员准备了一份到店礼包，含 20 元无门槛券，不需要额外付费，您看要给您留着吗？",
-      "reply_ask_fee": "这份礼包是免费的，不需要您额外付费。",
-      "reply_ask_validity": "礼包有效期是七天，从登记当天开始算。",
-      "reply_unknown": "这个我这边确认不到，稍后让专员给您回电说明，可以吗？",
-      "must_say": [
-        "礼包"
-      ]
-    },
-    "CONFIRM": {
-      "reply": "那我和您确认一下：这份到店礼包给您留着，对吗？",
-      "reply_again": "您可以简单回我一句留着或者不用就行。",
-      "must_say": [
-        "确认"
-      ]
-    },
-    "WRITEBACK": {
-      "reply": "好的，已经为您登记完成，券会在十分钟内到账。感谢您的接听，再见。",
-      "reply_declined": "好的，那就不打扰您了，已经帮您记录下这个结果。感谢您的接听，再见。",
-      "reply_unknown": "好的，那我先按您现在的意思记录下来，稍后专员再和您确认一次。感谢您的接听，再见。",
-      "reply_changed": "好的，已经按您新的意思更正了登记，券会在十分钟内到账。感谢您的接听，再见。",
-      "reply_changed_declined": "好的，已经帮您改成不需要了，之前那条记录会一并更正。感谢您的接听，再见。",
-      "reply_fail": "我这边登记时出了点问题，稍后会有专员联系您确认。感谢您的接听，再见。",
-      "must_say": [
-        "登记"
-      ]
-    },
-    "DONE": {
-      "reply": "感谢您的接听，祝您生活愉快，再见。",
-      "reply_ask": "这份礼包是免费的，不用您额外付费。您如果改变主意，随时告诉我，我给您补登记。",
-      "reply_budget_turns": "今天先不耽误您太多时间了，有需要我再联系您，再见。",
-      "reply_budget_time": "这通电话时间有点长了，我先不占用您时间，稍后专员再和您联系，再见。",
-      "must_say": []
-    }
-  },
-  "slots": [
-    {
-      "name": "identity_confirmed",
-      "desc": "是否已确认对方身份",
-      "type": "bool"
-    },
-    {
-      "name": "need",
-      "desc": "用户表达的诉求",
-      "type": "str"
-    },
-    {
-      "name": "consent",
-      "desc": "是否同意领取权益（true/false/unknown）",
-      "type": "str"
-    },
-    {
-      "name": "order",
-      "desc": "查到的订单信息",
-      "type": "object"
-    },
-    {
-      "name": "customer",
-      "desc": "查到的客户信息",
-      "type": "object"
-    },
-    {
-      "name": "order_queried",
-      "desc": "本通电话是否已查过订单（避免每轮重复打接口）",
-      "type": "bool"
-    },
-    {
-      "name": "last_user_text",
-      "desc": "用户上一句原话，供多轮指代与归因",
-      "type": "str"
-    }
+ "_comment": "场景 B：会员复购召回。业务文案是本场景自己的，tools / nlg / knowledge / writeback 结构以 config/scene.json 为基准同步——这四段是契约，不能各写各的。",
+ "scene_name": "会员复购召回（到店礼包）",
+ "agent_name": "小惠",
+ "company": "京东到家会员中心",
+ "apology_prefix": "非常抱歉让您久等了，",
+ "silence": {
+  "reply": "您还在吗？这边听不到声音，您方便的时候说一声就行。",
+  "reply_final": "看来信号不太好，我先不打扰您了，稍后再联系您，再见。",
+  "_todo": "真实实现要区分『完全没声音』和『有声音但识别不出』"
+ },
+ "asr": {
+  "provider": "dashscope",
+  "model": "qwen3-asr-flash",
+  "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+  "realtime": true,
+  "realtime_model": "paraformer-realtime-v2",
+  "realtime_endpoint": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+  "language": "zh",
+  "itn": true,
+  "_timeout_why": "识别不再用单一超时值。实测两段几乎等长的音频（2080ms / 2040ms）耗时 398ms 与 5404ms，是云端长尾，与音频长度无关；而 urllib 的 timeout 只管单次 socket 操作，管不住总时长。现在改成两轮「socket 2s/墙钟 2s → socket 3s/墙钟 3s」，超时即重试，见 modules/voice.py 的 plan。",
+  "hints": [
+   "张伟",
+   "李娜",
+   "延保",
+   "京东",
+   "订单号",
+   "工单",
+   "权益"
   ],
-  "knowledge": {
-    "enabled": true,
-    "path": "config/kb_retail_recall.json",
-    "min_score": 1,
-    "max_answer_chars": 60,
-    "_why": "本场景用自己的知识库：礼包是否收费、券的有效期与到账时间，与服务类外呼的权益话术不是一回事"
+  "_todo": "provider 改成 placeholder 就回到假识别；没配 dashscope_api_key 时也会自动回落，保证队友 clone 下来能跑",
+  "_why_nonrealtime": "现在是半双工（一轮说完才识别），非实时接口一次 HTTP 就够，不需要 WS 与 SDK；S2 上流式后再换成 realtime_model",
+  "_hints_todo": "qwen3-asr-flash 的 HTTP 接口没有热词字段，hints 目前不生效；换 Paraformer 实时接口时才会用到",
+  "silence_rms": 0.003,
+  "_silence_rms_todo": "0.003 是保守初值（约 -50dBFS）。真实录音的 rms 会写进 asr_result 事件，用几段真人录音标定后再调；S3 换 Silero VAD 后这一项失效"
+ },
+ "tts": {
+  "provider": "dashscope",
+  "model": "qwen3-tts-flash",
+  "endpoint": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+  "voice_name": "Serena",
+  "language_type": "Chinese",
+  "timeout_sec": 4,
+  "voice": "zh-CN-XiaoxiaoNeural",
+  "rate": 1.05,
+  "_why_two_voice_fields": "voice_name 是云端音色 ID（Cherry 是中文女声），voice 是浏览器 speechSynthesis 的音色名。两者不能混用：合成失败退回浏览器时，用的必须是后者，否则会静默无声。",
+  "_todo": "现在是整句合成（非流式），首字要等整句出完。若实测首字逼近 2000ms 门槛，改成 X-DashScope-SSE 流式，首包就推给前端。"
+ },
+ "nlg": {
+  "provider": "template",
+  "model": "qwen-flash",
+  "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+  "timeout_ms": 600,
+  "max_chars": 45,
+  "temperature": 0.3,
+  "_why": "provider=template 表示不改写，直接用 config 里的骨架话术。默认必须关着：队友 clone 下来没密钥也要能跑，自检和跑批也不能每跑一次调 30 次模型。",
+  "_budget": "400ms 是硬上限不是参考值：服务端 P50 现在 974ms，加上 P50<=1300ms 才留得住余量。超了就降级回骨架话术，别等。",
+  "_doc": "完整契约（prompt 结构、降级顺序、验收标准）见 docs/17_任务2接口契约.md"
+ },
+ "tools": {
+  "provider": "mock",
+  "timeout_ms": 300,
+  "base_url": "http://127.0.0.1:8100",
+  "_why": "mock = modules/tools.py 里写死的假数据；real = 走 modules/adapters/ 下的真实适配器。默认 mock，理由同上：clone 下来就能跑。",
+  "_doc": "见 docs/17 第 4 节"
+ },
+ "fallback": {
+  "reply": "抱歉，我这边刚才没处理好，麻烦您再说一遍好吗？",
+  "reply_asr_fail": "不好意思，我这边没听清，您能再说一遍吗？",
+  "reply_orchestrator_error": "抱歉，系统刚刚卡了一下，我们再试一次好吗？",
+  "reply_tool_timeout": "我这边查得有点慢，稍后让专员给您回电说明，可以吗？",
+  "reply_business_reject": "这个情况我这边处理不了，我帮您转给专员跟进，可以吗？",
+  "reply_handoff": "好的，我把您的情况记录下来，稍后会有专员跟您联系，感谢您的接听，再见。",
+  "reply_tool": "这个信息我这边暂时查不到，稍后让专员核实了再跟您说，可以吗？",
+  "reply_unclear_need": "不好意思，我这边没太听清。您方便再说一下主要想了解什么吗？",
+  "reply_unclear_need_2": "可能信号不太好。您是想了解产品使用，还是售后这方面的问题呢？",
+  "reply_unclear_offer": "我这边可能没讲清楚。您是想让我再讲一遍这个方案，还是有别的顾虑？",
+  "reply_unclear_offer_2": "那我确认一下您的意思：您现在是同意，还是暂时不需要？简单回我一句就行。",
+  "reply_writeback": "我这边登记时出了点问题，稍后会有专员联系您确认。感谢您的接听，再见。",
+  "_comment": "五类兜底（含回写失败）+ 转人工各一句，互不相同；reply_tool 是「查不到」、reply_tool_timeout 是「查得慢」——两条必须不同，否则按原因细分就是空话。"
+ },
+ "budget": {
+  "max_turns": 40,
+  "max_call_seconds": 300,
+  "session_ttl_sec": 1800,
+  "max_sessions": 200,
+  "daily_warn_cny": 5.0,
+  "price_per_min_asr": 0.0144,
+  "price_per_1k_chars_tts": 0.08,
+  "price_per_1m_tokens": 0.6,
+  "_todo": "单价按 2026-11 公开价格折算，仅用于估算告警；真实成本按账单核对",
+  "daily_hard_limit_cny": 50.0,
+  "rate_limit_per_min": 60,
+  "guard_enabled": false,
+  "_guard_todo": "guard_enabled=false 是刻意的：骨架阶段硬熔断会让演示莫名失败。要真的限流/限成本，把它改成 true，再按需调 daily_hard_limit_cny 与 rate_limit_per_min。"
+ },
+ "privacy": {
+  "mask_digits_in_events": true,
+  "_todo": "事件库用于分析，不用于还原身份，所以入库前把连续数字打码；原始文本只留在内存会话里"
+ },
+ "stages": {
+  "GREETING": {
+   "reply": "您好，我是京东到家会员中心的小惠，请问是李女士吗？",
+   "reply_deny": "抱歉打错了，打扰您了，祝您生活愉快，再见。",
+   "reply_hangup": "抱歉打扰您了，再见。",
+   "must_say": [
+    "会员中心",
+    "李女士"
+   ],
+   "_todo": "话术待按企业《话术规范》替换"
   },
-  "answers": {
-    "_comment": "常见问题标准答法：OFFER/CONFIRM 阶段命中关键词时优先用这里，避免自由发挥编造",
-    "fee": [
-      "收费",
-      "花钱",
-      "要钱",
-      "付费",
-      "免费"
-    ],
-    "validity": [
-      "多久",
-      "有效期",
-      "多长时间",
-      "期限"
-    ],
-    "unknown": "unknown"
+  "IDENTITY": {
+   "reply": "好的，为保护您的账户安全，方便说一下您手机号后四位吗？",
+   "reply_retry": "没关系，那方便说一下您注册时用的姓名吗？我核对一下。",
+   "reply_ok": "核对上了，感谢配合。您有一份到店礼包本周日到期，想跟您说一下，现在方便吗？",
+   "reply_fail": "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。",
+   "reply_ask_tail": "好的，为了核对身份，方便说一下您手机号的尾号吗？就是后四位。",
+   "reply_ask_tail_2": "那我换个方式核对：您手机号的最后四位是多少？说数字就行。",
+   "reply_ask_name": "没关系，那方便说一下您的姓名吗？我核对一下。",
+   "reply_ask_name_2": "您怎么称呼？说个姓也可以，我这边核对一下。",
+   "must_say": [
+    "核对身份"
+   ],
+   "reply_offtopic": "没关系，记不住号码也正常。您说个联系人姓名，或者订单编号后六位，任意一个我都能核对上；实在不方便，我让专员用官方号码再联系您。",
+   "reply_ask_identity": "您的号码是您在我们这边留的联系方式，我们是官方客服，只用来核对这次到店礼包，不会外传。您报一下手机号后四位，或者说姓名也可以。",
+   "reply_ask_identity_2": "您这个问题我记下了，专员会给您更细的解释。咱们先把身份核对一下——手机号后四位，四个数字就行。",
+   "reply_noise": "不好意思，这边有点杂音没听清，您方便再说一次吗？不着急。",
+   "reply_refuse_identity": "理解您谨慎，核对只是为了确认是您本人，礼包才不会发错人。您不方便报手机号后四位的话，说个姓名也可以，我这边核对一下。",
+   "reply_refuse_final": "理解您的顾虑，那我不勉强。稍后会有专员用官方号码联系您，您可以先核实身份。再见。"
   },
-  "writeback_template": {
-    "_comment": "回写字段形状。字段名待企业资料包公布后校准，但类型/必填性现在定死，校验器按这个写。default 是骨架阶段的合法缺省值，供 config_loader.writeback_template() 摊平成扁平 dict，保证 dialogue.py 的旧调用点不用改。",
-    "required": {
-      "call_result": {
-        "type": "enum",
-        "values": [
-          "connected",
-          "no_answer",
-          "refused",
-          "invalid"
-        ],
-        "default": "connected",
-        "desc": "通话结果"
-      },
-      "identity_confirmed": {
-        "type": "bool",
-        "default": false,
-        "desc": "身份是否核验通过"
-      },
-      "need": {
-        "type": "str",
-        "max_chars": 100,
-        "default": "未获取",
-        "desc": "用户诉求"
-      },
-      "consent": {
-        "type": "enum",
-        "values": [
-          true,
-          false,
-          "unknown"
-        ],
-        "default": "unknown",
-        "desc": "是否同意领取权益"
-      },
-      "agent_version": {
-        "type": "str",
-        "default": "v1",
-        "desc": "话术版本，进化学要溯源"
-      }
-    },
-    "optional": {
-      "ticket_ref": {
-        "type": "str",
-        "default": null,
-        "desc": "工单号"
-      },
-      "coupon_id": {
-        "type": "str",
-        "default": null,
-        "desc": "到店礼包券号（本场景独有，回写时由工具层填）"
-      }
-    }
+  "NEED": {
+   "reply": "您上周在门店消费过一次，想问问用得还顺心吗？有没有哪里需要改进的？",
+   "reply_no_order": "感谢配合。今天联系您主要是会员回访，方便说两句吗？",
+   "reply_order_detail": "您那笔消费金额是 {amount} 元，目前状态是{status}。您用着还顺心吗？",
+   "must_say": [
+    "消费"
+   ]
   },
-  "compliance": {
-    "forbidden_words": [
-      "保证赚",
-      "百分百",
-      "稳赚",
-      "你必须",
-      "不办就"
-    ],
-    "reply_blocked": "这部分我这边不能给您保证，具体以正式条款为准，我请专员再和您说明，可以吗？",
-    "categories": {
-      "insult": [
-        "你这个傻",
-        "闭嘴",
-        "神经病",
-        "爱买不买"
-      ],
-      "false_promise": [
-        "一定赚",
-        "绝对没问题",
-        "保证有效",
-        "百分百"
-      ],
-      "inducement": [
-        "不办就",
-        "错过就没",
-        "最后一天",
-        "限时名额"
-      ]
-    },
-    "_todo": "真实禁语表由企业提供；分类词表是占位，语义级检测由 M6 负责"
+  "OFFER": {
+   "reply": "了解了，我们给会员准备了一份到店礼包，含 20 元无门槛券，不需要额外付费，您看要给您留着吗？",
+   "reply_ask_fee": "这份礼包是免费的，不需要您额外付费。",
+   "reply_ask_validity": "礼包有效期是七天，从登记当天开始算。",
+   "reply_unknown": "这个我这边确认不到，稍后让专员给您回电说明，可以吗？",
+   "must_say": [
+    "礼包"
+   ]
   },
-  "_scene_meta": {
-    "id": "retail_recall",
-    "desc": "电商会员复购召回：到店礼包提醒 + 会员回访",
-    "contract_baseline": "config/scene.json（v2：tools / knowledge / writeback required-optional）",
-    "who_may_edit": "4 号（平台与交付）维护结构，业务话术由业务方提供后替换"
+  "CONFIRM": {
+   "reply": "那我和您确认一下：这份到店礼包给您留着，对吗？",
+   "reply_again": "您可以简单回我一句留着或者不用就行。",
+   "must_say": [
+    "确认"
+   ]
+  },
+  "WRITEBACK": {
+   "reply": "好的，已经为您登记完成，券会在十分钟内到账。感谢您的接听，再见。",
+   "reply_declined": "好的，那就不打扰您了，已经帮您记录下这个结果。感谢您的接听，再见。",
+   "reply_unknown": "好的，那我先按您现在的意思记录下来，稍后专员再和您确认一次。感谢您的接听，再见。",
+   "reply_changed": "好的，已经按您新的意思更正了登记，券会在十分钟内到账。感谢您的接听，再见。",
+   "reply_changed_declined": "好的，已经帮您改成不需要了，之前那条记录会一并更正。感谢您的接听，再见。",
+   "reply_fail": "我这边登记时出了点问题，稍后会有专员联系您确认。感谢您的接听，再见。",
+   "must_say": [
+    "登记"
+   ]
+  },
+  "DONE": {
+   "reply": "感谢您的接听，祝您生活愉快，再见。",
+   "reply_ask": "这份礼包是免费的，不用您额外付费。您如果改变主意，随时告诉我，我给您补登记。",
+   "reply_budget_turns": "今天先不耽误您太多时间了，有需要我再联系您，再见。",
+   "reply_budget_time": "这通电话时间有点长了，我先不占用您时间，稍后专员再和您联系，再见。",
+   "must_say": []
   }
+ },
+ "slots": [
+  {
+   "name": "identity_confirmed",
+   "desc": "是否已确认对方身份",
+   "type": "bool"
+  },
+  {
+   "name": "need",
+   "desc": "用户表达的诉求",
+   "type": "str"
+  },
+  {
+   "name": "consent",
+   "desc": "是否同意领取权益（true/false/unknown）",
+   "type": "str"
+  },
+  {
+   "name": "order",
+   "desc": "查到的订单信息",
+   "type": "object"
+  },
+  {
+   "name": "customer",
+   "desc": "查到的客户信息",
+   "type": "object"
+  },
+  {
+   "name": "order_queried",
+   "desc": "本通电话是否已查过订单（避免每轮重复打接口）",
+   "type": "bool"
+  },
+  {
+   "name": "last_user_text",
+   "desc": "用户上一句原话，供多轮指代与归因",
+   "type": "str"
+  }
+ ],
+ "knowledge": {
+  "enabled": true,
+  "path": "config/kb_retail_recall.json",
+  "min_score": 1,
+  "max_answer_chars": 60,
+  "_why": "本场景用自己的知识库：礼包是否收费、券的有效期与到账时间，与服务类外呼的权益话术不是一回事"
+ },
+ "answers": {
+  "_comment": "常见问题标准答法：OFFER/CONFIRM 阶段命中关键词时优先用这里，避免自由发挥编造",
+  "fee": [
+   "收费",
+   "花钱",
+   "要钱",
+   "付费",
+   "免费"
+  ],
+  "validity": [
+   "多久",
+   "有效期",
+   "多长时间",
+   "期限"
+  ],
+  "unknown": "unknown"
+ },
+ "writeback_template": {
+  "_comment": "回写字段形状。字段名待企业资料包公布后校准，但类型/必填性现在定死，校验器按这个写。default 是骨架阶段的合法缺省值，供 config_loader.writeback_template() 摊平成扁平 dict，保证 dialogue.py 的旧调用点不用改。",
+  "required": {
+   "call_result": {
+    "type": "enum",
+    "values": [
+     "connected",
+     "no_answer",
+     "refused",
+     "invalid"
+    ],
+    "default": "connected",
+    "desc": "通话结果"
+   },
+   "identity_confirmed": {
+    "type": "bool",
+    "default": false,
+    "desc": "身份是否核验通过"
+   },
+   "need": {
+    "type": "str",
+    "max_chars": 100,
+    "default": "未获取",
+    "desc": "用户诉求"
+   },
+   "consent": {
+    "type": "enum",
+    "values": [
+     true,
+     false,
+     "unknown"
+    ],
+    "default": "unknown",
+    "desc": "是否同意领取权益"
+   },
+   "agent_version": {
+    "type": "str",
+    "default": "v1",
+    "desc": "话术版本，进化学要溯源"
+   }
+  },
+  "optional": {
+   "ticket_ref": {
+    "type": "str",
+    "default": null,
+    "desc": "工单号"
+   },
+   "coupon_id": {
+    "type": "str",
+    "default": null,
+    "desc": "到店礼包券号（本场景独有，回写时由工具层填）"
+   }
+  }
+ },
+ "compliance": {
+  "forbidden_words": [
+   "保证赚",
+   "百分百",
+   "稳赚",
+   "你必须",
+   "不办就"
+  ],
+  "reply_blocked": "这部分我这边不能给您保证，具体以正式条款为准，我请专员再和您说明，可以吗？",
+  "categories": {
+   "insult": [
+    "你这个傻",
+    "闭嘴",
+    "神经病",
+    "爱买不买"
+   ],
+   "false_promise": [
+    "一定赚",
+    "绝对没问题",
+    "保证有效",
+    "百分百"
+   ],
+   "inducement": [
+    "不办就",
+    "错过就没",
+    "最后一天",
+    "限时名额"
+   ]
+  },
+  "_todo": "真实禁语表由企业提供；分类词表是占位，语义级检测由 M6 负责"
+ },
+ "_scene_meta": {
+  "id": "retail_recall",
+  "desc": "电商会员复购召回：到店礼包提醒 + 会员回访",
+  "contract_baseline": "config/scene.json（v2：tools / knowledge / writeback required-optional）",
+  "who_may_edit": "4 号（平台与交付）维护结构，业务话术由业务方提供后替换"
+ }
 }

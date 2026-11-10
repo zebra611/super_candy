@@ -3,6 +3,7 @@
 
 用法（项目根目录）：
     python scripts/self_evolve.py run                      # 默认最多 6 轮
+    python scripts/self_evolve.py run --scene random        # 随机挑一个场景跑（防过拟合）
     python scripts/self_evolve.py run --rounds 8 --ids A01,A04,A07
     python scripts/self_evolve.py report                   # 看最近一次
     python scripts/self_evolve.py check                    # 反向自测（含一次迷你真跑）
@@ -31,6 +32,7 @@ import copy
 import hashlib
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -45,8 +47,80 @@ _PY = sys.executable
 _BASE_SCENE = os.path.join(_ROOT, "config", "scenes", "pop_reject.json")
 _OUT_ROOT = os.path.join(_ROOT, "eval", "reports", "self_evolve")
 _INDEX = os.path.join(_OUT_ROOT, "index.jsonl")
+#: 本次 run 真正在跑的场景。`--scene random` 会在 cmd_run 里改写它。
+_SCENE_PATH = _BASE_SCENE
+#: 默认上架目标：当前线上场景 + 它的运行时副本。
 _LIVE_FILES = (os.path.join(_ROOT, "config", "scenes", "pop_reject.json"),
                os.path.join(_ROOT, "config", "scene.json"))
+
+
+def _scene_candidates():
+    """config/scenes 下所有真场景（排除 .bak 备份）。"""
+    d = os.path.join(_ROOT, "config", "scenes")
+    return [os.path.join(d, f) for f in sorted(os.listdir(d))
+            if f.endswith(".json") and ".bak" not in f]
+
+
+def _resolve_scene(arg):
+    """把 --scene 解析成绝对路径；`random` 从**所有**场景里随机挑。
+
+    为什么不只挑"已接入自进化"的场景：
+        只在 pop_reject 上反复调参，等于对着同一张卷子刷分。抽到没有可学面的
+        场景时，报告会如实写"无可自动调整的簇"，并把诊断（负面构成、缺陷码）
+        留在日志里——那是"要不要把这个场景接入"的依据，不是白跑。
+    """
+    arg = (arg or "").strip()
+    if not arg or arg == "default":
+        return _BASE_SCENE
+    if arg == "random":
+        cands = _scene_candidates() or [_BASE_SCENE]
+        pick = random.choice(cands)
+        print("随机场景：%s（候选 %s）"
+              % (os.path.basename(pick)[:-5],
+                 "、".join("%s%s" % (os.path.basename(c)[:-5],
+                                     "✓" if _scene_ready(c) else "✗")
+                          for c in cands)))
+        if not _scene_ready(pick):
+            print("  注意：%s 的 start_call 不返回客户档案（售后/零售场景按 C5 场景隔离"
+                  "**故意不接外呼名单**），客服问什么客户都答不出，\n"
+                  "  闭环率必然是 0——这不是对话质量差，是数据没接。"
+                  "本轮数字只能看诊断，不能用来调参。"
+                  % os.path.basename(pick)[:-5])
+        return pick
+    path = arg if os.path.isabs(arg) else os.path.join(_ROOT, "config", "scenes",
+                                                       arg + ".json")
+    if not os.path.exists(path):
+        raise SystemExit("没有这个场景：%s（可用：%s）"
+                         % (arg, "、".join(os.path.basename(c)[:-5]
+                                          for c in _scene_candidates())))
+    return path
+
+
+def _scene_ready(path):
+    """这个场景能不能跑出可信的闭环数字：必须有客户档案（start_call 会给公司/单号）。
+
+    售后/零售场景不接外呼名单是**设计如此**（C5 场景隔离：两个业务域不共用数据）。
+    拿资审画像去跑它们，客户手里没有可核身事实，闭环永远达不成——那是数据没接，
+    不是客服答得差。判断写在这里，随机抽场景时才不会把两者混为一谈。
+    """
+    try:
+        return bool(_load(path).get("application_mode"))
+    except (OSError, ValueError):
+        return False
+
+
+def _live_files(base_scene_rel):
+    """上架要写哪几份：该场景文件；若它就是当前线上场景，再写运行时副本。
+
+    随机抽到别的场景时**不动** config/scene.json——那会把线上场景换掉，
+    一次调参实验不该改变线上在跑哪个业务。
+    """
+    base = base_scene_rel if os.path.isabs(base_scene_rel) \
+        else os.path.join(_ROOT, base_scene_rel)
+    files = [base]
+    if os.path.basename(base) == "pop_reject.json":
+        files.append(os.path.join(_ROOT, "config", "scene.json"))
+    return files
 
 #: 调整库：一条负面反馈目标 → 一处配置改动。
 #: 全部是**打开已有分支**或**把某类问题路由到已有话术**，不新增文案、不改代码。
@@ -438,7 +512,9 @@ def _md_header(run):
 # ---------------------------------------------------------------------------
 
 def cmd_run(a):
-    base = _load(_BASE_SCENE)
+    global _SCENE_PATH
+    _SCENE_PATH = _resolve_scene(getattr(a, "scene", ""))
+    base = _load(_SCENE_PATH)
     run_id = a.run_id or datetime.now().strftime("run_%Y%m%d_%H%M%S")
     run_dir = os.path.join(_OUT_ROOT, run_id)
     os.makedirs(run_dir, exist_ok=True)
@@ -449,7 +525,8 @@ def cmd_run(a):
     work = copy.deepcopy(base)
     print("多轮自进化｜批次 %s｜最多 %d 轮｜每轮只改一处，改完复跑同一批客户"
           % (a.batch, a.rounds))
-    print("基线配置：%s（sha %s）" % (os.path.relpath(_BASE_SCENE, _ROOT), _sha(base)))
+    print("基线配置：%s（sha %s）"
+          % (os.path.relpath(_SCENE_PATH, _ROOT), _sha(base)))
     print("开始跑第 0 轮（未学习基线）…")
     cur = evaluate(work, run_dir, "r00", a.ids, a.max_turns)
     m0 = cur["metrics"]
@@ -460,7 +537,7 @@ def cmd_run(a):
     run = {
         "run_id": run_id, "started_at": _now(), "batch": a.batch,
         "ids": a.ids, "rounds_requested": a.rounds, "max_turns": a.max_turns,
-        "base_scene": os.path.relpath(_BASE_SCENE, _ROOT).replace("\\", "/"),
+        "base_scene": os.path.relpath(_SCENE_PATH, _ROOT).replace("\\", "/"),
         "base_sha": _sha(base), "base_metrics": m0,
         "base_feedback": cur["fb"]["codes"], "base_clusters": clusters(cur["fb"]),
         "rounds": [], "accepted": [], "rejected": [], "code_only": code_only(cur["fb"]),
@@ -718,7 +795,7 @@ def cmd_check(a):
     _INDEX = os.path.join(tmp_root, "index.jsonl")
     try:
         ns = argparse.Namespace(run_id="chk", batch="check", ids="A01,A04",
-                                rounds=2, max_turns=14)
+                                rounds=2, max_turns=14, scene="")
         cmd_run(ns)
         run_dir = os.path.join(tmp_root, "chk")
         files = ("run.json", "feedback.jsonl", "training_log.md",
@@ -759,9 +836,10 @@ def cmd_promote(a):
     run_id = a.run_id
     run_dir = os.path.join(_OUT_ROOT, run_id)
     run = _load(os.path.join(run_dir, "run.json"))
+    live = _live_files(run["base_scene"])
     if not a.yes:
         print("这会改动线上配置：")
-        for p in _LIVE_FILES:
+        for p in live:
             print("  - %s" % os.path.relpath(p, _ROOT))
         print("确认请加 --yes")
         return 2
@@ -782,7 +860,7 @@ def cmd_promote(a):
         print("上架前复算不通过，拒绝写入：\n  " + "\n  ".join(problems))
         return 1
     changes = []
-    for p in _LIVE_FILES:
+    for p in live:
         cur = _load(p)
         old = cur.get("evolution_policy")
         bak = "%s.bak_%s" % (p, run_id)
@@ -811,6 +889,8 @@ def main():
     r = sub.add_parser("run")
     r.add_argument("--rounds", type=int, default=6)
     r.add_argument("--batch", default="adversarial")
+    r.add_argument("--scene", default="",
+                   help="场景名 / random（随机挑一个）；默认 pop_reject")
     r.add_argument("--ids", default="")
     r.add_argument("--run-id", default="")
     r.add_argument("--max-turns", type=int, default=14)

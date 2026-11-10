@@ -2298,9 +2298,28 @@ def _stage_need(session, text, flags):
             if _off:
                 # 官方原话说一次就够。第二遍再逐字复读，客户只会听到卡带：
                 # 11-08 性格跑批 T10 在 NEED 连听三遍同一句，第 9 轮直接挂断。
-                # 这时没有新的具体问题可答，正确动作是**推进到确认**，
-                # 而不是用"换个语气再念一遍"制造进展的假象。
                 if session.get("official_line_spoken"):
+                    # 但"催一句清楚了"也不对。11-10 实测 A11/A16 第 4 轮：客户
+                    # 第二次追问「那我具体要补什么材料」，客服换了「您看这样解释
+                    # 清楚了吗？」并推进到确认——客户根本没拿到材料清单，也只好
+                    # 回一句「清楚了」，电话闭环了，问题一个字没答。
+                    # 客户再问，说明上一次没讲清（官方话术只说「补齐后重新提交」，
+                    # 不列要补哪几样）。正确动作是**按问题类别给本单事实**，
+                    # 两种说法轮换；只有确实没有对应话术时才退回旧的催确认。
+                    _cls = policy.question_class(text)
+                    _key = {"material": "reply_application_detail",
+                            "reason": "reply_application_detail",
+                            "provenance": "reply_provenance",
+                            "fee": "reply_ask_fee",
+                            "validity": "reply_ask_validity"}.get(_cls, "")
+                    _n = int(session.get("need_detail_n", 0)) + 1
+                    _alt = (cfg.get(_key + "_2") or "") if (_key and _n % 2 == 0) else ""
+                    _tpl = _alt or ((cfg.get(_key) or "") if _key else "")
+                    if _tpl:
+                        session["need_detail_n"] = _n
+                        return _reply(session,
+                                      _fill_application(_soothe(_tpl, flags), app),
+                                      intent="ask")
                     _cc = config_loader.stage_config("CONFIRM")
                     _after = _cc.get("reply_after_ask") or "您看这样解释清楚了吗？"
                     return _reply(session, _soothe(_after, flags),
