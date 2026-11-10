@@ -190,6 +190,16 @@ class AdversarySim(object):
 
     # -- 决策：哪里弱打哪里 ------------------------------------------------
     def _choose(self, found, asks):
+        # 生理性听不清（档案 traits.mishear_every）：每隔 N 轮非要重听一遍。
+        # 与弱点驱动的 MISHEAR 分开——那条是「客服把提问当噪声」才触发的惩罚，
+        # 这条不看客服表现：客服做对了也照样被要求再说一次。考的是
+        # 「重说请求能不能被当成重说」：OFFER 阶段若把它当提问去检索知识库，
+        # 就会回「这个我这边确认不到」，客户只好一遍遍重复（真实通话里踩过）。
+        # 收到「您清楚了吗」那一轮不插，否则客户永远表不了态，用例变成死循环。
+        every = int(self.traits.get("mishear_every") or 0)
+        if every and self.turn and self.turn % every == 0 and not self.confirm_prompt:
+            return MISHEAR, "hearing"
+
         # 低压力「配合者」对照画像：客服复述完问「您清楚了吗」，这类商家会
         # 如实答「清楚了」，而不是继续把同一句质疑重复到通话结束。不补这条，
         # A01 这种 label 写着「低压力配合者」、goal=confirm 的画像会被对抗器

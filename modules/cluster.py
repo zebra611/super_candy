@@ -24,6 +24,8 @@ _CAUSE = {
     attr.AGENT_LOOP: "连续三轮重复同句话术，原地绕圈",
     attr.AGENT_NO_PROGRESS: "整通电话没有推进过阶段，也没给出新信息",
     attr.AGENT_PREMATURE_WRITEBACK: "用户说「没听明白」，客服没复述就回写，被记成「拒绝整改」",
+    attr.AGENT_PREMATURE_CLOSE: "客户没同意、也没核上身，工单却被回写了（误闭环污染工单）",
+    attr.AGENT_REPAIR_IGNORED: "客户说「听不清/再说一遍」，客服回了「确认不到/转专员」",
 }
 
 #: 只能改代码、不能靠改话术解决的缺陷码。**必须显式标出来**：
@@ -32,6 +34,8 @@ _CAUSE = {
 _NEEDS_CODE = {
     attr.AGENT_PREMATURE_WRITEBACK: "CONFIRM 阶段对'没听明白'的否定判定（dialogue._stage_confirm）",
     attr.AGENT_NO_PROGRESS: "槽位轮换与收尾条件（dialogue._next_identity_slot）",
+    attr.AGENT_PREMATURE_CLOSE: "回写前置条件（dialogue._do_writeback 的调用点与确认计数）",
+    attr.AGENT_REPAIR_IGNORED: "重说请求的分支位置与提问守卫（dialogue._stage_offer）",
 }
 
 #: 缺陷码 × 阶段 × 用户动作 → 建议改哪个配置键。键路径相对场景 JSON。

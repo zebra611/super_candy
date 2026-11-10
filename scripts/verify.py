@@ -2409,6 +2409,60 @@ def main():
           _res["fault"] == "case",
           ["fault=%s（缺的字段：%s）" % (_res["fault"], _sess["blocked_by_missing_fact"])])
 
+    # 30.8a 误闭环要能被证实，不能只记 unexplained：期望是"不该闭环"，
+    # 实际产生了回写，就是客服擅自回写（工单里多一条"商家承诺整改"）。
+    _close_turns = [{"user": {"action": "reask_already_told", "text": "我刚不是说了吗"},
+                     "agent": {"reply_text": "好的，我记一下。", "stage": "CONFIRM",
+                               "next_stage": "WRITEBACK", "intent": "consent",
+                               "slots": {}}}]
+    _res = attribution.analyse_session(
+        {"id": "V30C", "closed": True, "blocked_by_missing_fact": [], "turns": _close_turns},
+        {"goal": "offtopic", "expect": {"closed": False}})
+    _codes = [d["code"] for d in _res["defects"]]
+    check("期望不闭环却回写了 → 记 agent_premature_close（不再只记 unexplained）",
+          attribution.AGENT_PREMATURE_CLOSE in _codes and _res["fault"] == "agent",
+          ["fault=%s；缺陷码=%s" % (_res["fault"], _codes)])
+
+    # 30.8b 但客户最后明确说"清楚了"时不能扣帽子：可能是画像被说服了，
+    # 那是用例期望该改。判据宁可漏，不可冤枉。
+    _consent_turns = [{"user": {"action": "confirm", "text": "清楚了，我按你说的弄"},
+                       "agent": {"reply_text": "好的，都记下了。", "stage": "CONFIRM",
+                                 "next_stage": "WRITEBACK", "intent": "consent",
+                                 "slots": {}}}]
+    _res = attribution.analyse_session(
+        {"id": "V30D", "closed": True, "blocked_by_missing_fact": [], "turns": _consent_turns},
+        {"goal": "offtopic", "expect": {"closed": False}})
+    check("客户最后明确表态同意的回写不算「擅自回写」（用例期望待复核）",
+          attribution.AGENT_PREMATURE_CLOSE not in [d["code"] for d in _res["defects"]],
+          ["fault=%s；缺陷码=%s" % (_res["fault"],
+                                    [d["code"] for d in _res["defects"]])])
+
+    # 30.8c 客户要重听、客服答"确认不到/转专员"：闭环了也记，不许藏在通过里。
+    _repair_turns = [{"user": {"action": "mishear", "text": "啊？信号不好，你再说一遍"},
+                      "agent": {"reply_text": "这个我这边确认不到，稍后让专员给您回电说明。",
+                                "stage": "OFFER", "next_stage": "OFFER",
+                                "intent": "ask", "slots": {}}}]
+    _codes = [d["code"] for d in attribution.analyse_turns(_repair_turns)]
+    check("客户要重说、客服回「确认不到/转专员」→ 记 agent_repair_ignored",
+          attribution.AGENT_REPAIR_IGNORED in _codes, ["缺陷码=%s" % _codes])
+
+    # 30.8d 性格层会在句尾挂「说联系人姓名也行」，不能被当成"又在要姓名"。
+    _suffix_turn = [{"user": {"action": "answer_name", "text": "我叫晏青梧"},
+                     "agent": {"reply_text": "核对上了，感谢配合。说联系人姓名也行。",
+                               "stage": "IDENTITY", "next_stage": "NEED",
+                               "intent": "ack", "slots": {}}}]
+    _codes = [d["code"] for d in attribution.analyse_turns(_suffix_turn)]
+    check("「核对上了…说联系人姓名也行」不算槽位丢失（性格后缀假阳）",
+          attribution.AGENT_SLOT_LOSS not in _codes, ["缺陷码=%s" % _codes])
+
+    # 30.8e 对抗集必须有"听不清就要重说"这类客户，否则 repair.* 只能靠轨迹判断。
+    _pp = json.load(open(os.path.join(ROOT, "eval", "personas_adversarial.json"),
+                         encoding="utf-8"))
+    _a17 = next((x for x in _pp.get("personas", []) if x.get("id") == "A17"), None)
+    check("对抗画像含「听不清就要重说」（traits.mishear_every≥2）",
+          bool(_a17) and int((_a17.get("traits") or {}).get("mishear_every") or 0) >= 2,
+          ["A17 traits=%s" % (_a17 and _a17.get("traits"))])
+
     # 30.9 版本库：上线过的版本必须留快照，且补丁只能落在话术上。
     _vs_path = os.path.join(ROOT, "config", "evolution", "versions.json")
     if not os.path.exists(_vs_path):
@@ -2654,6 +2708,23 @@ def main():
     check("官方原话冻结：不删客套、不追加引导，逐字保留",
           not _pfa and _pf == "好的，官方口径如下。",
           ["freeze=True 时仅重复引导可用"])
+
+    # 收尾那一轮不加任何性格后缀：11-10 实测播成「…感谢您的配合，再见。
+    # 我放慢一点说。」——告别语后面挂补救语，客户听到的最后一句就是它。
+    _done_s = dict(_ps, persona_code="hard_of_hearing", persona_conf=1.0,
+                   slots={}, stage="WRITEBACK")
+    _done_out = dialogue._reply(_done_s, "感谢您的配合，再见。",
+                                next_stage="DONE", intent="consent")
+    _done_txt = _done_out.get("reply_text") or ""
+    _wb_out = dialogue._reply(dict(_ps, persona_code="hard_of_hearing", persona_conf=1.0,
+                                   slots={}, stage="CONFIRM"),
+                              "感谢您的配合，再见。", next_stage="WRITEBACK",
+                              intent="consent")
+    _wb_txt = _wb_out.get("reply_text") or ""
+    check("收尾话术（next_stage=DONE）不加性格后缀（对照组 WRITEBACK 仍会加）",
+          "放慢" not in _done_txt and "回到这笔申请" not in _done_txt
+          and ("放慢" in _wb_txt or "回到这笔申请" in _wb_txt),
+          ["DONE=%s｜WRITEBACK=%s" % (_done_txt[:24], _wb_txt[:24])])
 
     _pt = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
                                                        "test_persona.py")],

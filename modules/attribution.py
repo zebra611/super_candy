@@ -23,22 +23,38 @@ AGENT_NOISE_ON_QUESTION = "agent_noise_on_question"  # 用户提问被当成"没
 AGENT_LOOP = "agent_loop"                    # 连续重复同义话术，原地绕圈
 AGENT_NO_PROGRESS = "agent_no_progress"      # 多轮不推进阶段且不给新信息
 AGENT_PREMATURE_WRITEBACK = "agent_premature_writeback"  # "没听明白"被当成"拒绝"，直接回写
+AGENT_PREMATURE_CLOSE = "agent_premature_close"          # 客户没同意/没核身，工单却回写了
+AGENT_REPAIR_IGNORED = "agent_repair_ignored"            # 客户要重说，客服答「确认不到/转专员」
 CASE_INFEASIBLE = "case_infeasible"          # 画像缺少系统必需的信息
 SIM_BY_DESIGN = "sim_by_design"              # 秒挂/打错/拒绝/跑题，按设计不闭环
 
 #: 只有这一类进优化池
 AGENT_DEFECTS = (AGENT_SLOT_LOSS, AGENT_NOISE_ON_QUESTION, AGENT_LOOP,
-                 AGENT_NO_PROGRESS, AGENT_PREMATURE_WRITEBACK)
+                 AGENT_NO_PROGRESS, AGENT_PREMATURE_WRITEBACK,
+                 AGENT_PREMATURE_CLOSE, AGENT_REPAIR_IGNORED)
+
+#: 客户要重听、客服却拿"答不上来"的兜底话术顶上。
+#: 为什么要单独成码：这类应答不会让闭环率掉下来（客户多半还会继续配合），
+#: 所以通过率看着 17/17，实际每一轮都在答非所问——11-10 的 A17 就是这样：
+#: OFFER 阶段客户说"信号不好，你再说一遍"，客服回"这个我这边确认不到，
+#: 稍后让专员给您回电说明"，用例照样判过。闭环不等于做对。
+_FALLBACK_MARKS = ("确认不到", "让专员给您回电", "让专员回电", "稍后让专员")
 
 #: "没听懂"的典型说法。它和"我不同意"是两件事：
 #: 前者该再解释一遍，后者才该记拒绝。混为一谈会把"还没听懂的人"记成"不愿整改"。
 _COMPREHENSION_DENY = ("没明白", "没听明白", "没听懂", "不清楚", "搞不懂", "没太懂")
 _REFUSAL_DENY = ("不办", "不需要", "不用了", "别打了", "不整改")
 
-#: 判定"客服在重复问同一条"的关键词
+#: 判定"客服在重复问同一条"的关键词。
+#:
+#: contact_name 刻意**不收裸「姓名」**：性格适配层会在句尾挂「说联系人姓名也行」，
+#: 客服原话其实是「核对上了，感谢配合……」——裸词会把"已经接住、顺手给个备选
+#: 路径"误判成"又问一遍"（11-09 实测 A04/A06/A09 三条都是这个假阳）。
+#: 判据宁可漏：记进去的每一条都要能被原话证实。
 _RE_ASK = {
     "phone_tail": ("后四位", "后 4 位"),
-    "contact_name": ("您的姓名", "怎么称呼", "姓名"),
+    "contact_name": ("您的姓名", "怎么称呼", "怎么叫您", "您贵姓",
+                     "姓名是", "报一下姓名", "确认一下姓名", "说一下姓名"),
     "application_id": ("申请单编号", "单号"),
 }
 
@@ -47,6 +63,51 @@ _NOISE_WORDS = ("杂音", "没听清", "没太听清", "听不清", "信号不�
 
 #: 按设计就不该闭环的画像目标
 _DESIGNED_DROPOFF = ("refuse", "wrong_person", "hangup_now", "offtopic")
+
+#: 客户明确表示"清楚了 / 明白了"的动作。出现它时，即使用例写着 expect.closed=False，
+#: 也不能断定是客服擅自回写——可能是画像被说服了，属于**用例期望待复核**。
+#: 只认这一个动作："我就是这家公司的负责人"（yes_company）是核身，不是同意整改。
+_CONSENT_ACTIONS = ("confirm",)
+
+
+def premature_close(turns, goal, expect_closed, closed):
+    """期望「不该闭环」却真回写了，返回一条缺陷；否则 None。
+
+    为什么单独成码（而不是并进 `unexplained`）：
+        11-09 审 PR #44 时，A09/A14 的期望是**不闭环**，实际因复述插进确认计数
+        产生了 `unknown` 回写。它会让通过率掉下来，但当时没有任何缺陷码能证实
+        原因，只能记成 `unexplained`——下一轮再犯，还是要靠人眼从 rows 里翻。
+        误闭环比"答一句确认不到"更贵：工单里多出一条"商家承诺整改"的错误结论。
+
+    为什么不看最后一轮是否出现 `confirm` 就判：
+        客户说了"清楚了"再回写，可能是画像真被说服了，那是用例期望该改，
+        不是客服的错。判据宁可漏，不可冤枉——记进去的每一条都要能当场复算。
+    """
+    if expect_closed is not False or not closed:
+        return None
+
+    last_user = (turns[-1].get("user") or {}) if turns else {}
+    if (last_user.get("action") or "") in _CONSENT_ACTIONS:
+        return None
+
+    wb, idx = None, len(turns)
+    for i, t in enumerate(turns):
+        agent = t.get("agent") or {}
+        if (agent.get("next_stage") in ("WRITEBACK", "DONE")
+                or agent.get("stage") in ("WRITEBACK", "DONE")):
+            wb, idx = t, i
+            break
+    wb = wb or (turns[-1] if turns else {})
+    user = wb.get("user") or {}
+    return {
+        "turn": idx + 1,
+        "code": AGENT_PREMATURE_CLOSE,
+        "stage": _stage(wb) or "CONFIRM",
+        "user_action": user.get("action", ""),
+        "agent_intent": _intent(wb),
+        "evidence": "期望不闭环（goal=%s），客户说「%s」，客服仍回写了工单"
+                    % (goal, (user.get("text") or last_user.get("text") or "")[:14]),
+    }
 
 
 def _agent_said(turn):
@@ -96,7 +157,18 @@ def analyse_turns(turns):
                                 % (user.get("text", "")[:12], said[:40]),
                 })
 
-        # 2) 用户在提问，客服回"有杂音/没听清" → 把有实义的输入当噪声
+        # 2) 客户说「听不清/你再说一遍」，客服回「确认不到 / 让专员回电」。
+        #    这不是"答不上来"，是根本没把重说请求当成一个动作：客户要的是
+        #    把上一句再讲一遍，客服却去查知识库或转专员。它不会掉闭环率
+        #    （客户多半还会继续配合），所以必须单独记，否则永远藏在"通过"里。
+        if action == "mishear" and any(w in said for w in _FALLBACK_MARKS):
+            out.append({
+                "turn": i + 1, "code": AGENT_REPAIR_IGNORED, "stage": _stage(t),
+                "user_action": action, "agent_intent": _intent(t),
+                "evidence": "客户要重听，客服回兜底：%s" % said[:40],
+            })
+
+        # 3) 用户在提问，客服回"有杂音/没听清" → 把有实义的输入当噪声
         if action in ("ask_why", "ask_material", "ask_fee", "cant_remember",
                       "refuse_info", "reask_already_told"):
             if any(w in said for w in _NOISE_WORDS):
@@ -107,7 +179,7 @@ def analyse_turns(turns):
                                 % (user.get("text", "")[:16], said[:40]),
                 })
 
-        # 3) 同一句反复出现（换了标点也算） → 原地绕圈
+        # 4) 同一句反复出现（换了标点也算） → 原地绕圈
         if i >= 2:
             a, b, c = turns[i - 2], turns[i - 1], t
             if (_agent_said(a) == _agent_said(b) == _agent_said(c)
@@ -118,7 +190,7 @@ def analyse_turns(turns):
                     "evidence": "连续三轮同一句：%s" % _agent_said(t)[:40],
                 })
 
-        # 4) 用户说"没听明白"，客服这一轮直接回写 ⇒ 把"没听懂"当成了"不同意"。
+        # 5) 用户说"没听明白"，客服这一轮直接回写 ⇒ 把"没听懂"当成了"不同意"。
         #    规格是「两次不确认才记 unknown」，而这里第一次就落库 false。
         #    为什么单列：它不会让通过率掉下来（工单照样建出来了），
         #    但业务侧收到的是"商家拒绝整改"这个错误结论——沉默的错误最贵。
@@ -175,6 +247,14 @@ def analyse_session(session, persona):
 
     want_closed = expect.get("closed")
     ok = (want_closed is None) or (bool(want_closed) == closed)
+
+    # 期望「不该闭环」却真回写了：补一条能证实的缺陷，不留给 unexplained。
+    # 与 `agent_premature_writeback` 互斥：那条已经说明"没听明白被当成拒绝"，
+    # 同一通电话再记一条只是把同一件事数两遍。
+    if not any(d["code"] == AGENT_PREMATURE_WRITEBACK for d in defects):
+        _close = premature_close(turns, goal, want_closed, closed)
+        if _close:
+            defects.append(_close)
 
     # ---- 责任判定（顺序即优先级）----
     # 用例不可行优先于一切：画像自己没这条信息，系统怎么做都闭不了环。
