@@ -3087,6 +3087,62 @@ def main():
            % (len(_bats), "、".join(_bad_bats) or "无",
               "能抓到" if _probe_ok else "失效")])
 
+    # ---- 证据 34：三批新数据/模板的自测，以及它们各自最容易烂掉的地方 ----
+    # 职业画像 12 条、京东人物库 320 条、双端界面模板，三个都自带 unittest，
+    # 但都不在 verify 里——改坏数据或生成器，总闸门照样全绿。
+    # 仓库自己写过这条规矩（证据 16 / 18：「不在 verify 里等于测试没进质量体系」）。
+    print()
+    print("=" * 74)
+    print("证据 34：职业画像 / 京东人物库 / 双端界面模板的自测全部通过")
+    print("=" * 74)
+
+    for _suite in ("test_personas_profession", "test_persona_jd", "test_ui_template"):
+        _path = os.path.join(ROOT, "scripts", _suite + ".py")
+        _run = subprocess.run([sys.executable, _path], cwd=ROOT,
+                              capture_output=True, text=True, timeout=300)
+        _out = ((_run.stdout or "") + (_run.stderr or "")).strip().splitlines()
+        check("%s.py 通过（数据/生成器/模板被改坏时这里会红）" % _suite,
+              _run.returncode == 0,
+              ["退出码 %d；末行：%s" % (_run.returncode, (_out or ["(无输出)"])[-1][:80])])
+
+    # 职业画像：目标与期望必须自洽，而且要有留出集。
+    # J07 初版 goal=refuse 却 expect.closed=true，客户第 1 轮说「不需要」→ 必败，
+    # 归因 sim——数据错误穿上「客服不行」的外衣，改话术永远救不回来。
+    _pro = json.load(open(os.path.join(ROOT, "eval", "personas_profession.json"),
+                          encoding="utf-8"))["personas"]
+    _contra = [p["id"] for p in _pro
+               if p["goal"] in ("refuse", "ask") and p["expect"]["closed"]]
+    _hold = sum(1 for p in _pro if p["split"] == "holdout")
+    check("职业画像：goal=refuse/ask 不期望闭环，且有留出集（12 条全 train 等于没验收）",
+          not _contra and _hold >= 1,
+          ["矛盾 %s｜holdout %d 条" % (_contra or "无", _hold)])
+
+    # 京东人物库：320 条必须两两不同。
+    # 初版四个维度周期都是 180，idx 与 idx+180 逐字节相同（140 条副本只改了 id），
+    # 文档却写「全量唯一」——答辩现场一复算就穿。
+    _jd = json.load(open(os.path.join(ROOT, "eval", "personas_jd.json"),
+                         encoding="utf-8"))["personas"]
+    _keys = set()
+    for _p in _jd:
+        _keys.add(json.dumps({k: v for k, v in _p.items() if k != "id"},
+                             ensure_ascii=False, sort_keys=True))
+    _frag = [p["profession"] for p in _jd if p["profession"].isascii()]
+    check("京东人物库：去 id 后两两不同，职业无「4S/UI」这类被空格切开的碎片",
+          len(_keys) == len(_jd) and not _frag,
+          ["唯一 %d/%d｜碎片 %s" % (len(_keys), len(_jd), sorted(set(_frag)) or "无")])
+
+    # 文档编号不能撞：PR47 曾在 25 号上与《25_噪声与降噪》撞车，合并后同一句
+    # 「看 25 号文档」会指到错的，而且没人会注意到。
+    import re as _re
+    _nums = {}
+    for _f in os.listdir(os.path.join(ROOT, "docs")):
+        _m = _re.match(r"^(\d+)_", _f)
+        if _m:
+            _nums.setdefault(_m.group(1), []).append(_f)
+    _dup = {k: v for k, v in _nums.items() if len(v) > 1}
+    check("docs 文档编号不撞号", not _dup,
+          ["重号：%s" % _dup if _dup else "共 %d 个编号，无重号" % len(_nums)])
+
     print()
     print("=" * 74)
     total = len(results)
