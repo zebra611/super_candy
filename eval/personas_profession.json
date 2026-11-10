@@ -1,0 +1,440 @@
+{
+  "personas": [
+    {
+      "id": "J01",
+      "label": "律师（逐条抠字眼）",
+      "profession": "lawyer",
+      "temper": "precise",
+      "goal": "confirm",
+      "split": "train",
+      "knows": {
+        "phone_tail": true,
+        "contact_name": true,
+        "company_name": true,
+        "application_id": true
+      },
+      "willing": {
+        "phone_tail": "on_ask",
+        "contact_name": "on_ask"
+      },
+      "traits": {
+        "hearing": 1.0,
+        "patience": 6,
+        "trust0": 0.2,
+        "trust_gate": 0.5,
+        "verbosity": 0.8
+      },
+      "style": [
+        "我先确认一下"
+      ],
+      "catchphrases": [
+        "你把依据说清楚",
+        "这话有书面材料吗",
+        "哪一条规定的"
+      ],
+      "catchphrase_rate": 0.8,
+      "expect": {
+        "closed": true
+      }
+    },
+    {
+      "id": "J02",
+      "label": "记者（反问带节奏）",
+      "profession": "journalist",
+      "temper": "probing",
+      "goal": "ask",
+      "split": "train",
+      "knows": {
+        "phone_tail": true,
+        "contact_name": true,
+        "company_name": true
+      },
+      "willing": {
+        "phone_tail": "on_ask",
+        "contact_name": "reluctant"
+      },
+      "traits": {
+        "hearing": 1.0,
+        "patience": 5,
+        "trust0": 0.15,
+        "trust_gate": 0.6,
+        "verbosity": 0.7
+      },
+      "style": [
+        "我核实一下"
+      ],
+      "catchphrases": [
+        "你们这个信息来源是哪",
+        "我录音了可以吗",
+        "这事你们领导知道吗"
+      ],
+      "catchphrase_rate": 0.8,
+      "expect": {
+        "closed": false
+      }
+    },
+    {
+      "id": "J03",
+      "label": "医生（下班路上、语速快）",
+      "profession": "doctor",
+      "temper": "impatient",
+      "goal": "confirm",
+      "split": "train",
+      "knows": {
+        "phone_tail": true,
+        "contact_name": true,
+        "company_name": true
+      },
+      "willing": {
+        "phone_tail": "immediate",
+        "contact_name": "on_ask"
+      },
+      "traits": {
+        "hearing": 1.0,
+        "patience": 2,
+        "trust0": 0.45,
+        "trust_gate": 0.2,
+        "verbosity": 0.2
+      },
+      "style": [
+        "嗯"
+      ],
+      "catchphrases": [
+        "我在值班，你快点",
+        "就一句话说完",
+        "行不行，我马上进手术室"
+      ],
+      "catchphrase_rate": 0.7,
+      "expect": {
+        "closed": true
+      }
+    },
+    {
+      "id": "J04",
+      "label": "外卖骑手（路上噪声大）",
+      "profession": "courier",
+      "temper": "noisy",
+      "goal": "confirm",
+      "split": "train",
+      "knows": {
+        "phone_tail": true,
+        "contact_name": false,
+        "company_name": false
+      },
+      "willing": {
+        "phone_tail": "on_ask",
+        "contact_name": "refuse"
+      },
+      "traits": {
+        "hearing": 0.5,
+        "patience": 2,
+        "trust0": 0.4,
+        "trust_gate": 0.15,
+        "verbosity": 0.2
+      },
+      "style": [
+        "喂"
+      ],
+      "catchphrases": [
+        "我这儿骑车呢，你大声点",
+        "信号不好，再说一遍",
+        "啥？没听清"
+      ],
+      "catchphrase_rate": 0.9,
+      "expect": {
+        "closed": true
+      }
+    },
+    {
+      "id": "J05",
+      "label": "宝妈（孩子在哭）",
+      "profession": "mother",
+      "temper": "distracted",
+      "goal": "confirm",
+      "split": "train",
+      "knows": {
+        "phone_tail": true,
+        "contact_name": true,
+        "company_name": true
+      },
+      "willing": {
+        "phone_tail": "on_ask",
+        "contact_name": "on_ask"
+      },
+      "traits": {
+        "hearing": 0.8,
+        "patience": 3,
+        "trust0": 0.4,
+        "trust_gate": 0.25,
+        "verbosity": 0.4
+      },
+      "style": [
+        "等一下"
+      ],
+      "catchphrases": [
+        "你等会儿啊，孩子在哭",
+        "我刚没听见，再说一次",
+        "这个要钱吗，不要钱就办"
+      ],
+      "catchphrase_rate": 0.7,
+      "expect": {
+        "closed": true
+      }
+    },
+    {
+      "id": "J06",
+      "label": "大学生（懂一点、爱抬杠）",
+      "profession": "student",
+      "temper": "skeptical",
+      "goal": "ask",
+      "split": "train",
+      "knows": {
+        "phone_tail": true,
+        "contact_name": true,
+        "company_name": true
+      },
+      "willing": {
+        "phone_tail": "immediate",
+        "contact_name": "on_ask"
+      },
+      "traits": {
+        "hearing": 1.0,
+        "patience": 6,
+        "trust0": 0.3,
+        "trust_gate": 0.35,
+        "verbosity": 0.6
+      },
+      "style": [
+        "所以"
+      ],
+      "catchphrases": [
+        "所以你到底想说什么",
+        "这不就是套路吗",
+        "你先把话说明白"
+      ],
+      "catchphrase_rate": 0.7,
+      "expect": {
+        "closed": false
+      }
+    },
+    {
+      "id": "J07",
+      "label": "餐饮小老板（中午忙、脾气急）",
+      "profession": "shopkeeper",
+      "temper": "rude",
+      "goal": "refuse",
+      "split": "train",
+      "knows": {
+        "phone_tail": true,
+        "contact_name": false,
+        "company_name": true
+      },
+      "willing": {
+        "phone_tail": "reluctant",
+        "contact_name": "refuse"
+      },
+      "traits": {
+        "hearing": 1.0,
+        "patience": 1,
+        "trust0": 0.3,
+        "trust_gate": 0.2,
+        "verbosity": 0.3
+      },
+      "style": [
+        "哎"
+      ],
+      "catchphrases": [
+        "我这儿忙着呢",
+        "别打了，不需要",
+        "你们天天打，烦不烦"
+      ],
+      "catchphrase_rate": 0.8,
+      "expect": {
+        "closed": true
+      }
+    },
+    {
+      "id": "J08",
+      "label": "退休教师（较真、要逐条确认）",
+      "profession": "teacher",
+      "temper": "meticulous",
+      "goal": "confirm",
+      "split": "train",
+      "knows": {
+        "phone_tail": true,
+        "contact_name": true,
+        "company_name": true,
+        "application_id": false
+      },
+      "willing": {
+        "phone_tail": "on_ask",
+        "contact_name": "on_ask"
+      },
+      "traits": {
+        "hearing": 0.7,
+        "patience": 8,
+        "trust0": 0.35,
+        "trust_gate": 0.4,
+        "verbosity": 0.9
+      },
+      "style": [
+        "我记一下"
+      ],
+      "catchphrases": [
+        "你再说一遍，我记下来",
+        "这个有效期到哪天",
+        "收费不收费，你先说清楚"
+      ],
+      "catchphrase_rate": 0.8,
+      "expect": {
+        "closed": true
+      }
+    },
+    {
+      "id": "J09",
+      "label": "程序员（只认事实、拒寒暄）",
+      "profession": "engineer",
+      "temper": "blunt",
+      "goal": "confirm",
+      "split": "train",
+      "knows": {
+        "phone_tail": true,
+        "contact_name": true,
+        "company_name": true
+      },
+      "willing": {
+        "phone_tail": "immediate",
+        "contact_name": "on_ask"
+      },
+      "traits": {
+        "hearing": 1.0,
+        "patience": 4,
+        "trust0": 0.25,
+        "trust_gate": 0.3,
+        "verbosity": 0.2
+      },
+      "style": [
+        "ok"
+      ],
+      "catchphrases": [
+        "说重点",
+        "别铺垫",
+        "几行能说完的事别打电话"
+      ],
+      "catchphrase_rate": 0.8,
+      "expect": {
+        "closed": true
+      }
+    },
+    {
+      "id": "J10",
+      "label": "房产中介（反客为主、想套信息）",
+      "profession": "agent",
+      "temper": "pushy",
+      "goal": "ask",
+      "split": "train",
+      "knows": {
+        "phone_tail": true,
+        "contact_name": true,
+        "company_name": true
+      },
+      "willing": {
+        "phone_tail": "immediate",
+        "contact_name": "on_ask"
+      },
+      "traits": {
+        "hearing": 1.0,
+        "patience": 5,
+        "trust0": 0.4,
+        "trust_gate": 0.2,
+        "verbosity": 0.7
+      },
+      "style": [
+        "哎我跟你说"
+      ],
+      "catchphrases": [
+        "你们这个我也能做",
+        "你把客户名单给我呗",
+        "加个微信细聊"
+      ],
+      "catchphrase_rate": 0.8,
+      "expect": {
+        "closed": false
+      }
+    },
+    {
+      "id": "J11",
+      "label": "银行柜员（流程意识强）",
+      "profession": "teller",
+      "temper": "procedural",
+      "goal": "confirm",
+      "split": "train",
+      "knows": {
+        "phone_tail": true,
+        "contact_name": true,
+        "company_name": true,
+        "application_id": true
+      },
+      "willing": {
+        "phone_tail": "on_ask",
+        "contact_name": "on_ask"
+      },
+      "traits": {
+        "hearing": 1.0,
+        "patience": 7,
+        "trust0": 0.3,
+        "trust_gate": 0.5,
+        "verbosity": 0.6
+      },
+      "style": [
+        "核一下"
+      ],
+      "catchphrases": [
+        "你先报工号",
+        "这个流程走哪一步了",
+        "材料齐不齐"
+      ],
+      "catchphrase_rate": 0.7,
+      "expect": {
+        "closed": true
+      }
+    },
+    {
+      "id": "J12",
+      "label": "货车司机（长途、信号断续）",
+      "profession": "trucker",
+      "temper": "tired",
+      "goal": "refuse",
+      "split": "train",
+      "knows": {
+        "phone_tail": true,
+        "contact_name": false,
+        "company_name": false
+      },
+      "willing": {
+        "phone_tail": "on_ask",
+        "contact_name": "refuse"
+      },
+      "traits": {
+        "hearing": 0.6,
+        "patience": 2,
+        "trust0": 0.35,
+        "trust_gate": 0.2,
+        "verbosity": 0.2
+      },
+      "style": [
+        "喂"
+      ],
+      "catchphrases": [
+        "我在高速上，你说啥",
+        "断断续续的，听不清",
+        "回头再说吧"
+      ],
+      "catchphrase_rate": 0.8,
+      "expect": {
+        "closed": false
+      }
+    }
+  ],
+  "_comment": "12 类职业画像（社会各行各业），供 sim_eval --personas 注入使用。字段与 personas_temperament.json 同构。"
+}
