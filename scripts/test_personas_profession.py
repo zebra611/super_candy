@@ -63,6 +63,25 @@ class ProfessionPersonaTest(unittest.TestCase):
         for p in self.items:
             self.assertGreaterEqual(len(p["catchphrases"]), 3, p["id"])
 
+    def test_goal_and_expect_agree(self):
+        """目标是要拒绝/反问的画像，不能同时期望闭环。
+
+        反例（J07 初版）：goal=refuse 却 expect.closed=true，口头禅还是
+        「别打了，不需要」——客户第 1 轮就说了不需要，客服按设计挂断，
+        这通必然失败且归因 sim。这类数据会让「闭环率」替数据错误背锅，
+        而且改话术永远救不回来。这条断言是那个坑的护栏。
+        """
+        for p in self.items:
+            if p["goal"] in ("refuse", "ask"):
+                self.assertFalse(p["expect"]["closed"],
+                                 "%s goal=%s 却期望闭环" % (p["id"], p["goal"]))
+
+    def test_holdout_present(self):
+        """至少要有一条留出集，否则改话术全在有答案的卷子上调。"""
+        splits = [p["split"] for p in self.items]
+        self.assertGreaterEqual(splits.count("holdout"), 1, "没有 holdout，无法验证泛化")
+        self.assertGreaterEqual(splits.count("train"), 6, "训练集太少")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

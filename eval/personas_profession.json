@@ -6,7 +6,7 @@
       "profession": "lawyer",
       "temper": "precise",
       "goal": "confirm",
-      "split": "train",
+      "split": "holdout",
       "knows": {
         "phone_tail": true,
         "contact_name": true,
@@ -35,7 +35,8 @@
       "catchphrase_rate": 0.8,
       "expect": {
         "closed": true
-      }
+      },
+      "_why_split": "holdout：只做验收，不得据它调话术"
     },
     {
       "id": "J02",
@@ -43,7 +44,7 @@
       "profession": "journalist",
       "temper": "probing",
       "goal": "ask",
-      "split": "train",
+      "split": "holdout",
       "knows": {
         "phone_tail": true,
         "contact_name": true,
@@ -71,7 +72,8 @@
       "catchphrase_rate": 0.8,
       "expect": {
         "closed": false
-      }
+      },
+      "_why_split": "holdout：只做验收，不得据它调话术"
     },
     {
       "id": "J03",
@@ -250,8 +252,9 @@
       ],
       "catchphrase_rate": 0.8,
       "expect": {
-        "closed": true
-      }
+        "closed": false
+      },
+      "_why_expect": "goal=refuse：客户本来就要拒绝，期望闭环等于要求客服把「不需要」挽回来；实测第 1 轮客户按口头禅说「别打了，不需要」客服答「抱歉打扰您了，再见」，归因 sim（数据错，不是客服错）。"
     },
     {
       "id": "J08",
@@ -405,7 +408,7 @@
       "profession": "trucker",
       "temper": "tired",
       "goal": "refuse",
-      "split": "train",
+      "split": "holdout",
       "knows": {
         "phone_tail": true,
         "contact_name": false,
@@ -433,7 +436,8 @@
       "catchphrase_rate": 0.8,
       "expect": {
         "closed": false
-      }
+      },
+      "_why_split": "holdout：只做验收，不得据它调话术"
     }
   ],
   "_comment": "12 类职业画像（社会各行各业），供 sim_eval --personas 注入使用。字段与 personas_temperament.json 同构。"
