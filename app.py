@@ -835,6 +835,9 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
         "next_stage": agent_out["next_stage"],
         "intent": agent_out.get("intent", "unknown"),
         "end_reason": agent_out.get("end_reason", ""),
+        # 这一轮说完就该收线（终态/拒绝/挂断）。ws_channel 靠它决定要不要挂电话；
+        # 不透出来，服务端永远不会主动挂断（实测就是这样）。
+        "hangup": bool(agent_out.get("hangup")),
         "intent_conf": agent_out.get("intent_conf", 0.0),
         # 这句回答引了哪份资料（官方 QA / 知识条目）。测试台直接显示在气泡下方，
         # 演示时"官方原话"四个字才有依据；没引资料时字段不出现，不写空壳。
