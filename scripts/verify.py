@@ -2463,6 +2463,27 @@ def main():
           bool(_a17) and int((_a17.get("traits") or {}).get("mishear_every") or 0) >= 2,
           ["A17 traits=%s" % (_a17 and _a17.get("traits"))])
 
+    # 30.8f 「确认不到」+ 问的是本单事实（号码哪来的）→ 判没回答。
+    # 客服话里带「官方号码」会命中 ask_why 的关键词，旧判据因此把它算成答了来源质疑。
+    from modules import feedback as _fb
+    _jt = [{"user": {"action": "ask_why", "text": "你哪来的我号码，怎么信你"},
+            "agent": {"reply_text": "这个我这边确认不到，稍后让专员用官方号码给您回电说明。",
+                      "stage": "CONFIRM", "next_stage": "CONFIRM", "intent": "ask"}}]
+    _j = _fb.judge_turn(_jt, 0)
+    check("「确认不到」+ 问号码来源 → 判没回答（不被「官方号码」蒙过）",
+          "no_answer" in _j["codes"],
+          ["极性=%s 码=%s" % (_j["polarity"], _j["codes"])])
+
+    # 30.8g 但客户问的是画外问题（后台哪个入口）时，答不上来后体面收线是对的，
+    # 不能横扫成缺陷——否则优化器会去追一个改不动、也不该改的数。
+    _jt2 = [{"user": {"action": "ask_why", "text": "这个得去后台哪个入口弄"},
+             "agent": {"reply_text": "您问的入口我这边确认不到，稍后专员会用官方号码联系您。",
+                       "stage": "CONFIRM", "next_stage": "DONE", "intent": "ask"}}]
+    _j2 = _fb.judge_turn(_jt2, 0)
+    check("「确认不到」+ 画外问题（后台入口）→ 不横扫成缺陷",
+          "no_answer" not in _j2["codes"],
+          ["极性=%s 码=%s" % (_j2["polarity"], _j2["codes"])])
+
     # 30.9 版本库：上线过的版本必须留快照，且补丁只能落在话术上。
     _vs_path = os.path.join(ROOT, "config", "evolution", "versions.json")
     if not os.path.exists(_vs_path):

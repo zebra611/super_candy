@@ -495,7 +495,8 @@
    },
    "CONFIRM": {
     "fee": "reply_ask_fee",
-    "material": "reply_application_answer"
+    "material": "reply_application_answer",
+    "provenance": "reply_provenance"
    }
   },
   "confirm_specific": true,

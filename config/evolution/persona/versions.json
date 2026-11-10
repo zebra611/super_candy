@@ -1,6 +1,6 @@
 {
- "active": "p8",
- "baseline_json": "eval/reports/sim_persona_base_p8.json",
+ "active": "p9",
+ "baseline_json": "eval/reports/sim_persona_base_p9.json",
  "scene_sha": "fab29eaa363394f7",
  "personas_path": "eval/personas_temperament.json",
  "history": [
@@ -803,6 +803,107 @@
    "version": "p8",
    "parent": "p7",
    "created": "2026-11-10 12:45:26",
+   "status": "superseded",
+   "source": "rebase：线上规则表/对话代码变更，重定基线",
+   "candidate": null,
+   "metrics": {
+    "all_ok": 12,
+    "all_total": 12,
+    "train_ok": 8,
+    "train_total": 8,
+    "holdout_ok": 4,
+    "holdout_total": 4,
+    "agent_defect_sessions": 1,
+    "case_defect_sessions": 0,
+    "codes": {
+     "agent_slot_loss": 1
+    },
+    "defect_total": 1
+   },
+   "by_temper": {
+    "impatient": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T01",
+      "T09"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "skeptical": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T02",
+      "T10"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "quiet": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T03",
+      "T12"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "talkative": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T04"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "hard_of_hearing": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T05"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "forgetful": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T06",
+      "T11"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "cooperative": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T07"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "neutral": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T08"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    }
+   },
+   "rules_sha": "38f9c33ef94a83d7"
+  },
+  {
+   "version": "p9",
+   "parent": "p8",
+   "created": "2026-11-10 16:20:17",
    "status": "active",
    "source": "rebase：线上规则表/对话代码变更，重定基线",
    "candidate": null,

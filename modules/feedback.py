@@ -101,11 +101,18 @@ def _stage(turn):
 
 
 def _asks_again(turn, fact_key):
-    """客服这一句是不是又在索要同一条信息（精确措辞，不用宽泛的 detect_asks）。"""
+    """客服这一句是不是又在索要同一条信息（精确措辞，不用宽泛的 detect_asks）。
+
+    contact_name 不收裸「姓名」：性格适配层会在句尾挂「说联系人姓名也行」，
+    客服原话其实是「核对上了，感谢配合……」——裸词会把"已经接住、顺手给个
+    备选路径"误判成"又问一遍"（A04/A06 第 3 轮实测，11-10 与 attribution
+    同一处假阳，两边词表必须一致，否则同一句话在面板与归因里两种结论）。
+    """
     said = _said(turn)
     marks = {
         "phone_tail": ("后四位", "后 4 位", "尾号", "最后四位"),
-        "contact_name": ("您的姓名", "怎么称呼", "姓名", "怎么叫您"),
+        "contact_name": ("您的姓名", "怎么称呼", "怎么叫您", "您贵姓",
+                         "姓名是", "报一下姓名", "确认一下姓名", "说一下姓名"),
         "application_id": ("申请单编号", "单号"),
     }.get(fact_key, ())
     return any(w in said for w in marks)
@@ -159,10 +166,23 @@ def judge_turn(turns, i):
 
     if act in ASK_ACTIONS:
         cues = ANSWER_CUES.get(act) or ()
-        if cues and not any(c in said for c in cues) \
-                and not any(w in said for w in DEFER_WORDS):
+        # 「确认不到」+ 问的是**本单就有答案**的事（补什么材料 / 号码哪来的）
+        # 优先判没回答：客服说「这个我这边确认不到，稍后让专员用**官方**号码回电」
+        # 时，`ask_why` 的关键词里正好有「官方」，旧判据会把它算成回答了来源质疑——
+        # 客户问「你哪来的我号码」，得到的仍是"我不知道，让专员打给你"
+        # （11-10 A15 第 6 轮实测，属假绿：漏判比误判更难被发现）。
+        #
+        # 只对这两类问题生效，不横扫：客户问「后台哪个入口」这类画外问题，
+        # 答不上来后体面收线是对的，把收线也算缺陷会让优化器去追一个改不动的数
+        # （实测横扫后负面 6→10，自进化连试两轮都被"新增负面会话"挡住）。
+        _own_fact_q = re.search(r"(补什么|要补|材料|哪来|怎么有我|凭什么|怎么信|谁给的)",
+                                user.get("text") or "")
+        _deflected = bool(_own_fact_q) and "确认不到" in said
+        if _deflected or (cues and not any(c in said for c in cues)
+                          and not any(w in said for w in DEFER_WORDS)):
             neg.append("no_answer")
-            why.append("客户在问，回复里没有这一类问题的正面信息")
+            why.append("客户在问，客服答「确认不到」" if _deflected
+                       else "客户在问，回复里没有这一类问题的正面信息")
             ev = ev or said[:40]
 
     fact = _FACT_OF_ACTION.get(act)
