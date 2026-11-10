@@ -27,11 +27,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ---------------------------------------------------------------------------
 # 维度一：职业（160 种，覆盖制造/服务/专业/农业/新兴行业）
 # ---------------------------------------------------------------------------
+# 词表用空格分隔，**职业名内部不能有空格**：`.split()` 会把「UI 设计师」
+# 切成「UI」「设计师」两个伪职业（初版 8 条画像是「我是做4S的」这种句子）。
 PROFESSIONS = """快递员 外卖骑手 网约车司机 货车司机 公交司机 地铁站务 飞行员 空乘 铁路乘务
 船员 渔民 农民 果农 菜贩 屠户 面点师 厨师 餐厅服务员 咖啡师 调酒师 茶艺师
 酒店前台 客房服务员 导游 景区讲解员 旅行社计调 民宿房东 摄影师 摄像师 剪辑师
-平面设计师 UI 设计师 室内设计师 建筑师 结构工程师 土木工程师 造价师 监理 电工
-水暖工 木工 焊工 油漆工 空调安装工 家电维修工 手机维修师 汽车维修工 汽修学徒 4S 店销售
+平面设计师 UI设计师 室内设计师 建筑师 结构工程师 土木工程师 造价师 监理 电工
+水暖工 木工 焊工 油漆工 空调安装工 家电维修工 手机维修师 汽车维修工 汽修学徒 4S店销售
 二手车评估师 保险代理人 银行柜员 信贷员 理财顾问 证券经纪人 会计 出纳 审计师
 税务师 律师 法务 专利代理人 公证员 翻译 同声传译 编辑 记者 播音主持
 新媒体运营 短视频博主 直播带货主播 电商运营 客服专员 呼叫中心班长 数据标注员 算法工程师 前端工程师 后端工程师
@@ -120,29 +122,43 @@ LANGUAGES = [
 # ---------------------------------------------------------------------------
 SCENARIOS = [
     {"id": "S01", "name": "包裹丢失", "need": "找回包裹或按规则赔付",
+     "hassle": "平时没空盯物流",
      "guide": "先确认运单与签收状态，再说明查件时限与赔付标准，不承诺具体金额"},
     {"id": "S02", "name": "快递丢失", "need": "确认是否丢件并要求补发",
+     "hassle": "平时没空盯物流",
      "guide": "区分商家发货与快递责任，给查件工单号，不替快递承诺时效"},
     {"id": "S03", "name": "错发商品", "need": "换回正确商品并承担运费",
+     "hassle": "平时没空对单",
      "guide": "核对订单与实物照片，走换货流程，明确退回运费由谁承担"},
     {"id": "S04", "name": "漏发配件", "need": "补发缺失配件",
+     "hassle": "平时没空清点装箱",
      "guide": "按装箱清单逐项核对，缺件补发不走退货，避免让用户整单退回"},
     {"id": "S05", "name": "商品破损", "need": "退款或换新",
+     "hassle": "平时没空拆箱验货",
      "guide": "先致歉并索要照片，按破损程度给退换方案，不质疑用户人为损坏"},
     {"id": "S06", "name": "商家不发货", "need": "催发货或退款并追责",
+     "hassle": "平时没空催商家",
      "guide": "查商家履约状态，说明平台介入规则与超时赔付，不替商家找借口"},
     {"id": "S07", "name": "退款未到账", "need": "查退款进度",
+     "hassle": "平时没空对账",
      "guide": "区分「已退」与「到账」，说明银行/支付渠道时效，给出可查凭证"},
     {"id": "S08", "name": "发票问题", "need": "补开或重开发票",
+     "hassle": "平时没空对账",
      "guide": "确认抬头与税号，说明电子发票重开时限，不承诺当天开出"},
     {"id": "S09", "name": "物流停滞", "need": "催促物流并给预计时间",
+     "hassle": "平时没空盯物流",
      "guide": "给最新轨迹与催件记录，说明异常件处理时限，不做时效保证"},
     {"id": "S10", "name": "疑似假货/商家纠纷", "need": "鉴定真伪或维权",
+     "hassle": "平时没空验货",
      "guide": "不判定真伪，引导走平台鉴定/举证流程，保留证据链"},
 ]
 
 # 语气强度修饰
-HEDGES = {1: ["", "吧", "呢"], 2: ["说实话", "我跟你说", "你听我说"], 3: ["我不管", "今天必须", "别跟我扯"]}
+# 强度词必须是能独立成句的话：初版 1 档是「吧/呢」这种语气助词，拼出来是
+# 「您好，吧，我有个…」；3 档的「今天必须」单独成句也不成立。
+HEDGES = {1: ["", "啊", "呀"],
+          2: ["说实话", "我跟你说", "您听我说"],
+          3: ["我先说清楚", "今天必须给个说法", "别跟我扯别的"]}
 
 
 def build_persona(idx):
@@ -154,17 +170,25 @@ def build_persona(idx):
     # 语气标签由 idx 唯一决定，若强度再取 idx % 3，两者被同一个数绑死，
     # 180 种组合会塌缩成 60 种。用 (idx // 60) 打散才能覆盖 60×3。
     intensity = INTENSITY[(idx // len(TONES)) % 3]
-    attitude = ATTITUDES[(idx * 13) % len(ATTITUDES)]
+    # 态度不能只取 (idx*13)%30：那样四项的最小正周期都是 180，
+    # idx 与 idx+180 产出**逐字节相同**（320 条里 140 条是副本，只改了 id）。
+    # 加一个 idx//30 的相位后周期变 900，320 条两两不同。
+    attitude = ATTITUDES[(idx * 13 + idx // len(ATTITUDES)) % len(ATTITUDES)]
     # 每 3 条里留 2 条普通话、1 条方言/外语，避免方言把样本带偏
     language = LANGUAGES[0] if idx % 3 else LANGUAGES[(idx * 17) % len(LANGUAGES)]
 
     hedge = HEDGES[intensity["level"]][idx % 3]
     m = language["markers"]
+    # 强度词单独成句（原来直接拼在问候语后，读出来是「您好我不管，我有个…」）；
+    # hassle 按场景取（原来固定写「没空盯物流」，发票/退款/假货照样说物流）；
+    # 第 4 句不再把态度塞成定语（「我愤怒要求很简单」不是人话）。
+    # 1 档是语气助词，直接粘在问候语后（您好啊）；2/3 档是独立短句，用逗号隔开。
+    lead = (m[0] + hedge) if intensity["level"] == 1 else (m[0] + "，" + hedge)
     utterances = [
-        "%s%s，我有个%s的事要问。" % (m[0], hedge, scenario["name"]),
-        "我是做%s的，平时没空盯物流，%s。" % (profession, m[1]),
+        "%s，我有个%s的事要问。" % (lead, scenario["name"]),
+        "我是做%s的，%s，%s。" % (profession, scenario["hassle"], m[1]),
         "%s，你们到底怎么处理？" % m[2],
-        "我%s要求很简单：%s。" % (attitude, scenario["need"]),
+        "我挺%s的，要求很简单：%s。" % (attitude, scenario["need"]),
     ]
 
     return {
@@ -187,10 +211,71 @@ def build(n):
     return [build_persona(i) for i in range(n)]
 
 
+# ---------------------------------------------------------------------------
+# 转成 sim_eval 能吃的画像：tone/attitude → traits，utterances → catchphrases
+# ---------------------------------------------------------------------------
+#: 态度 → 初始信任档。按四档归类而不是 30 个硬编码数字：改一档就整体平移，
+#: 也方便解释「为什么是 0.12」——敌意/讽刺类先不信人，弱势类愿意配合。
+_TRUST_BANDS = (
+    (0.12, "愤怒 咄咄逼人 讽刺 不耐烦 敌意 迁怒"),
+    (0.22, "怀疑 戒备 谨慎 犹豫 观望 试探"),
+    (0.34, "委屈 失望 无助 认命 焦虑 自责 恳求 麻木"),
+    (0.28, "礼貌 冷漠 敷衍 强势 讨好 疏离 配合 抵触 较真 宽容"),
+)
+_TRUST0 = {w: v for v, words in _TRUST_BANDS for w in words.split()}
+if len(_TRUST0) != len(ATTITUDES) or {a for a in ATTITUDES} - set(_TRUST0):
+    raise SystemExit("态度表与信任档不一致：信任档 %d 条，态度 %d 条" % (len(_TRUST0), len(ATTITUDES)))
+
+
+def to_sim_persona(p):
+    """把一条 JD 人物转成 `sim_eval --personas` 能直接吃的画像。
+
+    映射规则全部显式（不给模型猜）：
+        语气强度 level 1/2/3 → patience 6/4/2、verbosity 0.4/0.3/0.2
+        态度四档             → trust0 0.12/0.22/0.28/0.34
+        方言/外语            → hearing 0.9（模拟器只做"听不清时糊掉关键要素"，
+                                不等于方言识别准确率，别当指标用）
+        utterances           → catchphrases（原句直接当口头禅，不二次拼接）
+
+    **局限**：`goal` 统一是 `confirm`、`expect.closed` 统一 True。这批人物的
+    评价维度是"语气/态度/方言能不能把人问崩"，不是"拒绝型客户覆盖率"——
+    要测拒绝必须另写画像，因为模拟器的拒绝是耐心/信任耗尽逼出来的，
+    不是台词里写一句"我不要"就能演出来的。
+    """
+    level = int(p["tone"]["level"])
+    return {
+        "id": p["id"],
+        "label": "%s·%s·%s" % (p["scenario"]["name"], p["profession"], p["tone"]["label"]),
+        "goal": "confirm",
+        "split": "train",
+        "knows": {"phone_tail": True, "contact_name": True,
+                  "company_name": True, "application_id": True},
+        "willing": {"phone_tail": "on_ask", "contact_name": "on_ask"},
+        "traits": {"hearing": 1.0 if p["language"]["code"] == "zh-CN" else 0.9,
+                   "patience": {1: 6, 2: 4, 3: 2}[level],
+                   "trust0": _TRUST0[p["attitude"]],
+                   "trust_gate": round(0.2 + 0.1 * (level - 1), 2),
+                   "verbosity": round(0.5 - 0.1 * level, 2)},
+        "style": [p["language"]["markers"][0]],
+        "catchphrases": list(p["utterances"]),
+        "catchphrase_rate": round(0.4 + 0.15 * level, 2),
+        "expect": {"closed": True},
+        "_why": ("由 personas_jd.json 的 %s 转换：语气→耐心、态度→初始信任、方言→听清率。"
+                 "goal 统一 confirm（售后客户要的是解决问题），不代表拒绝型客户的覆盖率。"
+                 % p["id"]),
+    }
+
+
+def build_sim(items):
+    return [to_sim_persona(p) for p in items]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="京东客服对抗人物工厂")
     ap.add_argument("--n", type=int, default=320)
     ap.add_argument("--out", default=os.path.join(ROOT, "eval", "personas_jd.json"))
+    ap.add_argument("--sim-out", default="",
+                    help="同时输出 sim_eval 可注入的画像（如 eval/personas_jd_sim.json）")
     args = ap.parse_args(argv)
     if args.n < 1:
         print("--n 至少为 1", file=sys.stderr)
@@ -203,13 +288,30 @@ def main(argv=None):
         "_version": "v1",
         "personas": items,
     }
-    with open(args.out, "w", encoding="utf-8") as f:
+    # newline="\n" 不能省：Windows 文本模式会把 \n 写成 \r\n，重建一次 1.4 万行全变。
+    with open(args.out, "w", encoding="utf-8", newline="\n") as f:
         json.dump(payload, f, ensure_ascii=False, indent=1)
+        f.write("\n")
     print("生成 %d 条 → %s" % (len(items), os.path.relpath(args.out, ROOT)))
     print("覆盖：职业 %d｜语气 %d｜态度 %d｜语言/方言 %d｜场景 %d"
           % (len({i["profession"] for i in items}), len({i["tone"]["label"] for i in items}),
              len({i["attitude"] for i in items}), len({i["language"]["code"] for i in items}),
              len({i["scenario"]["id"] for i in items})))
+    print("唯一性：去 id 后 %d 条内容（应为 %d）"
+          % (len({json.dumps({k: v for k, v in i.items() if k != "id"},
+                             ensure_ascii=False, sort_keys=True) for i in items}), len(items)))
+
+    if args.sim_out:
+        sim = {"_comment": "由 eval/persona_factory_jd.py --sim-out 生成，供 sim_eval --personas 注入",
+               "_version": "v1", "personas": build_sim(items)}
+        with open(args.sim_out, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(sim, f, ensure_ascii=False, indent=1)
+            f.write("\n")
+        print("可注入画像 %d 条 → %s" % (len(sim["personas"]),
+                                       os.path.relpath(args.sim_out, ROOT)))
+        print("  注意：本库场景是**京东售后**，仓库当前唯一可评测场景是 POP 资审。\n"
+              "  直接注入跑出来的闭环率不能当客服水平看（客户在说售后、客服在说资审），\n"
+              "  它的用途是「换一种说法/脾气/方言，客服还答不答得上」。")
     return 0
 
 
