@@ -48,7 +48,7 @@ from app import (_acquire, _audio_state, _auth, _has_interrupt_content,  # noqa:
                  probe_speech, record_barge_in,
                  report_client_metric, start_call)
 from modules import dialogue, eval as eval_mod, kb, nlg, tools, voice  # noqa: E402
-from modules import attribution, user_sim  # noqa: E402  L2：模拟用户与失败归因
+from modules import attribution, user_sim, policy  # noqa: E402  L2：模拟用户与失败归因
 
 # 自检默认不真的调云端合成：既慢又要花钱，还会让"没有密钥的队友"跑不过。
 # TTS 的真实请求构造与失败回落，下面用本地假接口单独测（见证据 9 之后那段）。
@@ -2632,6 +2632,41 @@ def main():
           and _base_default.reject_script("x")["found"] is False
           and _base_default.lookup_qa("x")["found"] is False,
           ["默认返回可用"])
+
+    # ---- 证据 33：对抗跑批按场景分批 + 收尾话术不带补救语（11-09）----
+    # 起因是 11-09 线上实测（train API）暴露的两件事，都不在单条用例的射程里：
+    #
+    # 1) 对抗跑批把 340 条 C4（POP 关单场景）用例混进默认售后场景跑，全部卡在
+    #    IDENTITY，跑出 31/374 = 8.3%；同一批数据切到 pop_reject 是 340/340。
+    #    这个数字会直接喂给 CI 卡口（--fail-under），错一次就是"系统看起来很烂"。
+    #    它属于**跑批工具的属性**，任何一条用例都测不出来，只能单独守。
+    #
+    # 2) A01 第 9 轮客户已经说"清楚了，我按你说的弄"，客服回
+    #    "…感谢您的配合，再见。我放慢一点说。"——补救语挂到了告别语上。
+    #    只有"客户被听成听不清 + 这一轮正好收尾"同时成立才出现，
+    #    普通用例不会踩到这个组合。
+    print()
+    print("=" * 74)
+    print("证据 33：对抗跑批按场景分批，收尾话术不带补救语")
+    print("=" * 74)
+
+    _si = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
+                                                       "test_scene_isolation.py")],
+                         cwd=ROOT, capture_output=True, text=True, timeout=180)
+    check("场景隔离 / 收尾话术 / 修复请求边界（12 条自测）",
+          _si.returncode == 0,
+          ["退出码 %d；末行：%s" % (_si.returncode,
+                                    ((_si.stdout or "").strip().splitlines() or ["无输出"])[-1][:80])])
+
+    # 修复请求的边界：只收带重说动作的说法。
+    # 「不是说了吗」曾经被收进来，评审实测把对抗集从 16/16 拉到 14/16
+    # （A09/A14 复述打断确认计数 → unknown 误闭环），已撤回；这条守住别再加回去。
+    _repair_ok = (policy.is_repair_request("信号不好，你再说一遍")
+                  and not policy.is_repair_request("我刚不是说了吗，就那几个数"))
+    check("修复请求只认重说动作：「不是说了吗」是抱怨不是修复（已被 16/16→14/16 实测否掉）",
+          _repair_ok,
+          ["classic=%r plead=%r" % (policy.is_repair_request("信号不好，你再说一遍"),
+                                    policy.is_repair_request("我刚不是说了吗，就那几个数"))])
 
     # ---- 官方 QA 接进对话（11-08）----------------------------------------
     # 上面那条验的是"适配器查得到"，这三条验的是"查到了之后在对话里怎么用"：

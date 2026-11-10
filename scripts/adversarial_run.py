@@ -27,6 +27,44 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+
+def _prescan_scene(argv):
+    """在自己的参数表里先捞出 `--scene`，因为场景必须早于 `import run_eval` 定下来。
+
+    这不是多此一举：`run_eval._scan_argv` 就是靠读 sys.argv 决定场景的，
+    而 app 里有几处「启动时读一次」的缓存——import 之后再切，赛题用例会被
+    售后话术与售后假客户跑一遍。11-09 实测：340 条 C4（POP 关单场景）用例
+    在默认售后场景下跑出 31/374 = 8.3%，切到 `--scene pop_reject` 后
+    batch01 是 40/40 = 100%。同一批数据、同一份代码，差别只在场景有没有切对。
+    """
+    for i, a in enumerate(argv):
+        if a == "--scene" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--scene="):
+            return a.split("=", 1)[1]
+    return ""
+
+
+#: 这一趟跑的是哪个场景（空串 = config/scene.json 的默认场景）。
+_SCENE = _prescan_scene(sys.argv)
+
+#: 哪些对抗集属于哪个场景。C4 批次是 4 号按官方 68 个关单场景生成的，
+#: 跑它们必须用 pop_reject，否则开场就是「京东客服中心的小采，请问是张先生本人吗」，
+#: 客户报的尾号跟这套售后假客户一个也对不上，340 条全部卡在 IDENTITY。
+#: 新增场景批次时在这里登记；没登记的一律按默认场景跑。
+SCENE_OF_FILE = {
+    "adversarial_c4_": "pop_reject",
+}
+
+
+def scene_of_file(path):
+    name = os.path.basename(path)
+    for prefix, sc in SCENE_OF_FILE.items():
+        if name.startswith(prefix):
+            return sc
+    return ""
+
+
 import run_eval as R                       # noqa: E402  复用跑批与临时库隔离
 
 CASES_DIR = os.path.join(R._ROOT, "eval")
@@ -315,11 +353,85 @@ def build_parser():
                    help="平均通过率下限（0~1）；低于则退出码 1，用于 CI 卡口")
     p.add_argument("--no-report", action="store_true", help="只打印，不落盘")
     p.add_argument("--quiet", action="store_true", help="只打印汇总行")
+    # 场景必须在 import run_eval 之前定下来，所以它只是在这里"被认识"，
+    # 真正的生效靠模块顶部的 _prescan_scene 读 sys.argv（见那里的注释）。
+    p.add_argument("--scene", default=None,
+                   help="场景名（如 pop_reject）。不传 = config/scene.json 的默认场景")
+    p.add_argument("--all-scenes", action="store_true",
+                   help="按场景分批各跑一遍并汇总（CI 用这个，避免跨场景互相污染）")
     return p
+
+
+def run_all_scenes(args):
+    """按场景分批各跑一遍，再把结果汇总成一行。
+
+    为什么非得起子进程：场景在 `import app` 时就定死了，同一个进程里切不回来。
+    汇总口径用 **总通过数 / 总用例数**，不是各批通过率的平均——
+    340 条和 34 条不能等权，等权会让小样本主导结论（这正是
+    `docs/06` 第 7 节点过的"分母变了分数就没法比"）。
+    """
+    import glob
+    import re
+    import subprocess
+
+    files = sorted(glob.glob(os.path.join(CASES_DIR, "adversarial*.json")))
+    scenes = []
+    for path in files:
+        sc = scene_of_file(path)
+        if sc not in scenes:
+            scenes.append(sc)
+
+    total = 0
+    passed = 0
+    broken = []
+    for sc in scenes:
+        # 故意不加 --quiet：quiet 会把「第 N 轮：通过 x/y」也压掉，
+        # 只剩一个「平均通过率 91.2%」，那个百分比四舍五入过，
+        # 反推通过数会把小样本算错。宁可多抓几行再自己过滤。
+        cmd = [sys.executable, os.path.abspath(__file__),
+               "--rounds", str(args.rounds), "--no-report"]
+        if sc:
+            cmd += ["--scene", sc]
+        proc = subprocess.run(cmd, cwd=R._ROOT, capture_output=True,
+                              text=True, timeout=3600)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        print("=" * 74)
+        print("场景：%s" % (sc or "(默认)"))
+        print("=" * 74)
+        keep = ("轮：通过", "轮: 通过", "平均通过率", "对抗测试：", "跳过", "场景：")
+        shown = [ln for ln in out.splitlines() if any(k in ln for k in keep)]
+        print("\n".join(shown) if shown else (out.strip() or "(无输出)"))
+        hits = re.findall(r"轮[：:]\s*通过\s*(\d+)/(\d+)", out)
+        if hits:
+            p, n = hits[-1]
+            passed += int(p)
+            total += int(n)
+        else:
+            broken.append(sc or "(默认)")
+
+    print("=" * 74)
+    if total:
+        print("全部场景汇总：%d/%d = %.1f%%" % (passed, total, 100.0 * passed / total))
+    if broken:
+        print("以下场景没有产出可解析的结果，先看上面的原始输出：%s" % "、".join(broken))
+        return 1
+    if args.fail_under is not None and total and (passed / float(total)) < args.fail_under:
+        print("低于 --fail-under %.2f" % args.fail_under)
+        return 1
+    return 0
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+
+    if args.all_scenes:
+        # --cases 是"只跑这一份"，--all-scenes 是"按场景全都跑一遍"，语义互斥。
+        # 静默忽略其中一个会让 CI 以为跑了全套、实际只跑了一份。
+        if args.cases:
+            print("--all-scenes 不能和 --cases 同时用：前者按场景跑全部批次，后者只跑指定用例",
+                  file=sys.stderr)
+            return 2
+        return run_all_scenes(args)
 
     if args.rounds < 1:
         print("--rounds 至少为 1", file=sys.stderr)
@@ -331,18 +443,52 @@ def main(argv=None):
     try:
         if args.cases:
             cases = load_cases(args.cases)
+            _skipped = []
         else:
-            # 默认合并 eval/adversarial*.json：10 条基础集 + 12 条 1106 缺陷集。
-            # 分开存是为了"哪一批是回归防线"一眼可辨，跑的时候合在一起才不漏。
+            # 默认合并 eval/adversarial*.json，但**只取属于当前场景的那几批**。
+            # 全都合进来是 11-09 那次 8.3% 的直接原因：340 条 POP 关单场景用例
+            # 混进售后场景跑，开场话术、假客户、核身凭证全是另一套，
+            # 全部卡在 IDENTITY，看起来像"系统很差"，实际是用例跑错了场景。
+            # 分开存是为了"哪一批是回归防线"一眼可辨，按场景取才不会互相污染。
             import glob
             files = sorted(glob.glob(os.path.join(CASES_DIR, "adversarial*.json")))
             cases = []
+            _skipped = []
             for path in files:
+                want = scene_of_file(path)
+                if want != _SCENE:
+                    _skipped.append((os.path.basename(path), want or "(默认)"))
+                    continue
                 cases.extend(load_cases(path))
-            validate_cases(cases)
     except CaseError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+
+    if not cases:
+        # 场景名拼错 / 新批次没登记时，过滤后会是空集。先于 validate_cases 判：
+        # 那个校验只会说「当前是 list」，看不出是场景没对上。
+        print("没有属于场景 %s 的用例：检查 --scene 拼写，或把新批次登记到 "
+              "SCENE_OF_FILE（当前登记：%s）"
+              % (_SCENE or "(默认)", "、".join("%s→%s" % kv for kv in SCENE_OF_FILE.items())
+                 or "无"), file=sys.stderr)
+        return 2
+
+    try:
+        validate_cases(cases)
+    except CaseError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    if _skipped and not args.quiet:
+        print("场景：%s（跳过 %d 批不属于本场景的用例集）"
+              % (_SCENE or "(默认)", len(_skipped)))
+        for name, want in _skipped:
+            if want == "(默认)":
+                # `--scene <默认>` 不是一条能敲的命令：默认场景就是不传 --scene。
+                print("  跳过 %-34s 属于默认场景，请不带 --scene 单独跑" % name)
+            else:
+                print("  跳过 %-34s 属于 %s，请用 --scene %s 单独跑"
+                      % (name, want, want))
 
     case_map = {c["id"]: c for c in cases}
     if not args.quiet:

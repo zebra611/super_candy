@@ -664,9 +664,12 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     # 核身问句不整体冻结：它要冻结的是**措辞层改写**（nlg，见上），
     # 而性格层只删句首"好的，"这类客套、不动指代与事实。
     # 官方原话 / 挂断 / 出错话术则全冻结，连形式都不动。
-    # 收尾那一轮（next_stage=DONE）也冻结：11-10 实测 A01/A17 播成
-    # 「…感谢您的配合，再见。我放慢一点说。」——告别语后面挂一句补救语，
-    # 逻辑上说不通，而且这是整通电话最后一句话，客户一定听见。
+    # 收尾那一轮（next_stage=DONE）也算挂断话术，必须一起冻结：
+    # 11-09 线上 A01、11-10 对抗 A01/A17 都播成「…感谢您的配合，再见。
+    # 我放慢一点说。」——客户已经说清楚了还要"放慢一点说"，逻辑上说不通，
+    # 而且这是整通电话最后一句话，客户一定听见，比中间任何一轮都刺眼。
+    # 旧判据只看 end_reason 与 intent：正常闭环的 end_reason 是空串（闭环不是
+    # 异常结束），intent 又是 consent，两条都不命中，所以漏了。
     _persona_freeze = (bool(end_reason) or intent in ("error", "empty")
                        or _freeze_official or str(next_stage or "") == "DONE")
     text, _persona_applied = persona.adapt(
@@ -2376,10 +2379,12 @@ def _stage_offer(session, text, flags):
     # 客户只好一遍遍重复要求，客服一遍遍说确认不到（A01 第 4~7 轮、A04 第 7 轮）。
     # 正确动作是把刚才讲过的内容再说一遍——修复请求要的是复述，不是答案。
     #
-    # 两个守卫（11-10 打开 OFFER 时补的，缺一个就会把别的路径搞坏）：
-    #   1. 明确拒绝/挂断优先："没听清，不过不要了"要记拒绝，不能拿复述糊过去；
-    #   2. 同一句里带实义提问就不要抢："啊？我没听清，那到底要补什么"问的是材料，
-    #      复述整段驳回原因等于不回答（打开开关前实测 no_answer 3→5 就是这两条）。
+    # 两个守卫（缺一个就会把别的路径搞坏）：
+    #   1. 明确拒绝/挂断优先："没听清，不要了"要的是挂断，不是再听一遍；
+    #      不加守卫时"我不是说了吗，不要了"会被复述分支拦走，整个会话不回写、
+    #      继续留在 OFFER，该记的"拒绝"没记。
+    #   2. 同一句里带实义提问不要抢："啊？我没听清，那到底要补什么"问的是材料，
+    #      复述整段驳回原因等于不回答（打开开关前实测 no_answer 3→5）。
     if (policy.repair_enabled("OFFER") and policy.is_repair_request(text)
             and not (flags.get("no") or flags.get("deny") or flags.get("hangup"))
             and not policy.question_class(text)):
