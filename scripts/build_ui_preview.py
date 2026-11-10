@@ -69,12 +69,12 @@ def build(html, items):
     end = html.index("let cur=", start)
     html = html[:start] + js + html[end + html[end:].index(";\n") + 2:]
 
-    # 首屏 <img src> 也换成内联，避免 JS 未执行时空白
-    first = groups["f"][0]["img"] if groups["f"] else groups["m"][0]["img"]
-    # 模板里的首屏 src 可能带序号也可能不带（avatar-f.jpg / avatar-f1.jpg），
-    # 两种都要替换，否则 JS 未执行时首屏会露一个 404。
-    # 首屏 src 统一换成 1px 占位：真图由 renderStaff() 立刻填入。
-    # 直接把 base64 塞进两个 <img> 会让同一张图在文件里存三份（多 180KB）。
+    # 首屏 src 换成 1px 占位（不是内联真图）：
+    #   - 模板里两个 <img> 的 src 可能带序号也可能不带（avatar-f.jpg / avatar-f1.jpg），
+    #     两种都要替换，否则本地打开时首屏会露一个 404；
+    #   - 真图由 renderStaff() 在首帧填入，所以代价是「JS 关闭时首屏没有头像」；
+    #   - 把 base64 直接写进两个 <img> 会让同一张图在文件里存三份（多 180KB）。
+    # 这三条是同一个取舍，别再往注释里加「避免 JS 未执行时空白」——那与实现相反。
     placeholder = "data:image/gif;base64,R0lGODlhAQABAAAAACw="
     html = re.sub(r'src="assets/avatar-[fm]\d*\.jpg"', 'src="%s"' % placeholder, html)
     return html
@@ -90,7 +90,10 @@ def main(argv=None):
     items = load_manifest()
     out = build(html, items)
 
-    with open(args.out, "w", encoding="utf-8") as f:
+    # newline="\n" 不能省：Windows 下文本模式会把 \n 翻成 \r\n，重建一次整个文件
+    # 1447 行全变（372660→373107 字节），库里那份（LF）立刻显示为已修改，
+    # 而 preview.html 是 364KB 的生成物，无意义 diff 会把真正的改动埋掉。
+    with open(args.out, "w", encoding="utf-8", newline="\n") as f:
         f.write(out)
     print("生成 %s（%d 位客服，%.0f KB）"
           % (os.path.relpath(args.out, ROOT), len(items), len(out.encode()) / 1024.0))
