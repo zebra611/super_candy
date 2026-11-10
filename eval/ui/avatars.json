@@ -1,0 +1,34 @@
+{
+  "_comment": "双端界面的客服头像清单。img 指向 eval/ui/assets 下的文件；build_ui_preview.py 会把它们内联成 base64，产出单文件预览。has_headset 用来区分'在岗形象'与'品牌形象'，答辩时可以两种并存。",
+  "_version": "v1",
+  "avatars": [
+    {
+      "id": "F1", "gender": "f", "name": "小彩", "file": "avatar-f1.jpg",
+      "age": 26, "has_headset": false,
+      "traits": ["温和", "稳定", "品牌形象"],
+      "suitable_for": "常规回访、品牌露出",
+      "note": "长发、白衬衫 + 红蝴蝶结，抿嘴浅笑，不与客户抢注意力"
+    },
+    {
+      "id": "F2", "gender": "f", "name": "小雅", "file": "avatar-f2.jpg",
+      "age": 23, "has_headset": true,
+      "traits": ["阳光", "年轻", "在岗"],
+      "suitable_for": "年轻客户、轻松场景",
+      "note": "耳麦 + 红蝴蝶结，露齿笑且嘴角对称、直视镜头，避免'奸诈感'"
+    },
+    {
+      "id": "M1", "gender": "m", "name": "小川", "file": "avatar-m1.jpg",
+      "age": 29, "has_headset": false,
+      "traits": ["稳重", "亲和", "品牌形象"],
+      "suitable_for": "常规回访、投诉安抚",
+      "note": "短发、白衬衫 + 红挂绳，露齿笑，声音形象偏低沉时可配"
+    },
+    {
+      "id": "M2", "gender": "m", "name": "小航", "file": "avatar-m2.jpg",
+      "age": 23, "has_headset": true,
+      "traits": ["年轻", "清爽", "在岗"],
+      "suitable_for": "学生与年轻商家、轻业务",
+      "note": "耳麦 + 碎发，笑眼，与 F2 同属'在岗'一档，风格统一"
+    }
+  ]
+}
