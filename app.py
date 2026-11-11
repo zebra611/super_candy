@@ -979,6 +979,15 @@ def start_call(application_id=None, random_target=False):
         _tg = {"found": False}
     if _tg.get("found") and _tg.get("application"):
         sess["outbound_target"] = _tg["application"]
+    # 这一通"打给谁"是不是**外部明确指定**的。
+    #
+    # 指定了（运营挑了这一单 / 训练回放复测）→ 目标锁定：核身只能跟这一单比，
+    #   客户报一个别家的尾号绝不许换成别人家的档案（11-11 截图那通：
+    #   客户随口说 9673，命中了青海梧丘，客服接着念"梧冈品牌、运动户外类目、
+    #   需补境外商标注册证"——电话打给降真，说的是梧丘的事）。
+    # 没指定（跑批/自练按名单取下一条）→ 不锁定：客户报的号就是"我是谁"，
+    #   查库找到谁就是谁。C4 那 340 条用例全是这么跑的（用例自带台词"尾号4565"）。
+    sess["target_locked"] = bool(application_id)
     sess["read_token"] = secrets.token_urlsafe(12)
     sess["created_ts"] = time.time()
     sess["last_active_ts"] = time.time()

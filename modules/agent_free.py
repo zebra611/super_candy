@@ -91,6 +91,12 @@ _SYSTEM = (
     "2. 不许承诺「一定能通过」「帮您免除」这类结果；\n"
     "3. 不许索要完整身份证号、银行卡号、密码、验证码；只核对手机号后四位；\n"
     "4. 不许重复上一轮已经说过的话，要接着客户刚说的那句往下说；\n"
+    "4b. **核身通过之前**，绝对不能把客户的手机尾号、申请单号、姓名念出来"
+    "（那正是要核的东西）；也不能说「对上了」——客户还没报；\n"
+    "4c. **任何时候都不要叫客户的姓名**（不许写「张伟，您……」这种开头，也不许叫"
+    "「张经理」）。接电话的人不一定是档案里那位联系人——可能是同事、前台、"
+    "甚至打错了的人；核身对上的是「这通电话打对了单」，不是「接电话的人叫这个名字」。"
+    "一律用「您」；只有客户本条消息里自己报了这个名字，才可以复述一次；\n"
     "5. **只有客户本条消息里**报了核对信息（尾号/单号/姓名），才先用半句确认"
     "（比如「尾号9403，对上了」），再往下说；不要从档案里挑一个值假装是客户刚说的，"
     "也不要把同一句确认说第二遍；\n"
@@ -98,10 +104,14 @@ _SYSTEM = (
     "只有在你完整复述了要点、确实需要对方确认时才问；\n"
     "7. 同一个问题客户问第二遍，回答要比第一遍**短**，只补他没听清的那部分，"
     "不要再把整段材料清单念一遍；\n"
-    "8. 客户问「你哪来的号码」「你是谁」「是不是骗子」时，就答：这是您提交申请时预留的"
+    "8. 客户问「怎么补」「补哪些」「在哪提交」「后台哪个入口」时，直接答："
+    "驳回原因 + 要补哪几样 + 到商家后台的资质审核页重新提交。"
+    "**不要反问**「您是想让我再讲一遍吗」，也不要说「确认不到」——"
+    "这三件事档案里都写着；\n"
+    "9. 客户问「你哪来的号码」「你是谁」「是不是骗子」时，就答：这是您提交申请时预留的"
     "联系方式，我们是京东官方审核，只用于核对这笔资质申请，不会外传。**不许说**"
     "「我确认不到」「没法确认」这类话——这些事档案里就有答案；\n"
-    "9. 只输出你要说的那句话本身。不要解释、不要加引号、不要加「客服：」、不要分点。\n"
+    "10. 只输出你要说的那句话本身。不要解释、不要加引号、不要加「客服：」、不要分点。\n"
     "长度：一到两句，不超过 80 字。"
 )
 
@@ -131,6 +141,14 @@ def enabled():
 
 
 _LINES_CACHE = {}
+
+
+def _agent_cfg():
+    """`agent` 配置块。读失败就当空表——外呼里不许因为读配置把这一句弄丢。"""
+    try:
+        return config_loader.load().get("agent") or {}
+    except Exception:
+        return {}
 
 
 def _lines():
@@ -234,24 +252,22 @@ def reply(session, user_text, flags, stage, base_text, official="", must=None):
         got = _replay(stage, user_text)
         if not got:
             return None
+        got = _drop_name_call(got, session)
+        if not got:
+            return None
         return _gates(session, got, base_text, stage, must, official, user_text)
 
     if not enabled() or not llm.available():
         return None
 
-    # 硬要素轮次交回骨架，不让模型碰。
+    # 这里原来是「骨架里含必答词就交回骨架」。**这条是错的**：
+    # 必答词是"核对""重新提交""复述"这种业务常用词，几乎每条骨架都有，
+    # 结果整通电话只有零星两三轮交给模型，客户听到的还是骨架。
+    # 用户看完自己在页面上打的那通，问的是"你真的接入大模型了吗"——
+    # 11-11 实测：13 轮里模型只说 2 轮。
     #
-    # 赛题四段式里那些「必须说到」的话（"复述"、"没有通过审核"、"核对"）是
-    # 合规要求，必须能逐字追溯到配置。第一版把这几个词做成**输出必须包含**的
-    # 闸门，结果 CONFIRM 的每一轮都被拦——模型说「您这三样材料——授权书、
-    # 链路证明、营业执照，清楚怎么准备了吗」，意思一字不差，就是没有"复述"
-    # 这两个字。**判据卡的是词，不是意思**，这是规则层最容易犯的错。
-    #
-    # 正确的切分：骨架本来就承担硬要素的那一轮（骨架里含这几个词）就用骨架，
-    # 骨架不承担要素的轮次（追问、答来源、接障碍、认复读）才交给模型自由说。
-    if must and any(w in base_text for w in must):
-        return None
-
+    # 正确做法不是"有硬要素就不让模型说"，而是**让模型说、再检查要素在不在**
+    # （第 7 道闸门 _content_ok）。判据从"骨架含不含词"换成"输出有没有这件事"。
     must = _must_say(stage)
     prompt = (
         "【本环节】%s\n【本环节目标】%s\n【本环节必须说到】%s\n"
@@ -269,15 +285,33 @@ def reply(session, user_text, flags, stage, base_text, official="", must=None):
 
     meta = llm.chat([{"role": "system", "content": _SYSTEM},
                      {"role": "user", "content": prompt}],
-                    temperature=0.5, max_tokens=200, timeout=2.5,
+                    model=(os.environ.get("AGENT_FREE_MODEL") or "").strip()
+                          or _agent_cfg().get("model") or "qwen-flash",
+                    temperature=0.5, max_tokens=120,
+                    # 这条路径在**主链路上**，客户在电话那头等着。
+                    # 11-11 实测：qwen-plus P50 832ms / P95 1010ms，
+                    # qwen-flash P50 425ms；同一句话、同样的闸门，
+                    # 这一层要的是"一句话说对"，不是"想得深"。
+                    # 超时从 2.5s 收到配置值（默认 1.5s），并且**不重试**：
+                    # 首问超时再等 0.6s 重试一次，最坏 5.6s，页面上的
+                    # P95 2289ms / 超时 1 就是这么来的。说不出来就让骨架说。
+                    timeout=float(_agent_cfg().get("timeout_ms") or 1500) / 1000.0,
+                    retries=int(_agent_cfg().get("retries") or 0),
                     tag="agent_free")
     if not meta.get("ok"):
+        # 记下"模型这一轮没接上，原因是超时/限流"，别让它看起来像"骨架就是答案"。
+        session["agent_free_reject"] = "llm:%s" % (str(meta.get("error") or "fail")[:34])
         return None
 
     text = _clean(meta.get("text") or "", 80)
+    session["agent_free_raw"] = text
     if not text:
+        session["agent_free_reject"] = "empty"
         return None
     text = _drop_invented_ack(text, user_text)
+    if not text:
+        return None
+    text = _drop_name_call(text, session)
     if not text:
         return None
     return _gates(session, text, base_text, stage, must, official, user_text)
@@ -326,42 +360,199 @@ def _clean(text, max_chars=80):
     return out.strip()
 
 
+#: 每个环节"必须表达到的意思"。这是**语义**判据，不是逐字匹配——
+#: 合规要求是"这一轮要说清是什么事"，不是"必须出现'复述'二字"。
+def _bigrams(t):
+    cn = re.sub(r"[^\u4e00-\u9fff]", "", t or "")
+    return {cn[i:i + 2] for i in range(len(cn) - 1)}
+
+
+def _leaks_secret(session, text):
+    """核身还没过，就把档案里的核对值念出来——这是**嘴漏**。
+
+    11-11 实测（截图那通）：客户还没报号，模型连着说
+    「您预留的手机号后四位是9403，对上了」「申请时预留手机号后四位是9403」。
+    两个问题叠在一起：
+      1. 客户一个字都没确认，客服说"对上了"——无中生有的确认；
+      2. **把核身答案念给了对方**。核身问的就是这个值，先念出来等于自己把门打开，
+         之后谁接电话都能对上。
+    这条闸不看句子结构，只看"核身通过前，档案里的尾号/单号有没有出现在话里"。
+    """
+    slots = (session or {}).get("slots") or {}
+    if slots.get("identity_confirmed"):
+        return False
+    rec = (session or {}).get("outbound_target") or {}
+    tail = re.sub(r"\D", "", str(rec.get("phone_tail") or ""))[-4:]
+    app_id = re.sub(r"[^0-9A-Za-z]", "", str(rec.get("application_id") or ""))
+    if tail and tail in (text or ""):
+        return True
+    # 单号后六位也算（模型爱说"申请单号后六位是060019"）。
+    if len(app_id) >= 6 and app_id[-6:] in (text or ""):
+        return True
+    return False
+
+
+def _same_topic(base, text):
+    """说的是不是同一件事。
+
+    以前这里调 `agent_llm._same_intent`：从骨架里挑出业务动词，要求输出命中
+    同一个。实测太脆——骨架「…我按公司名核一遍，一样能确认是您这单」，
+    模型说「…我核一下是不是您这单」：意思完全一样，但骨架里的动词是"确认"，
+    模型用的是"核一下"，不命中，整句被丢。**这是判据挑词，不是判语义。**
+
+    改成 2 字词重合度：同一件事的两种说法，重合度普遍在 0.2 以上；
+    真换个话题（材料清单 → 收费标准）会掉到 0.1 以下。
+    门槛 0.15 是留了余量：短句（"不着急，您直接说公司全名"）本身词少。
+    """
+    b, t = _bigrams(base), _bigrams(text)
+    if not b or not t:
+        return True
+    return len(b & t) / float(len(b | t)) >= 0.15
+
+
+_MATERIAL_FALLBACK = ("材料", "授权书", "译本", "公证", "营业执照", "商标", "证明")
+
+
+def _materials(session):
+    rec = (session or {}).get("outbound_target") or {}
+    return [str(m) for m in (rec.get("required_materials") or []) if m]
+
+
+def _content_ok(stage, text, session):
+    """这一轮该说清的事，说清了没有。
+
+    只守**合规要素**（自报身份、核身问句、驳回原因、材料、确认），不守措辞。
+    缺了就让骨架说——骨架在这些轮次上是备好的合规话术，比模型漏说要安全。
+    """
+    t = text or ""
+    if not t:
+        return False
+    if stage == "GREETING":
+        # 自报身份：得说清是京东的资质审核，不能只说"您好"。
+        return ("审核" in t) and ("京东" in t or "商家" in t or "资质" in t)
+    if stage == "IDENTITY":
+        # 核身：必须真的问了一样能核对的东西。
+        return any(w in t for w in ("后四位", "尾号", "四位", "姓名",
+                                    "公司名", "公司全名", "全名", "单号"))
+    if stage == "NEED":
+        # 驳回原因：得说出"为什么没过"。
+        return any(w in t for w in ("驳回", "没有通过", "未通过", "没通过",
+                                    "缺少", "不一致", "不通过", "原因"))
+    if stage == "OFFER":
+        # 方案：得说到材料或提交动作，不能空谈。
+        mats = _materials(session)
+        return any(m in t for m in mats) or any(
+            w in t for w in _MATERIAL_FALLBACK + ("后台", "重新提交", "补齐"))
+    if stage == "CONFIRM":
+        # 确认：要么复述了材料/原因，要么明确请对方表态。
+        mats = _materials(session)
+        return (any(m in t for m in mats)
+                or any(w in t for w in ("清楚", "确认", "同意", "明白", "材料", "不需要")))
+    if stage in ("WRITEBACK", "DONE"):
+        return any(w in t for w in ("记录", "登记", "短信", "再见", "后台", "同步"))
+    return True
+
+
+def _drop_name_call(text, session):
+    """把「晏青梧，您……」改回「您……」——不许直呼客户姓名。
+
+    11-11 线上实录（截图那通）：客户说完「好吧」，客服开口是
+    「晏青梧，您简单回我一句清楚了或者还有疑问就行」。两个问题：
+
+      1. **凭什么叫名字**。核身对上的是「这个号码对应这笔单」，不是
+         「接电话的人叫晏青梧」。接电话的可能是同事、前台，也可能是
+         打错了以后顺手接的人——这时候把档案里的联系人姓名念出来，
+         既是称呼错人，也是把客户的姓名白送给了不确定的对方。
+      2. 名字一喊，整句听起来像"我们已经很熟了"，而这一通电话只是核对单子。
+
+    只在**称呼位置**删（句首、句中标点后、句尾），不动句子里的其他内容：
+    客户自己刚报过名字时，模型复述一次是合理的（那属于承接他给的值），
+    但"叫名字"这个动作一次都不要有。
+    """
+    nm = str(((session or {}).get("outbound_target") or {}).get("contact_name") or "").strip()
+    if len(nm) < 2:
+        return text
+    forms = {nm}
+    # 「晏经理」「晏总」：模型很爱把联系人自动升级成职务称呼，同样不许。
+    for title in ("经理", "总", "老板", "老师", "女士", "先生"):
+        forms.add(nm[0] + title)
+    t = text
+    for f in sorted(forms, key=len, reverse=True):
+        ef = re.escape(f)
+        t = re.sub(r"^\s*%s\s*[，,、]\s*" % ef, "", t)          # 句首
+        t = re.sub(r"([，。；！？、])\s*%s\s*[，,、]\s*" % ef, r"\1", t)
+        t = re.sub(r"[，,、]\s*%s\s*([。！？]|$)" % ef, r"\1", t)  # 句尾
+    return t.lstrip("，,、 ")
+
+
 def _gates(session, text, base_text, stage, must, official, user_text=""):
-    """五道闸门。任何一道不过就返回 None，让调用方退回骨架。
+    """七道闸门。任何一道不过就返回 None，让调用方退回骨架。
 
     这些判据都是 `nlg` 里已经跑了几百次的那几条，不另写一套——
     同一件事两套判据，迟早会分裂成两种口径。
+
+    每道拒绝都写进 `session["agent_free_reject"]`（原因码）+ `agent_free_raw`
+    （模型原话）。没有这两个字段，出问题只能看到"这一句是骨架"，看不出
+    "模型说了什么、被哪道拦的"——11-11 用户问"你到底接入大模型了吗"，
+    当时就是回答不了这个问题。
     """
     # 1) 事实闸：不许出现档案与官方口径之外的数字。
-    sources = "\n".join([base_text, _facts(session), official or ""])
+    # 客户这条消息本身也是事实来源：客户说"9670"，纠正当"您说的9670和
+    # 预留的9403对不上"——这不是编数字，是把他刚说的话还回去。
+    # 不把 user_text 算进来，模型只要一提客户报的号就被判"编造"，
+    # 结果只能说一句含糊的"没关系，那方便说一下您的姓名吗"。
+    sources = "\n".join([base_text, _facts(session), official or "", user_text or ""])
     if not nlg._facts_ok(sources, text):
+        session["agent_free_reject"] = "facts"
         return None
     # 2) 禁语闸
     if any(w in text for w in _BANNED):
+        session["agent_free_reject"] = "banned"
         return None
     # 3) 长度闸：太短等于把这一轮的信息丢了，太长外呼里听不下去。
     if not (8 <= len(text) <= 80):
+        session["agent_free_reject"] = "length"
         return None
     # 4) 重复闸：最近几轮说过的话不许再说一遍。
     #    只比上一轮不够——第一版模型连着四轮都以「尾号9403，对上了」开头，
     #    每轮都不是"和上一轮逐字相同"，但客户听到的是同一句复读四遍。
     #    相似度过 0.75 就算说过（同一句话换个标点不算新话）。
     import difflib
+    # 自己记一份"模型最近说过的句子"。原来只读 session["memory"]["recent"]，
+    # 而 /api/turn 这条链路上 memory 没被维护，等于去重闸常年空转——
+    # 11-11 实测第 11 轮和第 13 轮说了逐字相同的一句话，闸门没拦住。
     recent = [session.get("last_reply_text") or ""]
+    recent.extend((session.get("agent_free_recent") or [])[-5:])
     for row in ((session.get("memory") or {}).get("recent") or [])[-5:]:
         recent.append(str(row.get("agent") or ""))
     for prev in recent:
         if prev and difflib.SequenceMatcher(None, prev, text).ratio() >= 0.75:
+            session["agent_free_reject"] = "repeat"
             return None
     # 5) 跑题闸：这一轮要表达的意思，模型不能换成另一件事。
     #    不用 must_say 逐字比对（那是"卡词不卡意思"，第一版就是这么把
     #    整通 CONFIRM 拦光的）：改用骨架与输出的动词重合度，
     #    骨架说"接住页面打不开"，模型说"材料清单我同步到后台"——算同一件事；
     #    骨架说"确认材料"，模型开始讲收费标准——这就拦下。
-    from modules import agent_llm
-    if not agent_llm._same_intent(base_text, text):
+    if not _same_topic(base_text, text):
+        session["agent_free_reject"] = "intent"
         return None
     # 6) 结尾不许挂半句标点（TTS 会把"、"念成停顿，听起来像断线）。
     if re.search(r"[、，；]$", text):
+        session["agent_free_reject"] = "punct"
         return None
+    # 7) 内容闸：这一环节该说清的事（自报身份/核身问句/驳回原因/材料/确认）
+    #    说清了没有。这是"硬要素"的正确落法——不靠骨架含不含词，
+    #    只看说出来的这句话有没有这件事。
+    # 8) 嘴漏闸：核身没过就不许念档案里的核对值（见 _leaks_secret）。
+    if _leaks_secret(session, text):
+        session["agent_free_reject"] = "secret"
+        return None
+    if not _content_ok(stage, text, session):
+        session["agent_free_reject"] = "content"
+        return None
+    session["agent_free_reject"] = ""
+    _hist = list(session.get("agent_free_recent") or [])
+    _hist.append(text)
+    session["agent_free_recent"] = _hist[-8:]
     return text

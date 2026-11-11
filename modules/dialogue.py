@@ -657,8 +657,15 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     # 说不出来（超时/编数字/少说必答要素/和上一轮重复）就返回 None，
     # 下面照旧走骨架 + 措辞层，行为与接入前一致。
     _free = None
+    # 注意：这里**不再排除 _freeze_identity**。
+    # 核身问句以前整轮冻结，理由是"指代必须固定"；实测代价太大——一整通电话
+    # 大部分轮次都在核身，冻结等于模型从头到尾不说话（11-11 截图那通 13 轮里
+    # 模型只说 2 轮，用户因此问"你真的接入大模型了吗"）。
+    # 现在的做法：让模型说，但由 agent_free 的内容闸确保它**确实问了**一样能
+    # 核对的东西（后四位/尾号/姓名/单号），说不出来就退回骨架。
+    # _freeze_identity 仍然作用于下面 nlg 那条改写路径：骨架自己那句不许改。
     if (not end_reason and intent not in ("error", "empty")
-            and not _freeze_identity and not _freeze_official):
+            and not _freeze_official):
         try:
             from modules import agent_free
             _free = agent_free.reply(
@@ -704,6 +711,13 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
                        or _freeze_official or str(next_stage or "") == "DONE")
     text, _persona_applied = persona.adapt(
         session, text, stage_now, freeze=_persona_freeze)
+    # 骨架复读：同一句话连着说两遍，客户听到的就是"它根本没在听"。
+    # 11-11 截图那通：客户「你不是知道吗？」「到底要补啥」两轮，客服逐字
+    # 回了两遍「您可以简单回我一句清楚了或者还有疑问就行」。
+    # 模型层有跨轮去重（agent_free 第 4 道闸门），骨架没有——骨架是查表查出来的，
+    # 同一个状态自然查同一句，连着两轮状态没动，就原样播两遍。
+    if not _free and text and text == session.get("last_reply_text"):
+        text = _skeleton_variant(session, text, stage_now, end_reason)
     # 记的是**实际播出去**的那句（含适配后的引导语），下一轮判重复才准。
     session["last_reply_text"] = text
 
@@ -748,6 +762,23 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
             "score": qa_hit.get("score", 0),
         }
     return out
+
+
+#: 骨架复读时的换说法前缀。只换开头，不改内容——骨架的内容是配置里的合规话术，
+#: 不能为了"听起来不重复"去改它说的事。
+_SKELETON_VARIANTS = ("我刚才可能没说清楚，", "换个说法，", "我再说一遍，")
+
+
+def _skeleton_variant(session, text, stage, end_reason):
+    """骨架要说的话和上一句逐字相同：换一个开头，别原样播两遍。
+
+    收线话术与 DONE 轮不换：那是整通最后一句，改动只会有损。
+    """
+    if end_reason or str(stage or "") == "DONE":
+        return text
+    n = int(session.get("skeleton_variant_n", 0))
+    session["skeleton_variant_n"] = n + 1
+    return _SKELETON_VARIANTS[n % len(_SKELETON_VARIANTS)] + text
 
 
 def _soothe(text, flags):
@@ -1577,6 +1608,90 @@ def _take_identity_slots(session, text, flags):
     return took
 
 
+def _only_digits(v):
+    return re.sub(r"\D", "", str(v or ""))
+
+
+def _outbound_record(session):
+    """这通电话**打给谁**。有意料外呼目标（带申请单号）才返回，否则 None。"""
+    tgt = session.get("outbound_target") or {}
+    return tgt if tgt.get("application_id") else None
+
+
+def _matches_outbound(rec, slot, val):
+    """客户报的这句话，是不是这一单的。"""
+    v = str(val or "").strip()
+    if not v:
+        return False
+    if slot == "tail":
+        d = _only_digits(v)
+        return bool(d) and d[-4:] == _only_digits(rec.get("phone_tail") or rec.get("verify_by_tail"))[-4:]
+    if slot == "application_id":
+        def _norm(x):
+            return re.sub(r"[^0-9A-Za-z]", "", str(x or "")).upper()
+        a, b = _norm(v), _norm(rec.get("application_id"))
+        return bool(a and b) and (a == b or a.endswith(b) or b.endswith(a))
+    if slot == "company":
+        c = str(rec.get("company_name") or "")
+        short = str(rec.get("company_short_name") or "")
+        return bool(c) and (v in c or c in v or (short and short in v))
+    if slot == "name":
+        n = str(rec.get("contact_name") or "")
+        return bool(n) and (v in n or n in v)
+    return False
+
+
+def _verify_against_outbound(session, rec):
+    """外呼单的核身：**只跟这一单比**，不查库。
+
+    11-11 线上实录（用户截图那通）：本单尾号是 9403，客户随口报了个 9673，
+    `tools.query_application("9673")` 命中了**另一家商户**（青海梧丘），
+    代码把 `slots.application` 直接换成了那家的档案。之后客服念的是
+    "梧冈品牌、运动户外类目、需补境外商标注册证"——说的全是别人的事，
+    而电话还打给降真百货。客户听到的就是"你听不懂我说什么"，
+    本质是**串单**，比听不懂严重得多：把 A 商家的驳回原因念给 B 听。
+
+    外呼单本来就知道自己打给谁，核身只该回答"是不是这一单"，
+    不该有"查出另一单"这个结果。查库只在先呼后找（没有外呼目标）时才需要。
+    """
+    tried = []
+    for slot in ("application_id", "tail", "name", "company"):
+        val = session["identity_slots"].get(slot)
+        if not val:
+            continue
+        if _matches_outbound(rec, slot, val):
+            session["slots"]["identity_confirmed"] = True
+            # 仍然是这一单：写回去的必须是 outbound_target，不许是查出来的记录。
+            session["slots"]["application"] = rec
+            session["slots"]["customer"] = {
+                "customer_id": rec.get("merchant_id"),
+                "name": rec.get("contact_name"),
+                "phone_tail": rec.get("phone_tail"),
+            }
+            session["slots"]["identity_via"] = slot
+            session["identity_slots"][slot] = ""
+            return rec
+        # 对不上：清掉这个值，下一轮重问。既不能"核上"，也不能去别家找。
+        tried.append((slot, val))
+        session["identity_slots"][slot] = ""
+        session["identity_mismatch"] = slot
+
+    # 本单对不上，再退回**客户库**查一次（只读）。
+    # 售后主场景的客户打进来报 "8866"，核的是售后客户档案（张伟），
+    # 跟外呼目标那条申请单不是一回事——这条路必须留着，否则主场景整通核不上
+    # （verify 证据 14 当场红）。
+    # 但**绝不查申请单库**：那正是串单的入口。客户报 9673 命中青海梧丘、
+    # slots.application 被换成那家，然后念别人家的驳回原因——就是这么来的。
+    for slot, val in tried:
+        hit = tools.query_customer(val) or {}
+        if hit.get("found"):
+            session["slots"]["identity_confirmed"] = True
+            session["slots"]["customer"] = hit.get("customer")
+            session["slots"]["identity_via"] = "customer:%s" % slot
+            return hit.get("customer")
+    return None
+
+
 def _verify_identity(session):
     """用当前槽位值查客户/申请单档案。核上返回档案，核不上返回 None。
 
@@ -1590,6 +1705,12 @@ def _verify_identity(session):
     # 无条件查申请单会让主场景的「错误尾号 1234」意外命中归档数据。
     use_app = bool(config_loader.load().get("application_mode"))
     session.pop("lookup_error", None)
+    # 外呼单：只跟本单比，绝不查库换单（见 _verify_against_outbound 的实录）。
+    #
+    if use_app and session.get("target_locked"):
+        _ob = _outbound_record(session)
+        if _ob:
+            return _verify_against_outbound(session, _ob)
     for slot in ("tail", "name", "company", "application_id"):
         val = session["identity_slots"].get(slot)
         if not val:
@@ -2066,6 +2187,13 @@ def _stage_greeting(session, text, flags):
     return _ask_identity(session, "tail", next_stage="IDENTITY")
 
 
+#: 核身最多耗几轮。超过就如实收尾，别把整通电话耗在"报一下尾号"上。
+#: 11-11 截图那通：客户报错两次号，之后连着 8 轮"哎妈呀/弄不明白/那歇歇"，
+#: 系统一直停在 IDENTITY 反复要尾号，直到轮次预算耗尽——客户听到的是
+#: "它只会问这一句"，而不是"它在办事"。
+_IDENTITY_MAX_TURNS = 8
+
+
 def _stage_identity(session, text, flags):
     """IDENTITY：核对身份。这是全流程的安全关口。
 
@@ -2078,6 +2206,20 @@ def _stage_identity(session, text, flags):
     _todo 真实实现要判"接电话的是不是本人"（声纹 / 关系人），
     现在只做到"信息对得上"。
     """
+    # 兜底：绕太多轮还没核上就如实收尾，不把整通电话耗在"报一下尾号"上。
+    # 11-11 截图那通：客户报错两次号，之后连着八轮"哎妈呀/弄不明白/那歇歇"，
+    # 系统一直停在 IDENTITY 反复要尾号，直到轮次预算用完——客户听到的是
+    # "它只会问这一句"，不是"它在办事"。
+    session["identity_turns"] = int(session.get("identity_turns", 0)) + 1
+    if (session["identity_turns"] > _IDENTITY_MAX_TURNS
+            and not session["slots"].get("identity_confirmed")):
+        # 不写工单——身份都没核上，写出去的业务结论没有意义（同 _lookup_failed）。
+        return _finish(
+            session,
+            config_loader.stage_config("IDENTITY").get("reply_too_many_tries")
+            or "咱们今天一直没对上，我不占用您时间了。稍后专员用官方号码联系您，"
+               "您也可以直接打官方客服 4006180092 核实，再见。",
+            "identity_failed")
     cfg = config_loader.stage_config("IDENTITY")
 
     if flags["deny"]:
@@ -2449,6 +2591,10 @@ def _stage_need(session, text, flags):
     有订单就说订单细节（可溯源），没订单就走通用回访话术。
     """
     cfg = config_loader.stage_config("NEED")
+    # 客户说"你不是知道吗""我说过了"——元话语，在说"你在问废话"。
+    # 必须先认账，不许落到 reply_unknown 回"这个我确认不到"。
+    if _meta_repeat(text):
+        return _meta_repeat_reply(session, cfg, flags, stay="NEED")
     app0 = session["slots"].get("application")
 
     # 只在第一次进入时查，避免每轮都打接口。
@@ -2582,6 +2728,40 @@ def _stage_need(session, text, flags):
                   next_stage="OFFER", intent="need")
 
 
+#: 客户在问"到底怎么补"。这是本环节的**基本问题**，答案就在本单档案里。
+_HOW_TO_SUBMIT_MARKS = ("怎么补", "如何补", "怎么提交", "怎么上传", "在哪提交",
+                        "哪里提交", "哪个入口", "在哪儿传", "怎么弄", "补哪些",
+                        "补什么", "要补什么", "补哪几样", "怎么重新提交")
+
+
+def _asks_how_to_submit(text):
+    return any(w in (text or "") for w in _HOW_TO_SUBMIT_MARKS)
+
+
+def _how_to_submit_reply(session, cfg, flags):
+    """把本单的驳回原因、要补哪几样、去哪儿提交，一次说清。
+
+    11-11 用户截图那通：客户连着问「怎么补」「你不是知道吗？」，
+    客服回「这个我这边确认不到，稍后让专员给您回电」——这两句话问的
+    恰恰是本环节唯一该答的事，而且答案就写在本单档案的
+    `reject_reason` / `required_materials` 里。答不上来不是"库里没有"，
+    是**把档案当成别人的事**。
+    """
+    app = _app_of(session)
+    reason = str(app.get("reject_reason") or "").strip()
+    mats = [str(m) for m in (app.get("required_materials") or []) if m]
+    if not reason and not mats:
+        return None
+    _def = ("驳回原因是%s，要补的是%s。您在商家后台的资质审核页重新提交就行，"
+            "不用跑线下。")
+    tpl = cfg.get("reply_how_to_submit") or _def
+    try:
+        line = tpl % (reason or "材料不符合要求", "、".join(mats) or "对应材料")
+    except Exception:
+        line = _def % (reason or "材料不符合要求", "、".join(mats) or "对应材料")
+    return _reply(session, _soothe(line, flags), intent="ask")
+
+
 def _stage_offer(session, text, flags):
     """OFFER：讲清方案与权益。
 
@@ -2594,6 +2774,8 @@ def _stage_offer(session, text, flags):
     替换完把 placeholder 改成 false。内容是否替换过，`scripts/kb_check.py` 会提示。
     """
     cfg = config_loader.stage_config("OFFER")
+    if _meta_repeat(text):
+        return _meta_repeat_reply(session, cfg, flags, stay="OFFER")
     # 进了 OFFER 就说明"这份权益"已经被提过一次，后面所有"那个""这个"都能落到它身上
     _note_referent(session, "benefit", "这份权益")
 
@@ -2728,6 +2910,11 @@ def _stage_offer(session, text, flags):
         _routed = _route_answer(session, cfg, "OFFER", text, flags)
         if _routed:
             return _routed
+        # 「怎么补」是本环节的基本问题，档案里就有答案，不许落到「确认不到」。
+        if _asks_how_to_submit(text):
+            _how = _how_to_submit_reply(session, cfg, flags)
+            if _how:
+                return _how
         return _reply(session, _soothe(cfg.get("reply_unknown", ""), flags), intent="ask")
 
     # 明确拒绝 → 回写（拒绝也留痕）
@@ -3032,14 +3219,20 @@ _META_REPEAT_MARKS = ("我刚才不是说了", "我刚不是说了", "刚才不�
                       # 只收"报过/说过/问过 + 遍数"，不收光秃秃的"多少遍"
                       # （"这要等多少遍"不是这个意思）。
                       "报过三遍", "报过几遍", "说过三遍", "说过几遍",
-                      "问过几遍", "问了三遍", "说了三遍")
+                      "问过几遍", "问了三遍", "说了三遍",
+                      # 11-11 线上复跑：NEED 里客户问完"怎么补"，客服答了，
+                      # 客户接着说「你不是知道吗？」——意思是"这些你本来就该知道"，
+                      # 旧词表没有这一条，落到 reply_unknown 回
+                      # 「您说的这个我确认不到，稍后让专员给您回电」。
+                      # 客户在说"你在问废话"，客服答"我不知道"，最刺人的一种答错。
+                      "你不是知道", "你不知道吗", "你们不是知道", "还用问")
 
 
 def _meta_repeat(text):
     return any(w in (text or "") for w in _META_REPEAT_MARKS)
 
 
-def _meta_repeat_reply(session, cfg, flags):
+def _meta_repeat_reply(session, cfg, flags, stay=None):
     """客户指出客服重复问：先认账，再**停止追问**。不许回「确认不到」。
 
     不能再挂「您也可以对照申请单编号核实」这类要信息型后缀——客户刚说
@@ -3057,8 +3250,10 @@ def _meta_repeat_reply(session, cfg, flags):
         or "确实问重了，我不问了。材料清单后台都能看到，您照着弄；"
            "有卡住的地方，您说一句我接着。",
     ]
+    # stay：NEED/OFFER 里认账时不能顺手把阶段推到 CONFIRM——
+    # 客户只是说"你在问废话"，事还没讲完，推到确认等于跳过解释。
     return _reply(session, _soothe(lines[(n - 1) % len(lines)], flags),
-                  next_stage="CONFIRM", intent="ambiguous")
+                  next_stage=stay or "CONFIRM", intent="ambiguous")
 
 
 def _fact_ack_reply(session, text, cfg, flags):
@@ -3074,6 +3269,11 @@ def _fact_ack_reply(session, text, cfg, flags):
     经改写层压缩后只剩最后那半句追问，「收到」整段没了（线上第 9/10/12 轮
     实际播的就是「清楚了，还有其他疑问吗？」）。所以承接**必须带客户刚给的
     具体值**：改写时丢了就是事实错误，由 nlg 的数字守卫挡住。
+
+    唯一的例外是**姓名**：客户只说「是我」时，姓名是我们档案里的资料，
+    不是他刚给的值。拿它回一句「对，是您本人，晏青梧」，等于把联系人姓名
+    念给一个还没确认是谁的人听——接电话的可能是同事、前台。所以只有
+    客户自己把这名字说出来了，才复述；否则就停在「对，是您本人。」
 
     第 3 次起不再追问表态：问了三次还问不出答案，说明问法不对，再问就是逼。
     改成把清单落在后台、给一条退路，**仍然一张工单都不写**——
@@ -3098,8 +3298,12 @@ def _fact_ack_reply(session, text, cfg, flags):
         _nm = _tgt.get("contact_name") or ""
         if ("公司" in (text or "") or "企业" in (text or "")) and _co:
             head = cfg.get("reply_fact_company") or "对，%s就是您公司。" % _co
-        elif _nm:
-            head = cfg.get("reply_fact_self") or "对，是您本人，%s。" % _nm
+        elif _nm and _nm in (text or ""):
+            # 只有客户**自己刚报过这个名字**才复述。
+            # 他说"是我"的时候，档案里的姓名是客服手上的资料，不是他给的值；
+            # 拿它去回一句"对，是您本人，晏青梧"，等于把联系人姓名念给
+            # 一个还没确认是谁的人听（接电话的可能是同事、前台）。
+            head = cfg.get("reply_fact_self_named") or "对，是您本人，%s。" % _nm
         else:
             head = cfg.get("reply_fact_self") or "对，是您本人。"
     else:
