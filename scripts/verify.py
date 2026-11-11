@@ -1651,7 +1651,10 @@ def main():
 
     _c4m = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
                                                         "test_c4_mutation.py")],
-                          cwd=ROOT, capture_output=True, text=True, timeout=300)
+                          # 40 条 × 两遍（基线 + 变异），每条 5 秒上下 ≈ 400 秒。
+                          # 原来给 300 秒，正常跑也会被墙掉，报出来像"用例失败"，
+                          # 其实是超时——这种"红得不明不白"比不红更糟。
+                          cwd=ROOT, capture_output=True, text=True, timeout=900)
     _c4m_out = ((_c4m.stdout or "") + (_c4m.stderr or "")).strip().splitlines()
     check("C4 变异验证：双层合规失效时结果预期类用例必须报红（全绿不是假绿）",
           _c4m.returncode == 0 and any("变异验证：PASS" in l for l in _c4m_out),
@@ -3265,9 +3268,10 @@ def main():
         [sys.executable, os.path.join(ROOT, "scripts", "test_train_replay.py")],
         cwd=ROOT, capture_output=True, text=True, timeout=300, env=_env_off)
     _last38 = ((_r38.stdout or "").strip().splitlines() or [""])[-1]
-    check("逐句复盘 24 条全过（单号/复读/障碍/打错人/含糊工单/半句/核身质疑/"
-          "反问确认/身份来源/事实承接/退路/数字守卫/承接守卫/元话语）",
-          _r38.returncode == 0 and "24/24" in _last38,
+    check("逐句复盘 29 条全过（单号/复读/障碍/打错人/含糊工单/半句/核身质疑/"
+          "反问确认/身份来源/事实承接/退路/数字守卫/承接守卫/元话语/"
+          "串单/嘴漏/骨架复读/怎么补/尾巴守卫）",
+          _r38.returncode == 0 and "29/29" in _last38,
           ["退出码 %d；末行：%s" % (_r38.returncode, _last38[:80])])
 
     print()

@@ -186,6 +186,16 @@ def _append(out, tail):
     return out.rstrip("，, ") + sep + tail
 
 
+#: 句子里出现这些词，就不再挂"请您回一句"类引导后缀。
+#: 一半是"已经在向对方要东西"（再要一遍是重复），一半是"已经收尾"（再要就挂不掉）。
+#: 不含「再见」：真正的收尾轮由 `_persona_freeze`（end_reason / next_stage=DONE）
+#: 整轮冻结，不靠这里；而 WRITEBACK 这类"说到再见但不是最后一句"的轮次
+#: 仍需要追加引导语（test_scene_isolation 的对照组就是它）。
+_SKIP_SUFFIX_MARKS = ("后四位", "尾号", "四位数字", "四个数字", "姓名", "单号",
+                      "公司名", "全名", "先忙", "不打扰",
+                      "稍后再联系", "稍后专员")
+
+
 def _apply_actions(base, rule, freeze=False, repeated=False, repeat_n=0):
     """按规则改形式。freeze=True 时**只允许**重复引导，其余动作一律不做。
 
@@ -195,7 +205,13 @@ def _apply_actions(base, rule, freeze=False, repeated=False, repeat_n=0):
     模拟器的重复惩罚不再触发。这是形式层能修的真实问题，不是刷分。
     """
     out = base
-    if repeated:
+    # 句子里已经在要东西（后四位/姓名/单号）或已经收尾（再见/先忙），
+    # 就不再挂任何"请您回一句"类尾巴——两种尾巴（suffix 与 avoid_repeat）都要拦。
+    # 11-11 实测：quiet 性格的 avoid_repeat 是「您回一个字也行。」，
+    # 客户正被要求"报四个数字"，尾巴又来一句"回一个字也行"，自相矛盾。
+    _quiet_tail = (any(w in out for w in _SKIP_SUFFIX_MARKS)
+                   or "？" in out or "?" in out)
+    if repeated and not _quiet_tail:
         opts = rule.get("avoid_repeat") or []
         if opts:
             tail = opts[repeat_n % len(opts)]
@@ -212,9 +228,14 @@ def _apply_actions(base, rule, freeze=False, repeated=False, repeat_n=0):
     # 含问号的句子不许接陈述式引导。第一版只判「以问号结尾」，实测是假绿：
     # 真实话术是「那方便说一下您的姓名吗？我核对一下申请单。」——问号在中间、
     # 句尾是句号，判据没命中，线上仍念出「…我就不多说了」，刚问完又说不多说。
-    # 改成整句含问号就跳过 suffix；avoid_repeat 不受影响（重复轮专用换说法）。
+    # 改成整句含问号就跳过 suffix；avoid_repeat 同上（见 _quiet_tail）。
+    #
+    # 11-11 又补一条：祈使式问句**没有问号**（「…预留手机号的后四位，
+    # 说四个数字就行。」），旧判据没命中，后面就挂上「您回一个字也行。」——
+    # 刚让对方报四位数字，又说"回一个字也行"。收线话术同理：说了"您先忙"，
+    # 再挂一句"回一个字也行"，等于不让挂。判据扩成 _SKIP_SUFFIX_MARKS。
     tail = rule.get("suffix") or ""
-    if "？" in out or "?" in out:
+    if _quiet_tail:
         tail = ""
     return _append(out, tail)
 

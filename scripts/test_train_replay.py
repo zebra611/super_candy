@@ -330,6 +330,66 @@ def main():
     check("话术截断不许留下半句（句尾挂着「、」）",
           got is None or not re.search(r"[、，；]$", got or ""), "截成：%r" % (got,))
 
+    # 21) 串单：客户报的尾号是**别人家**的（截图那通就这么串的）。
+    #     旧代码拿 9673 去全库查，命中青海梧丘，把 slots.application 换成那家，
+    #     然后念"梧冈品牌、运动户外类目、需补境外商标注册证"——电话打给降真，
+    #     说的是梧丘的事。这不是听不懂，是**把 A 商家的事念给 B 听**。
+    _, pairs21, _, _ = _replay("QZ202611060019", ["对，是我。", "9673"])
+    j21 = " ".join(x[1] for x in pairs21)
+    check("客户报别家尾号：不核过，也不许把别人家的驳回原因念出来",
+          "梧冈" not in j21 and "运动户外" not in j21 and "境外商标" not in j21
+          and "核对上了" not in j21,
+          "回复：%r" % j21[:90])
+
+    # 22) 嘴漏：核身没过就把档案里的尾号念出来，等于自己把门打开。
+    #     线上模型连着说「您预留的手机号后四位是9403，对上了」。
+    from modules import agent_free, dialogue as _dlg, persona as _per
+    _s22 = {"slots": {}, "outbound_target":
+            {"phone_tail": "9403", "application_id": "QZ202611060019"}}
+    _base22 = "麻烦报一下您预留手机号的后四位。"
+    # 测的是**接线**：直接调 _gates，看这道闸有没有真的接在出话路径上。
+    # 只测 _leaks_secret 这个纯函数是不够的——把 _gates 里那句调用删掉，
+    # 纯函数照样返回 True（这一轮已经吃过三次"测了判据没测接线"的教训）。
+    _leak22 = agent_free._gates(_s22, "您预留的手机号后四位是9403，对上了。",
+                               _base22, "IDENTITY", [], "", "")
+    _ok22 = agent_free._gates(_s22, "麻烦报一下您预留手机号的后四位，四个数字就行。",
+                             _base22, "IDENTITY", [], "", "")
+    check("核身未通过时，不许念出档案里的尾号/单号（嘴漏闸接在出话路径上）",
+          _leak22 is None and _ok22, "漏句=%r；正常句=%r" % (_leak22, _ok22))
+
+    # 23) 骨架复读：同一个状态连着两轮会查同一句话，必须换说法。
+    _s23 = _dlg.new_session("v23")
+    _same = "您可以简单回我一句清楚了或者还有疑问就行。"
+    with nlg.template_only():
+        _o23a = _dlg._reply(_s23, _same, next_stage="CONFIRM")
+        _o23b = _dlg._reply(_s23, _same, next_stage="CONFIRM")
+    check("骨架要和上一句一模一样时必须换说法（不许原样播两遍）",
+          _o23a["reply_text"] != _o23b["reply_text"]
+          and _same in _o23b["reply_text"],
+          "两次：%r / %r" % (_o23a["reply_text"][:26], _o23b["reply_text"][:26]))
+
+    # 24) 「怎么补」是本环节的基本问题，答案就在档案里，不许落到「确认不到」。
+    # 必须走到 **OFFER** 再问：NEED 那句本身就会念材料，测不到这条分支
+    # （第一版用例只说到第二句就问了，那时还在 NEED，删掉 OFFER 分支照样全绿——
+    #  变异 m20 就是这么漏过去的）。
+    _, pairs24, _, _ = _replay("QZ202611060019",
+                               ["对，是我。", "9403", "嗯，然后呢", "怎么补？"])
+    last24 = pairs24[-1][1] if pairs24 else ""
+    check("OFFER 里问「怎么补」要答出本单材料和提交入口，不许说「确认不到」",
+          "确认不到" not in last24
+          and any(w in last24 for w in ("授权书", "链路", "营业执照"))
+          and ("后台" in last24 or "重新提交" in last24),
+          "末句：%r" % last24[:70])
+
+    # 25) 尾巴守卫：核身问句/收线话术后面不许再挂「您回一个字也行」——
+    #     刚让对方报四个数字，又说"回一个字也行"，自相矛盾。
+    _g25 = _per._apply_actions(
+        "好的，核对申请单需要您预留手机号的后四位，说四个数字就行。",
+        {"suffix": "您回一个字也行。", "avoid_repeat": ["您回一个字也行。"]},
+        repeated=True, repeat_n=0)
+    check("核身问句/收线话术后面不许再挂「回一个字也行」",
+          "回一个字" not in _g25, "实际：%r" % _g25[:60])
+
     print()
     bad = [c for c in _checks if not c[1]]
     for name, ok, detail in _checks:
