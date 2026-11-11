@@ -219,7 +219,7 @@
    "reply_repair": "刚才可能说得太快了。我再复述一遍：{application_desc}没有通过审核，原因是{reason}，需要补充{materials}，然后在后台重新提交。",
    "reply_repair_2": "我再说清楚一点：驳回原因是{reason}，要补的材料是{materials}，补完重新提交就行。您清楚了吗？",
    "reply_application_answer": "您这笔申请是{application_desc}，驳回原因是{reason}，需要补充{materials}。",
-   "reply_specific": "我跟您复述一下：您这笔申请是因为{reason}没有通过审核，需要补充{materials}，然后在后台重新提交，您清楚了吗？",
+   "reply_specific": "我跟您复述一下：您这笔申请没有通过审核，原因是{reason}，需要补充{materials}，然后在后台重新提交，您清楚了吗？",
    "reply_application_answer_2": "驳回的具体问题是{reason}，要补的材料是{materials}，补完在后台重新提交。",
    "reply_provenance": "您的号码是商家入驻时预留的联系方式，我们是官方审核，只用来核对这笔资质申请，不会外传。",
    "reply_provenance_2": "这个号码是您提交这笔申请时留的，我们只用于资质审核这一件事，不会拿去做别的。",
