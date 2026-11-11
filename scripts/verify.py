@@ -31,6 +31,7 @@ import sys
 import tempfile
 import threading
 import time
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -2546,6 +2547,35 @@ def main():
                   ("预留" in _xN2 or "申请时留" in _xN2 or "审核" in _xN2)
                   and "确认不到" not in _xN2,
                   ["回复=%s" % _xN2[:40]])
+
+            # 11-11 线上（截图那通）：客户答「好吧」，客服又把「您简单回我一句
+            # 清楚了或者还有疑问就行」问了一遍，客户只好补一句「知道了」才闭环。
+            # 这一通问的是"清楚了吗"，"好吧"就是"行，我知道了"——白耗一轮。
+            _sW = dialogue.new_session("V30W")
+            _sW["stage"] = "CONFIRM"
+            _sW["slots"]["identity_confirmed"] = True
+            _sW["slots"]["application"] = _ap
+            _oW = dialogue.respond(_sW, "好吧")
+            _xW = _oW.get("reply_text") or ""
+            check("pop 场景客户答「好吧」→ 直接闭环（不再追一句「回我一句清楚了」）",
+                  _oW.get("next_stage") == "DONE"
+                  and bool(_sW.get("writeback_version"))
+                  and "回我一句" not in _xW and "回一个字" not in _xW,
+                  ["next=%s writeback=%r 回复=%s"
+                   % (_oW.get("next_stage"), _sW.get("writeback_version"),
+                      _xW[:44])])
+            # 反向：营销场景的「好吧」仍然是弱肯定，不许跟着一起放水——
+            # 那里的"好吧"是"我不想跟你争了"，落成同意就变成一张假工单。
+            # 注意读的是 **service_outbound**：config/scene.json 与 pop_reject
+            # 是同一套 POP 资审话术的两份拷贝（30.10 那条断言要求逐字一致），
+            # 那里本来就该跟着改；售后/营销场景不该跟着改。
+            _svc_cfg = json.load(open(os.path.join(ROOT, "config", "scenes",
+                                                   "service_outbound.json"),
+                                      encoding="utf-8"))
+            _svc_yes = ((_svc_cfg.get("stages") or {}).get("CONFIRM") or {}
+                        ).get("confirm_yes_words") or []
+            check("营销场景的「好吧」仍然不算同意（只改 POP 资审，不全局放水）",
+                  "好吧" not in _svc_yes, ["service_outbound confirm_yes_words=%s" % _svc_yes])
         finally:
             _cl.set_scene(_prev_scene)
     else:
@@ -2995,7 +3025,9 @@ def main():
     # 判成 slot_loss）。反向：没递信息时不拦，suffix 照常追加。
     _pf = dialogue.new_session("verify-persona-factack")
     _pf["persona_code"] = "skeptical"
-    _base = "好的，收到。咱们回到正题，您可以简单回我一句清楚了或者还有疑问。"
+    # 对照句刻意**不带**"回我一句"这类讨回应的话：那种句子本身就该被拦后缀
+    # （见下一条），拿它当对照会把两件事混在一起测。
+    _base = "收到，我这边都记下来了。"
     _pf["fact_ack_turn"] = True
     _g1, _a1 = _pm.adapt(_pf, _base, "CONFIRM")
     _pf.pop("fact_ack_turn")
@@ -3003,6 +3035,17 @@ def main():
     check("适配层：客户刚给信息时不追加要信息型后缀（反向：平时照常追加）",
           "对照申请单编号核实" not in _g1 and "对照申请单编号核实" in _g2,
           ["拦后=%r 放后=%r" % (_g1[-16:], _g2[-16:])])
+
+    # 11-11 线上（截图那通）：客服已经说了「您简单回我一句清楚了或者还有
+    # 疑问就行」，性格层后面又挂一句「您回一个字也行。」——一句话里要了两遍
+    # 表态，第二遍还降级成"回一个字也行"。这一句本身就在讨回应，后缀必须免。
+    _dq = dialogue.new_session("verify-persona-double-ask")
+    _dq["persona_code"] = "quiet"
+    _ask_line = "您简单回我一句清楚了或者还有疑问就行。"
+    _dq_text, _dq_applied = _pm.adapt(_dq, _ask_line, "CONFIRM")
+    check("已经在讨回应的句子后面，不再挂「您回一个字也行」",
+          _dq_text == _ask_line and not _dq_applied,
+          ["适配后=%r" % _dq_text])
 
     # ---- 真实通话挖掘出来的三处缺陷（11-09，证据来自 data/events.db） ----
     # 1) 核身前用户问「为什么驳回 / 要补什么材料」：不能答（会泄露别人申请信息），
@@ -3205,6 +3248,70 @@ def main():
     check("大模型接入层离线自测全过（闸门 / 降级 / 受知边界）",
           _r35.returncode == 0 and _last35.startswith("OK"),
           ["退出码 %d；末行：%s" % (_r35.returncode, _last35[:80])])
+
+    # ---- 模型客服的三处线上毛病（11-11 截图那通，用户逐句指出来的）----
+    # ① 直呼客户姓名：「晏青梧，您简单回我一句清楚了或者还有疑问就行。」
+    #    核身对上的是"这通电话打对了单"，不是"接电话的人叫晏青梧"。
+    from modules import agent_free as _af
+    _nm_sess = {"outbound_target": {"contact_name": "晏青梧",
+                                    "company_name": "北京晏青梧科技有限公司"}}
+    _nm_cases = [
+        ("晏青梧，您简单回我一句清楚了或者还有疑问就行。", "晏青梧"),
+        ("晏经理，麻烦您报一下后四位。", "晏经理"),
+        ("对，是您本人，晏青梧。", "晏青梧"),
+    ]
+    _nm_bad = []
+    for _a, _b in _nm_cases:
+        _got = _af._drop_name_call(_a, _nm_sess)
+        if _b in _got:
+            _nm_bad.append((_a, _got))
+    _nm_keep = _af._drop_name_call("您的联系人写的是晏青梧，对不上就得改授权书。", _nm_sess)
+    check("模型客服不直呼客户姓名（句首/句尾/职务称呼都删，句子里的档案值不动）",
+          not _nm_bad and "晏青梧" in _nm_keep,
+          ["漏删=%s" % (_nm_bad[:1] or "无"), "档案句保留=%r" % _nm_keep[:26]])
+
+    # ② 「对，是您本人，晏青梧」——客户只说"是我"，姓名是客服手上的资料，
+    #    不是他刚给的值。念出来等于把联系人姓名告诉一个还没确认是谁的人。
+    _fw = dialogue.new_session("verify-factack-name")
+    _fw["outbound_target"] = {"contact_name": "晏青梧", "company_name": "北辰商贸"}
+    _fw["slots"]["identity_confirmed"] = True
+    _fw_cfg = config_loader.stage_config("CONFIRM") or {}
+    # 这一条只验承接句本身，不改写层：nlg.say 直接返回骨架，
+    # 免得自检因为网络抖动红绿不定（改写层自己有离线用例）。
+    with mock.patch.object(nlg, "say", side_effect=lambda *a, **k: a[1]):
+        _fw_out = dialogue._fact_ack_reply(_fw, "是我", _fw_cfg, {})
+        _fw_named = dialogue._fact_ack_reply(_fw, "是我，晏青梧", _fw_cfg, {})
+    check("客户只说「是我」时，承接句不许带出档案里的姓名（他自己报了才复述）",
+          "是您本人" in _fw_out["reply_text"]
+          and "晏青梧" not in _fw_out["reply_text"]
+          and "晏青梧" in _fw_named["reply_text"],
+          ["只说是我=%s｜自己报了=%s"
+           % (_fw_out["reply_text"][:22], _fw_named["reply_text"][:22])])
+
+    # ③ 实时路径必须给自己一个硬上界：模型这一句说慢/说崩，客户在电话那头等着。
+    #    11-11 实测：qwen-plus P50 832ms，qwen-flash P50 425ms；
+    #    旧参数 timeout=2.5 + retries=1，最坏 5.6s，页面 P95 2289ms 就是这么来的。
+    _seen = {}
+
+    def _fake_chat(messages, **kw):
+        _seen.update(kw)
+        return {"ok": True, "text": "对，是您本人。那这几样材料您清楚怎么准备吗？",
+                "model": kw.get("model") or "?", "ms": 1,
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+                "retries": 0, "error": ""}
+
+    _lat_sess = {"outbound_target": {"contact_name": "晏青梧", "phone_tail": "9403",
+                                     "required_materials": ["授权书"]}}
+    with mock.patch.object(_af, "enabled", return_value=True), \
+            mock.patch.object(_af.llm, "available", return_value=True), \
+            mock.patch.object(_af.llm, "chat", side_effect=_fake_chat):
+        _af.reply(_lat_sess, "好吧", {}, "CONFIRM", "您可以简单回我一句清楚了或者还有疑问就行。")
+    _timeout_s = float(_seen.get("timeout") or 0)
+    check("模型客服这一句有硬上界（超时 ≤1.6s、不重试、走快模型）",
+          0 < _timeout_s <= 1.6 and int(_seen.get("retries") or 0) == 0
+          and str(_seen.get("model") or "").startswith("qwen-flash"),
+          ["timeout=%ss retries=%s model=%s"
+           % (_timeout_s, _seen.get("retries"), _seen.get("model"))])
 
     _r36 = subprocess.run(
         [sys.executable, "-m", "modules.customer_data", "--check"],

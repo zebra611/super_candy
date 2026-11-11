@@ -3270,6 +3270,11 @@ def _fact_ack_reply(session, text, cfg, flags):
     实际播的就是「清楚了，还有其他疑问吗？」）。所以承接**必须带客户刚给的
     具体值**：改写时丢了就是事实错误，由 nlg 的数字守卫挡住。
 
+    唯一的例外是**姓名**：客户只说「是我」时，姓名是我们档案里的资料，
+    不是他刚给的值。拿它回一句「对，是您本人，晏青梧」，等于把联系人姓名
+    念给一个还没确认是谁的人听——接电话的可能是同事、前台。所以只有
+    客户自己把这名字说出来了，才复述；否则就停在「对，是您本人。」
+
     第 3 次起不再追问表态：问了三次还问不出答案，说明问法不对，再问就是逼。
     改成把清单落在后台、给一条退路，**仍然一张工单都不写**——
     客户没确认过，不能替他记「已沟通」，也不能替他记「拒绝」。
@@ -3293,8 +3298,12 @@ def _fact_ack_reply(session, text, cfg, flags):
         _nm = _tgt.get("contact_name") or ""
         if ("公司" in (text or "") or "企业" in (text or "")) and _co:
             head = cfg.get("reply_fact_company") or "对，%s就是您公司。" % _co
-        elif _nm:
-            head = cfg.get("reply_fact_self") or "对，是您本人，%s。" % _nm
+        elif _nm and _nm in (text or ""):
+            # 只有客户**自己刚报过这个名字**才复述。
+            # 他说"是我"的时候，档案里的姓名是客服手上的资料，不是他给的值；
+            # 拿它去回一句"对，是您本人，晏青梧"，等于把联系人姓名念给
+            # 一个还没确认是谁的人听（接电话的可能是同事、前台）。
+            head = cfg.get("reply_fact_self_named") or "对，是您本人，%s。" % _nm
         else:
             head = cfg.get("reply_fact_self") or "对，是您本人。"
     else:

@@ -93,6 +93,10 @@ _SYSTEM = (
     "4. 不许重复上一轮已经说过的话，要接着客户刚说的那句往下说；\n"
     "4b. **核身通过之前**，绝对不能把客户的手机尾号、申请单号、姓名念出来"
     "（那正是要核的东西）；也不能说「对上了」——客户还没报；\n"
+    "4c. **任何时候都不要叫客户的姓名**（不许写「张伟，您……」这种开头，也不许叫"
+    "「张经理」）。接电话的人不一定是档案里那位联系人——可能是同事、前台、"
+    "甚至打错了的人；核身对上的是「这通电话打对了单」，不是「接电话的人叫这个名字」。"
+    "一律用「您」；只有客户本条消息里自己报了这个名字，才可以复述一次；\n"
     "5. **只有客户本条消息里**报了核对信息（尾号/单号/姓名），才先用半句确认"
     "（比如「尾号9403，对上了」），再往下说；不要从档案里挑一个值假装是客户刚说的，"
     "也不要把同一句确认说第二遍；\n"
@@ -137,6 +141,14 @@ def enabled():
 
 
 _LINES_CACHE = {}
+
+
+def _agent_cfg():
+    """`agent` 配置块。读失败就当空表——外呼里不许因为读配置把这一句弄丢。"""
+    try:
+        return config_loader.load().get("agent") or {}
+    except Exception:
+        return {}
 
 
 def _lines():
@@ -240,6 +252,9 @@ def reply(session, user_text, flags, stage, base_text, official="", must=None):
         got = _replay(stage, user_text)
         if not got:
             return None
+        got = _drop_name_call(got, session)
+        if not got:
+            return None
         return _gates(session, got, base_text, stage, must, official, user_text)
 
     if not enabled() or not llm.available():
@@ -270,9 +285,22 @@ def reply(session, user_text, flags, stage, base_text, official="", must=None):
 
     meta = llm.chat([{"role": "system", "content": _SYSTEM},
                      {"role": "user", "content": prompt}],
-                    temperature=0.5, max_tokens=200, timeout=2.5,
+                    model=(os.environ.get("AGENT_FREE_MODEL") or "").strip()
+                          or _agent_cfg().get("model") or "qwen-flash",
+                    temperature=0.5, max_tokens=120,
+                    # 这条路径在**主链路上**，客户在电话那头等着。
+                    # 11-11 实测：qwen-plus P50 832ms / P95 1010ms，
+                    # qwen-flash P50 425ms；同一句话、同样的闸门，
+                    # 这一层要的是"一句话说对"，不是"想得深"。
+                    # 超时从 2.5s 收到配置值（默认 1.5s），并且**不重试**：
+                    # 首问超时再等 0.6s 重试一次，最坏 5.6s，页面上的
+                    # P95 2289ms / 超时 1 就是这么来的。说不出来就让骨架说。
+                    timeout=float(_agent_cfg().get("timeout_ms") or 1500) / 1000.0,
+                    retries=int(_agent_cfg().get("retries") or 0),
                     tag="agent_free")
     if not meta.get("ok"):
+        # 记下"模型这一轮没接上，原因是超时/限流"，别让它看起来像"骨架就是答案"。
+        session["agent_free_reject"] = "llm:%s" % (str(meta.get("error") or "fail")[:34])
         return None
 
     text = _clean(meta.get("text") or "", 80)
@@ -281,6 +309,9 @@ def reply(session, user_text, flags, stage, base_text, official="", must=None):
         session["agent_free_reject"] = "empty"
         return None
     text = _drop_invented_ack(text, user_text)
+    if not text:
+        return None
+    text = _drop_name_call(text, session)
     if not text:
         return None
     return _gates(session, text, base_text, stage, must, official, user_text)
@@ -420,6 +451,38 @@ def _content_ok(stage, text, session):
     if stage in ("WRITEBACK", "DONE"):
         return any(w in t for w in ("记录", "登记", "短信", "再见", "后台", "同步"))
     return True
+
+
+def _drop_name_call(text, session):
+    """把「晏青梧，您……」改回「您……」——不许直呼客户姓名。
+
+    11-11 线上实录（截图那通）：客户说完「好吧」，客服开口是
+    「晏青梧，您简单回我一句清楚了或者还有疑问就行」。两个问题：
+
+      1. **凭什么叫名字**。核身对上的是「这个号码对应这笔单」，不是
+         「接电话的人叫晏青梧」。接电话的可能是同事、前台，也可能是
+         打错了以后顺手接的人——这时候把档案里的联系人姓名念出来，
+         既是称呼错人，也是把客户的姓名白送给了不确定的对方。
+      2. 名字一喊，整句听起来像"我们已经很熟了"，而这一通电话只是核对单子。
+
+    只在**称呼位置**删（句首、句中标点后、句尾），不动句子里的其他内容：
+    客户自己刚报过名字时，模型复述一次是合理的（那属于承接他给的值），
+    但"叫名字"这个动作一次都不要有。
+    """
+    nm = str(((session or {}).get("outbound_target") or {}).get("contact_name") or "").strip()
+    if len(nm) < 2:
+        return text
+    forms = {nm}
+    # 「晏经理」「晏总」：模型很爱把联系人自动升级成职务称呼，同样不许。
+    for title in ("经理", "总", "老板", "老师", "女士", "先生"):
+        forms.add(nm[0] + title)
+    t = text
+    for f in sorted(forms, key=len, reverse=True):
+        ef = re.escape(f)
+        t = re.sub(r"^\s*%s\s*[，,、]\s*" % ef, "", t)          # 句首
+        t = re.sub(r"([，。；！？、])\s*%s\s*[，,、]\s*" % ef, r"\1", t)
+        t = re.sub(r"[，,、]\s*%s\s*([。！？]|$)" % ef, r"\1", t)  # 句尾
+    return t.lstrip("，,、 ")
 
 
 def _gates(session, text, base_text, stage, must, official, user_text=""):
