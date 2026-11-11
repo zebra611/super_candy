@@ -2966,13 +2966,23 @@ def main():
            % (_o1["next_stage"], _of["slots"].get("consent"),
               _o1["reply_text"][:30])])
     _o2 = dialogue.respond(_of, "我刚不是说了吗，单号就是QZ202611060001")
-    check("连续报信息：接住话术交替不复读，且不追加「要信息型」后缀",
+    _t1, _t2 = _o1["reply_text"], _o2["reply_text"]
+    # 11-11 改判据：两轮客户报的是**同一个**单号，所以承接句必然都以
+    # 「单号 QZ202611060001 我记下了」开头——前 12 字相同是**对的**，
+    # 那正是这轮修的东西（接住客户给的值）。旧判据「前 12 字不同」是
+    # 旧骨架留下的：那时每句都以「好的，收到。咱们回到正题」开头，
+    # 前 12 字相同等于主干相同。现在该看**整句**，而且追问那半句必须换说法：
+    # 客户报同一个值报两遍，客服回同一句「那这几样材料您清楚怎么准备吗」
+    # 两遍，才是复读。
+    _q1 = _t1.split("。")[-1]
+    _q2 = _t2.split("。")[-1]
+    check("连续报信息：承接复述客户给的值，但追问必须换说法（整句不复读）",
           not _o2.get("end_reason")
-          and _o2["reply_text"][:12] != _o1["reply_text"][:12]
-          and "对照申请单编号核实" not in _o2["reply_text"],
-          ["两轮主干是否相同=%s 后缀是否漏拦=%s"
-           % (_o2["reply_text"][:12] == _o1["reply_text"][:12],
-              "对照申请单编号核实" in _o2["reply_text"])])
+          and _t2 != _t1 and _q2 != _q1
+          and "对照申请单编号核实" not in _t2,
+          ["一轮=%s" % _t1[:52], "二轮=%s" % _t2[:52],
+           "追问相同=%s 整句相同=%s 后缀漏拦=%s"
+           % (_q2 == _q1, _t2 == _t1, "对照申请单编号核实" in _t2)])
 
     # 性格适配层守卫：客户刚递上信息的那一轮，「要信息型」后缀不许追加
     # （11-08 A15：skeptical 的 suffix 紧跟在客户报完单号之后，被对抗器
@@ -3249,8 +3259,9 @@ def main():
         [sys.executable, os.path.join(ROOT, "scripts", "test_train_replay.py")],
         cwd=ROOT, capture_output=True, text=True, timeout=300, env=_env_off)
     _last38 = ((_r38.stdout or "").strip().splitlines() or [""])[-1]
-    check("逐句复盘 14 条全过（单号/复读/障碍/打错人/含糊工单/半句/核身质疑/反问确认）",
-          _r38.returncode == 0 and "14/14" in _last38,
+    check("逐句复盘 20 条全过（单号/复读/障碍/打错人/含糊工单/半句/核身质疑/"
+          "反问确认/身份来源/事实承接/退路/数字守卫）",
+          _r38.returncode == 0 and "20/20" in _last38,
           ["退出码 %d；末行：%s" % (_r38.returncode, _last38[:80])])
 
     print()

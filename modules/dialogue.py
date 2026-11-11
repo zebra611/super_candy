@@ -2778,7 +2778,13 @@ def _denies_identity(text):
 #: 「后台用不了」的信号。客户说的不是知识问题，是一堵墙：
 #: 再给他念一遍材料清单，等于对着打不开页面的人念清单。
 _BLOCKED_UI_MARKS = ("打不开", "进不去", "登录不了", "上传不了", "传不上去",
-                     "卡住", "找不到入口", "不会弄", "提交不了", "页面没反应")
+                     "卡住", "找不到入口", "不会弄", "提交不了", "页面没反应",
+                     # 11-11 线上 A15 第 11 轮：「后台卡得我连补传页面都刷不出来，
+                     # 店里还一堆单等着发货呢！」——同一个意思，词表只收「打不开」，
+                     # 这句一个字都没命中，客服继续问「清楚了吗」。客户在说一堵墙，
+                     # 词表却只认墙上那一块砖。
+                     "刷不出来", "刷不开", "刷新不了", "加载不出", "打不开页面",
+                     "显示不出来", "白屏", "转圈")
 
 
 def _blocked_ui(text):
@@ -2855,16 +2861,22 @@ def _blocked_ui_reply(session, text, cfg, flags):
     n = int(session.get("blocked_ui_n", 0)) + 1
     session["blocked_ui_n"] = n
     if n == 1:
+        # 客户在说一堵墙，不是在配合核身：这一轮不许再挂「您也可以对照单号核实」
+        # 这类要信息型的后缀（11-11 线上 A15 第 11 轮就挂了，读起来像没听见）。
+        session["fact_ack_turn"] = True
         return _reply(session, _soothe(cfg.get("reply_blocked_ui") or
                       "页面打不开先别折腾：清单我这边能同步到您后台，您先把材料准备齐；"
                       "换一个浏览器再试一次，通常就能进。", flags), intent="ask")
-    if n == 2:
-        return _reply(session, _soothe(cfg.get("reply_blocked_ui_2") or
-                      "那这样，我这条记下「后台打不开」，专员联系您时一并处理。"
-                      "材料您先准备着，页面的事不用您自己扛。", flags), intent="ask")
+    # 第二次仍打不开：系统这边确实解决不了，再问「清楚了吗」就是空转。
+    # 上一版这里说「我这条记下『后台打不开』，专员联系您时一并处理」，
+    # 而实际**一张记录都没写**——只有第三次收线时才有 end_reason 可查。
+    # 说了要做却没做，和「没得到答案却说知道了」是同一类毛病：都是嘴上
+    # 比手上走得快。改成如实说 + 真收线：end_reason="blocked_ui" 就是
+    # 那条「记下」，业务侧据此派单，比一句空承诺可查得多。
     return _finish(session, cfg.get("reply_blocked_ui_handoff") or
-                   "后台的问题我这边确实处理不了，我先把情况记下来，"
-                   "稍后专员用官方号码联系您一起看，可以吗？", "blocked_ui")
+                   "后台的问题我这边确实处理不了，也不占用您时间了：材料您先备着，"
+                   "我把这情况交给专员，稍后用官方号码联系您一起看，再见。",
+                   "blocked_ui")
 
 # 「客户还在谈」的信号：提问、质疑来电或费用、重复报已给过的核身信息。
 # 这些都不是表态。旧逻辑把它们一并算成「含糊」，追问两次就回写 unknown——
@@ -2972,6 +2984,59 @@ def _still_engaged(session, text, flags):
     if any(w in text for w in _ENGAGED_MARKS):
         return "talk"
     return ""
+
+
+def _fact_ack_reply(session, text, cfg, flags):
+    """客户在 CONFIRM 里报已核过的信息：先**接住他给的那个值**，再决定追不追问。
+
+    11-11 线上 A15 第 5–13 轮：客户说「是我」「尾号9403，没错」
+    「QZ202611060019，这单号我早背熟了」，客服四次回同一句
+    「您简单回我一句清楚了或者还有疑问」——客户递了四次实质信息，
+    一次都没被确认，九轮停在同一句话上。这不算「客户不表态」，
+    是客服没接住：客户报什么都等于没听见。
+
+    第一版骨架是「好的，收到。咱们回到正题，您可以简单回我一句清楚了」，
+    经改写层压缩后只剩最后那半句追问，「收到」整段没了（线上第 9/10/12 轮
+    实际播的就是「清楚了，还有其他疑问吗？」）。所以承接**必须带客户刚给的
+    具体值**：改写时丢了就是事实错误，由 nlg 的数字守卫挡住。
+
+    第 3 次起不再追问表态：问了三次还问不出答案，说明问法不对，再问就是逼。
+    改成把清单落在后台、给一条退路，**仍然一张工单都不写**——
+    客户没确认过，不能替他记「已沟通」，也不能替他记「拒绝」。
+    """
+    n = int(session.get("confirm_fact_n", 0)) + 1
+    session["confirm_fact_n"] = n
+
+    order = re.search(r"[A-Za-z]{2,4}\d{6,}", text or "")
+    tail4 = re.search(r"(?<!\d)(\d{4})(?!\d)", (text or "").replace(" ", ""))
+    who = "是我" in (text or "")
+
+    if order:
+        head = cfg.get("reply_fact_order") or "单号 %s 我记下了。" % order.group(0)
+    elif tail4:
+        head = cfg.get("reply_fact_tail") or "尾号 %s，对上了。" % tail4.group(1)
+    elif who:
+        head = cfg.get("reply_fact_self") or "对，是您本人。"
+    else:
+        head = cfg.get("reply_fact_ack") or "好的，收到。"
+
+    # 本轮客户刚递上信息：性格适配层不得再追加「要信息型」后缀，
+    # 否则「尾号 9403 对上了……您也可以对照申请单编号核实」读起来像又要一遍。
+    session["fact_ack_turn"] = True
+
+    if n >= 3:
+        return _reply(session, _soothe(
+            head + (cfg.get("reply_fact_hold")
+                    or "清单在后台都能看到，您照着准备就行；哪一步卡住了直接说，"
+                       "我陪您过一遍。"), flags),
+            next_stage="CONFIRM", intent="ambiguous")
+
+    asks = [cfg.get("reply_fact_ask_1")
+            or "那这几样材料您清楚怎么准备吗？",
+            cfg.get("reply_fact_ask_2")
+            or "材料这块，您还有哪点不清楚？"]
+    return _reply(session, _soothe(head + asks[(n - 1) % len(asks)], flags),
+                  next_stage="CONFIRM", intent="ambiguous")
 
 
 def _stage_confirm(session, text, flags):
@@ -3130,26 +3195,11 @@ def _stage_confirm(session, text, flags):
         # 客户拿回了实质内容：「连续两次含糊」的观察窗口重开。
         _reset_ambiguity(session, engaged == "fact")
         if engaged == "fact":
-            # 客户在给信息（报单号、重申身份）：接住，再把确认问题摆回去。
+            # 客户在给信息（报单号、重申身份）：先复述他给的值，再问下一步。
             # 不计入任何升级计数——配合不该被「配合两次」送走；旧版两轮
             # 实质回合就转专员收线，客户正按客服建议报单号却被挂了
-            # （11-08 A15 实测）。也不把确认问题摆回去之外的结论编出来。
-            # 话术交替：客户连续两轮给信息时，逐字相同的「好的，收到」
-            # 就是复读（对抗器按主干比对会命中 repeat，归因器按缺陷扣）。
-            _acks = [
-                cfg.get("reply_fact_ack")
-                or "好的，收到。咱们回到正题，您可以简单回我一句清楚了或者还有疑问。",
-                cfg.get("reply_fact_ack_alt")
-                or "记下了。那回到正题，您可以简单回我一句清楚了或者还有疑问。",
-            ]
-            _k = int(session.get("fact_ack_n", 0))
-            session["fact_ack_n"] = _k + 1
-            # 本轮客户刚递上信息：性格适配层不得再追加「要信息型」后缀，
-            # 否则「记下了……您也可以对照申请单编号核实」读起来像又要一遍，
-            # 对抗器按 detect_asks 判成 slot_loss（11-08 A15 实测）。
-            session["fact_ack_turn"] = True
-            return _reply(session, _acks[_k % len(_acks)],
-                          next_stage="CONFIRM", intent="ambiguous")
+            # （11-08 A15 实测）。也不编「收到」之外的任何结论。
+            return _fact_ack_reply(session, text, cfg, flags)
         # 提问/质疑且这一轮答不上：第一次如实说明，第二次转专员收线，
         # 全程不产生回写事件——工单里不该出现凭空猜出来的「不确定」。
         n = int(session.get("confirm_engaged", 0)) + 1

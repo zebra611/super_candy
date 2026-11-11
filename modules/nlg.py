@@ -283,6 +283,14 @@ def _entities_ok(base_text, text, session):
     for token in _must_keep(session):
         if token in base_text and token not in text:
             return False
+    # 骨架里的数字串（尾号 / 单号 / 金额 / 期限）改写时必须留住。
+    # 11-11 线上 A15：骨架「尾号 9403 对上了」被改写层压成「清楚了，还有
+    # 其他疑问吗？」——客户报了四次信息一次都没被确认，九轮停在同一句上。
+    # 上一条只查档案实体（公司名/单号），尾号不在其中；数字是业务事实，
+    # 改掉一位就是另一件事，这条闸门不许改写层碰。
+    for num in set(re.findall(r"\d{4,}", base_text)):
+        if num not in text:
+            return False
     return True
 
 
