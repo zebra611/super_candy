@@ -25,7 +25,7 @@
   "counts": {
    "catalog": 68,
    "rebuttals": 52,
-   "qa": 27
+   "qa": 28
   },
   "notice": "话术与 QA 原文来自官方资料包，逐字保留；结构化字段（domain/materials/placeholders）由本脚本按规则派生，不对原文做改写。",
   "qa_filled": {
@@ -268,6 +268,14 @@
    "context_script": "您好，我是京东商家资质审核专员工号XXX号，请问您是（商家公司名/店铺名称）吗？联系您是因为因申请的【XXXX】类目超出商标可使用范围，请删除超范围类目后重新提交。感谢您的接听，祝您生活愉快，再见！",
    "answer_raw": "您可以联系品牌方给您再授权这些类目所需的XX类商标",
    "filled_placeholder": true
+  },
+  {
+   "id": "QA-HF-028",
+   "source": "驳回话术",
+   "module": "联系",
+   "question": "人工客服电话是多少",
+   "answer": "如有疑问您可以电话联系：4006180092，我们将竭诚为您服务。",
+   "context_script": "官方驳回话术统一结尾（QA.xlsx 驳回话术 sheet，30+ 条均为「如有疑问可联系4006180092」）"
   }
  ]
 }

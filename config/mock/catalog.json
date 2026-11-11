@@ -25,7 +25,7 @@
   "counts": {
    "catalog": 68,
    "rebuttals": 52,
-   "qa": 27
+   "qa": 28
   },
   "notice": "话术与 QA 原文来自官方资料包，逐字保留；结构化字段（domain/materials/placeholders）由本脚本按规则派生，不对原文做改写。"
  },

@@ -399,6 +399,18 @@ def build_qa(sheets):
             })
 
     fill_placeholders(items)
+
+    # 官方驳回话术（QA.xlsx 驳回话术 sheet + 场景.xlsx 四个 sheet）里
+    # 30+ 条的统一结尾是「如有疑问可联系4006180092」——热线是官方口径的一部分。
+    # 单独立一条 QA：客户问"客服电话/人工电话"时按官方口径答，不靠猜。
+    items.append({
+        "id": "QA-HF-%03d" % (len(items) + 1),
+        "source": "驳回话术",
+        "module": "联系",
+        "question": "人工客服电话是多少",
+        "answer": "如有疑问您可以电话联系：4006180092，我们将竭诚为您服务。",
+        "context_script": "官方驳回话术统一结尾（QA.xlsx 驳回话术 sheet，30+ 条均为「如有疑问可联系4006180092」）",
+    })
     return items
 
 

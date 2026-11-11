@@ -314,6 +314,31 @@ class MockAdapter(BaseAdapter):
                         "matched_by": "application_id", "_ms": _ms(t0)}
         return {"found": False, "application": None, "_ms": _ms(t0)}
 
+    def list_applications(self):
+        """全部可电话外呼的档案（演示页"分类浏览示例数据"用，只读）。
+
+        与 random_application 同一个池（close_mode=电话、公司名与岗位齐全）：
+        京麦驳回档案核上即收尾，浏览出来也没法走完整对话，不放进去误导人。
+        列表只回**展示字段**，身份证号/统一社会信用代码这类补全部件不进列表——
+        完整档案走 /api/company/get 单条取（与随机预览同口径）。
+        """
+        t0 = time.time()
+        pool = [r for r in _load_applications()
+                if str(r.get("close_mode") or "").strip() == "电话"
+                and (r.get("company_name") or "").strip()
+                and (r.get("contact_role") or "").strip()]
+        rows = [{
+            "application_id": r.get("application_id"),
+            "company_name": r.get("company_name"),
+            "contact_role": r.get("contact_role"),
+            "brand_name": r.get("brand_name"),
+            "category_l1": r.get("category_l1"),
+            "reject_category": r.get("reject_category"),
+            "reject_reason": r.get("reject_reason"),
+            "application_status": r.get("application_status"),
+        } for r in pool]
+        return {"found": True, "items": rows, "count": len(rows), "_ms": _ms(t0)}
+
     # ---- 写 -----------------------------------------------------------------
     def create_ticket(self, session_id, content, idempotency_key, version=1):
         """登记工单 —— 这一步就是赛题要的"结构化结果回写"。

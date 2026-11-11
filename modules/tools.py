@@ -254,6 +254,11 @@ def get_application(app_id):
     return _adapter().call("get_application", app_id)
 
 
+def list_applications():
+    """全部可电话外呼的档案（展示字段）。演示页"分类浏览示例数据"用。"""
+    return _adapter().call("list_applications")
+
+
 def reject_catalog():
     """官方 68 个关单场景目录。返回 dict(found, items, count)。
 

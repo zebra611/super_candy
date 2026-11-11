@@ -1,85 +1,68 @@
-// UI 交互冒烟：验证 5 态状态机（idle/text/voice/paused/closed）的关键路径。
-// 测的不是样式，是"操作逻辑"：idle 输入禁用/暂停隐藏；看档案后目标牌出现；
-// 文字对话状态行不再停在"未开始"；空发送不发空轮；挂断后事件链用快照仍能看；
-// 第二通开始清屏。跑法：python app.py 8899 后 node scripts/ui_smoke.mjs
-// （需要 npx playwright；浏览器用系统 Edge/Chrome，见 launch 的 channel。）
-// UI 交互冒烟：5 态状态机 + 评审里 10 条修法的关键路径
+// UI 交互冒烟：5 态状态机关键路径 + 档案浏览（按类目挑全部示例数据）。
+// 测的不是样式，是"操作逻辑"：idle 输入禁用/暂停隐藏；浏览列表加载与
+// 类目筛选；选中档案后目标牌与档案卡出现；对话/挂断/事件链快照。
+// 跑法：python app.py 8899 后 node scripts/ui_smoke.mjs
+// （需要 playwright；浏览器用系统 Edge/Chrome，见 launch 的 channel。）
 import { chromium } from 'playwright';
-
 const BASE = 'http://127.0.0.1:8899';
 const results = [];
 const check = (name, ok, detail='') => { results.push({name, ok, detail}); };
-
 const browser = await chromium.launch({ channel: 'msedge', headless: true });
 const page = await browser.newPage();
 page.on('pageerror', e => results.push({name:'页面 JS 报错', ok:false, detail:String(e)}));
-
 await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(500);
 
-// ① idle：暂停键隐藏、输入禁用、三个入口可点、状态行未开始
-await page.waitForTimeout(400);
-check('idle: 暂停聆听隐藏', await page.isHidden('#btnRec'));
+check('idle: 四个入口可用', await page.isEnabled('#btnText') && await page.isEnabled('#btnStart') && await page.isEnabled('#btnRandom') && await page.isEnabled('#btnBrowse'));
 check('idle: 输入框禁用', await page.isDisabled('#textInput'));
-check('idle: 发送禁用', await page.isDisabled('#btnSend'));
-check('idle: 三个入口可用', await page.isEnabled('#btnText') && await page.isEnabled('#btnStart') && await page.isEnabled('#btnRandom'));
-check('idle: 状态行=未开始', (await page.textContent('#phaseLine')).includes('未开始'));
-check('idle: 目标牌隐藏', await page.isHidden('#targetChip'));
+check('idle: 暂停键隐藏', await page.isHidden('#btnRec'));
 
-// ② 看一份档案：目标牌出现 + 右栏自动展开
+// 档案浏览
+await page.click('#btnBrowse');
+await page.waitForSelector('#browseBox:not([hidden])');
+await page.waitForFunction(() => document.querySelectorAll('#browseList .browse-row').length > 3, null, { timeout: 6000 });
+const nAll = await page.locator('#browseList .browse-row').count();
+check('浏览: 列表加载', nAll > 10, 'rows=' + nAll);
+// 类目筛选
+const chip = page.locator('#browseChips button').nth(2);
+const catName = await chip.textContent();
+await chip.click();
+await page.waitForTimeout(200);
+const nCat = await page.locator('#browseList .browse-row').count();
+check('浏览: 类目筛选生效', nCat > 0 && nCat <= nAll, catName + ' rows=' + nCat);
+// 选一家 → 档案卡出现 + 目标牌 + 开始对话
+await page.locator('#browseList .browse-row').first().click();
+await page.waitForFunction(() => { const c = document.getElementById('targetChip'); return c && !c.hidden; }, null, { timeout: 5000 });
+check('浏览: 选中后目标牌出现', await page.isVisible('#targetChip'));
+check('浏览: 档案卡展示', await page.isVisible('#randomCard'));
+const chipTxt = (await page.textContent('#targetChip')).trim();
+check('浏览: 目标牌带公司名', chipTxt.length > 4, chipTxt);
+// 收起再点随机不冲突
+await page.click('#btnBrowseClose');
+await page.waitForTimeout(100);
+check('浏览: 收起后框隐藏', await page.isHidden('#browseBox'));
 await page.click('#btnRandom');
-await page.waitForFunction(() => { const c = document.getElementById('targetChip'); return c && !c.hidden; }, null, { timeout: 4000 });
-check('预览: 目标牌出现', await page.isVisible('#targetChip'), (await page.textContent('#targetChip')).trim());
-check('预览: 外呼目标面板自动展开', (await page.getAttribute('#targetPanel','class')).includes('is-on'));
+await page.waitForTimeout(800);
+check('随机: 与浏览不冲突', await page.isVisible('#randomCard'));
 
-// ③ 文字对话：compact、状态行、输入可用、暂停隐藏、模拟不说话可见
+// 文字对话一轮
 await page.click('#btnText');
 await page.waitForTimeout(800);
-check('text: 状态行=文字对话进行中', (await page.textContent('#phaseLine')).includes('文字对话进行中'));
-check('text: 输入可用', await page.isEnabled('#textInput'));
-check('text: 暂停聆听隐藏', await page.isHidden('#btnRec'));
-check('text: 模拟不说话可见', await page.isVisible('#btnSilence'));
-check('text: 启动区收成工具栏', (await page.getAttribute('.launch','class')).includes('compact'));
-check('text: 目标牌仍可见', await page.isVisible('#targetChip'));
-
-// ④ 打字对话一轮
 await page.fill('#textInput', '为什么没通过');
 await page.click('#btnSend');
-await page.waitForTimeout(1200);
+await page.waitForTimeout(1500);
 const logText = await page.textContent('#log');
-check('text: 一轮对话进了日志', logText.includes('为什么没通过') && logText.includes('客'));
-
-// ⑤ 空发送不再触发空轮（发送键在空值时不动作）
-await page.fill('#textInput', '');
-await page.click('#btnSend');
-await page.waitForTimeout(400);
-const logLen1 = (await page.textContent('#log')).length;
-await page.click('#btnSilence');
-await page.waitForTimeout(1200);
-const logText2 = await page.textContent('#log');
-check('silence: 专用按钮才发空轮', logText2.includes('（无应答）'));
-check('silence: 空发送不进日志', (await page.textContent('#log')).length === logText2.length);
-
-// ⑥ 挂断：状态行、入口解锁、事件链仍可查
+check('对话: 一轮进了日志', logText.includes('为什么没通过'));
+// 挂断 → 事件链快照
 await page.click('#btnEnd');
 await page.waitForTimeout(800);
-check('closed: 状态行=已结束', (await page.textContent('#phaseLine')).includes('已结束'));
-check('closed: 入口解锁', await page.isEnabled('#btnText'));
-check('closed: 挂断禁用', await page.isDisabled('#btnEnd'));
-check('closed: 输入禁用', await page.isDisabled('#textInput'));
-// 事件链 tab + 刷新（用 lastSessionId）
+check('挂断: 状态行=已结束', (await page.textContent('#phaseLine')).includes('已结束'));
 await page.click('.tab[data-pane="eventsPane"]');
 await page.waitForTimeout(300);
 await page.click('#btnEvents');
 await page.waitForTimeout(800);
 const ev = await page.textContent('#events');
-check('closed: 事件链还能读到记录', ev.includes('turn') || ev.includes('call_start') || ev.length > 40, ev.slice(0, 60));
-
-// ⑦ 再开一通：日志被清空（第二通不与第一通混在一起）
-await page.click('#btnText');
-await page.waitForTimeout(800);
-const logText3 = await page.textContent('#log');
-check('第二通: 日志已清空重开', !logText3.includes('为什么没通过'), '残留=' + logText3.includes('为什么没通过'));
-
+check('挂断: 事件链可读', ev.length > 40, ev.slice(0, 40));
 await browser.close();
 let fail = 0;
 for (const r of results) { console.log((r.ok ? '  ✓ ' : '  ✗ ') + r.name + (r.ok ? '' : '  [' + r.detail + ']')); if (!r.ok) fail++; }

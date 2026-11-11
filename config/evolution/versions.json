@@ -1,10 +1,10 @@
 {
- "active": "v42",
+ "active": "v43",
  "scene_file": "config/scenes/pop_reject.json",
  "sync_targets": [
   "config/scene.json"
  ],
- "baseline_json": "eval/reports/sim_baseline_v42.json",
+ "baseline_json": "eval/reports/sim_baseline_v43.json",
  "history": [
   {
    "version": "v1",
@@ -1814,6 +1814,31 @@
    "version": "v42",
    "parent": "v41",
    "created": "2026-11-11 23:04:51",
+   "status": "superseded",
+   "source": "rebase：线上场景内容变更，重定基线",
+   "candidate": null,
+   "metrics": {
+    "all_ok": 10,
+    "all_total": 10,
+    "train_ok": 7,
+    "train_total": 7,
+    "holdout_ok": 3,
+    "holdout_total": 3,
+    "agent_defect_sessions": 1,
+    "case_defect_sessions": 0,
+    "codes": {
+     "agent_noise_on_question": 1,
+     "agent_no_progress": 1
+    },
+    "defect_total": 2
+   },
+   "scene_sha": "c1bd9677335a18ff",
+   "superseded_at": "2026-11-11 23:28:47"
+  },
+  {
+   "version": "v43",
+   "parent": "v42",
+   "created": "2026-11-11 23:28:47",
    "status": "active",
    "source": "rebase：线上场景内容变更，重定基线",
    "candidate": null,
@@ -1832,7 +1857,7 @@
     },
     "defect_total": 2
    },
-   "scene_sha": "c1bd9677335a18ff"
+   "scene_sha": "b12e43de6a73dde4"
   }
  ]
 }

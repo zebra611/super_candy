@@ -1403,7 +1403,8 @@ def _help_reply(session, stage):
         session,
         cfg.get("reply_help_bye")
         or "那这单我先帮您记录到这，材料清单和操作步骤会发到您商家后台，"
-           "稍后专员会用官方号码给您回电，带着您一步步弄。感谢您的接听，再见。",
+           "稍后专员会用官方号码给您回电，带着您一步步弄。"
+           + "如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，再见。",
         "help_escalated")
 
 
@@ -1454,7 +1455,7 @@ def _language_reply(session, stage):
         session,
         cfg.get("reply_lang_bye")
         or "很抱歉，我暂时没办法用英文为您办理。我先把您的需求记下来，"
-           "稍后会有专员与您联系，感谢您的接听，再见。",
+           "稍后会有专员与您联系。如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，再见。",
         "language_barrier")
 
 
@@ -3635,7 +3636,8 @@ def _stage_confirm(session, text, flags):
             return _finish(session,
                            cfg.get("reply_not_clear_handoff")
                            or "那我先不打扰您了，稍后专员会用官方号码再联系您，"
-                              "需要补充的材料清单也会同步到商家后台，感谢您的接听，再见。",
+                              "需要补充的材料清单也会同步到商家后台。"
+                           + "如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，再见。",
                            "unclear")
         session["reexplain_used"] = True
         return _reply(session, _confirm_restatement(session, cfg),
@@ -3767,7 +3769,8 @@ def _stage_confirm(session, text, flags):
                 session,
                 cfg.get("reply_engaged_handoff")
                 or "您的问题我这边确认不到，先不打扰您了；稍后专员会用官方号码"
-                   "再联系您，需要补充的材料清单也会同步到商家后台，感谢您的接听，再见。",
+                   "再联系您，需要补充的材料清单也会同步到商家后台。"
+                + "如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，再见。",
                 "unresolved_question")
         return _reply(
             session,
@@ -3818,8 +3821,8 @@ def _stage_confirm(session, text, flags):
     return _finish(
         session,
         cfg.get("reply_ambiguous_handoff")
-        or "您还没拿准，我就不替您定了。稍后专员用官方号码再跟您确认一次，"
-           "您先忙。", "unresolved_consent")
+        or "您还没拿准，我就不替您定了。稍后专员用官方号码再跟您确认一次。"
+           + "如有疑问，您也可以拨打京东商家热线 4006180092。您先忙。", "unresolved_consent")
 
 
 def _stage_writeback(session, text, flags):
@@ -4000,7 +4003,8 @@ def _handoff(session, reason="handoff"):
     cfg = config_loader.stage_config("DONE")
     text = (cfg.get("reply_handoff")
             or config_loader.fallback_text("reply_handoff")
-            or "好的，我帮您转接人工同事，稍后会有专人和您联系，感谢您的接听，再见。")
+            or "好的，我帮您转接人工同事，稍后会有专人和您联系，"
+                   "如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，再见。")
     return _finish(session, text, reason)
 
 

@@ -1502,6 +1502,23 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(run)
             return
+        if path == "/api/applications":
+            # 全部可电话外呼档案的展示字段（演示页"分类浏览示例数据"用）。
+            res = tools.list_applications()
+            self._send_json(res)
+            return
+        if path == "/api/company/get":
+            # 按单号取一条完整档案（含补全部件），口径与随机预览一致。
+            _qs = parse_qs(parsed.query)
+            _aid = (_qs.get("application_id") or [""])[0]
+            _res = tools.get_application(_aid)
+            _company = _res.get("application") or {}
+            self._send_json({
+                "matched_by": _res.get("matched_by") if _res.get("found") else None,
+                "company": _company,
+                "scene": _scene_of(_company),
+            })
+            return
         if path == "/api/company/random":
             # 纯预览：随机抽一条可电话外呼的档案回传，**不创建会话**。
             # 用途：测试页"随机"按钮先看清这家公司的信息，再决定用哪家与客服对话——

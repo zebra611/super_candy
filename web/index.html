@@ -399,6 +399,45 @@
 
   /* ---------- 档案 ---------- */
   #randomCard { border: 0; box-shadow: none; padding: 0; margin: 0; background: transparent; }
+  /* ---------- 档案浏览（按类目挑） ---------- */
+  #browseBox {
+    margin-bottom: 10px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--surface-2);
+    padding: 8px 10px;
+  }
+  .browse-head { display: flex; align-items: center; justify-content: space-between; }
+  .browse-title { font-size: 12.5px; font-weight: 600; color: var(--ink-1); }
+  .browse-title b { color: var(--brand); font-weight: 600; }
+  .browse-close {
+    border: 0; background: transparent; color: var(--ink-3);
+    font-size: 12px; cursor: pointer; padding: 2px 6px; border-radius: 6px;
+  }
+  .browse-close:hover { color: var(--ink-1); background: var(--surface-3); }
+  .browse-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 6px; }
+  .browse-chips button {
+    font-size: 11.5px; padding: 2px 9px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--surface-1);
+    color: var(--ink-2); cursor: pointer;
+  }
+  .browse-chips button.is-on {
+    background: var(--brand); border-color: var(--brand); color: #fff;
+  }
+  .browse-list {
+    max-height: 300px; overflow-y: auto; overscroll-behavior: contain;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .browse-row {
+    text-align: left; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--surface-1); padding: 6px 9px; cursor: pointer;
+    font-size: 12px; color: var(--ink-1);
+  }
+  .browse-row:hover { border-color: var(--brand); }
+  .browse-row.is-on { border-color: var(--brand); background: var(--surface-3); }
+  .browse-row .bc {
+    font-weight: 600; font-size: 12.5px; word-break: break-word;
+  }
+  .browse-row .bm { margin-top: 2px; color: var(--ink-3); font-size: 11.5px; }
+  .browse-empty { font-size: 12px; color: var(--ink-3); padding: 8px 2px; }
   /* 原来这里还有一条 #targetPanel.is-empty .p-body::before 的空态文案。
      重构后 .p-body 已经不存在，规则整条失效，且与新空态（见下方 ::after）重复，删掉。 */
   /* 档案：先给三行"待会儿真要用到的"，其余全字段收进折叠区。
@@ -777,16 +816,30 @@
       <div class="modes">
         <div class="mgroup">
           <span class="mlabel">① 先选对象</span>
-          <button id="btnRandom" class="mode" title="只抽一份商户档案看，不发起通话。看完再点「文字对话」即可让客服基于它开场">
-            <span class="ico">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="4" width="18" height="16" rx="2"/>
-                <path d="M3 9h18M9 9v11"/>
-              </svg>
-            </span>
-            <span class="mt">看一份档案</span>
-            <span class="md">不发起通话</span>
-          </button>
+          <div class="mpair">
+            <button id="btnRandom" class="mode" title="只抽一份商户档案看，不发起通话。看完再点「文字对话」即可让客服基于它开场">
+              <span class="ico">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="4" width="18" height="16" rx="2"/>
+                  <path d="M3 9h18M9 9v11"/>
+                </svg>
+              </span>
+              <span class="mt">随机一份</span>
+              <span class="md">不发起通话</span>
+            </button>
+            <button id="btnBrowse" class="mode" title="按类目浏览全部示例档案，挑一家再开始对话">
+              <span class="ico">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 6h16M4 12h16M4 18h16"/>
+                  <circle cx="9" cy="6" r="1.4" fill="currentColor" stroke="none"/>
+                  <circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/>
+                  <circle cx="7" cy="18" r="1.4" fill="currentColor" stroke="none"/>
+                </svg>
+              </span>
+              <span class="mt">全部档案</span>
+              <span class="md">按类目挑选</span>
+            </button>
+          </div>
         </div>
         <div class="mgroup mgroup-wide">
           <span class="mlabel">② 再开始对话</span>
@@ -880,6 +933,14 @@
           <div class="pane-top">
             <span>本次外呼目标</span>
             <span class="p-state" id="randomMatched">未选</span>
+          </div>
+          <div id="browseBox" hidden>
+            <div class="browse-head">
+              <span class="browse-title">全部档案 <b id="browseCount"></b></span>
+              <button id="btnBrowseClose" class="browse-close" type="button">收起</button>
+            </div>
+            <div class="browse-chips" id="browseChips"></div>
+            <div class="browse-list" id="browseList"></div>
           </div>
           <div id="randomCard" style="display:none">
             <div id="randomInfo" class="randinfo"></div>
@@ -1159,6 +1220,7 @@ function render() {
   $("btnText").disabled = on;
   $("btnStart").disabled = on;
   $("btnRandom").disabled = on;
+  $("btnBrowse").disabled = on;
   // 「暂停聆听」只在语音模式存在。纯文字模式根本没有麦克风，
   // 一个永远点不动的按钮比没有按钮更让人怀疑自己点错了——直接隐藏。
   const rec = $("btnRec");
@@ -1487,6 +1549,76 @@ async function previewRandom() {
     log("系统", "已选中：" + who + "。点「文字对话」即可基于它开始。");
   } catch (e) {
     log("系统", "随机预览失败：" + (e && e.message ? e.message : e));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 档案浏览：按类目翻全部示例数据，挑一家再对话。
+// 列表只拉一次（数据是静态 mock），切换类目是纯前端过滤；点某一行才去
+// 取完整档案（含补全部件），口径与随机预览完全一致。
+// ---------------------------------------------------------------------------
+const BROWSE = { loaded: false, loading: false, items: [], filter: "", picked: "" };
+
+async function toggleBrowse() {
+  const box = $("browseBox");
+  if (!box) return;
+  if (!box.hidden) { box.hidden = true; return; }   // 再点一次收起
+  box.hidden = false;
+  if (!BROWSE.loaded && !BROWSE.loading) {
+    BROWSE.loading = true;
+    $("browseList").innerHTML = "<div class='browse-empty'>加载中…</div>";
+    try {
+      const r = await fetch("/api/applications");
+      const d = await r.json();
+      BROWSE.items = (d.items || []).filter(c => c && c.company_name);
+      BROWSE.loaded = true;
+    } catch (e) {
+      $("browseList").innerHTML = "<div class='browse-empty'>加载失败：" + (e.message || e) + "</div>";
+    }
+    BROWSE.loading = false;
+    renderBrowse();
+  }
+}
+
+function renderBrowse() {
+  const chips = $("browseChips"), list = $("browseList");
+  if (!chips || !list) return;
+  const cats = [...new Set(BROWSE.items.map(c => c.category_l1 || "其他"))].sort();
+  chips.innerHTML = ["全部", ...cats].map(c =>
+    "<button data-cat=\"" + c + "\"" + (BROWSE.filter === c ? " class=\"is-on\"" : "") + ">" +
+    c + "</button>").join("");
+  const rows = BROWSE.items.filter(c => !BROWSE.filter || (c.category_l1 || "其他") === BROWSE.filter);
+  $("browseCount").textContent = "（" + rows.length + " 家）";
+  list.innerHTML = rows.length ? rows.map(c =>
+    "<button type=\"button\" class=\"browse-row" + (c.application_id === BROWSE.picked ? " is-on" : "") +
+    "\" data-app=\"" + c.application_id + "\">" +
+    "<span class=\"bc\">" + escapeHtml(c.company_name) + "</span>" +
+    "<span class=\"bm\">" + escapeHtml(c.brand_name || "—") + " · " + escapeHtml(c.category_l1 || "—") +
+    " · " + escapeHtml(c.reject_reason || "—") +
+    (c.application_id === BROWSE.picked ? " · 已选" : "") + "</span></button>").join("")
+    : "<div class='browse-empty'>这一类没有可外呼的档案。</div>";
+}
+
+async function pickApplication(appId) {
+  if (!appId) return;
+  try {
+    const r = await fetch("/api/company/get?application_id=" + encodeURIComponent(appId));
+    const d = await r.json();
+    const c = d.company;
+    if (!c || typeof c !== "object") {
+      log("系统", "取档案失败：没找到 " + appId);
+      return;
+    }
+    BROWSE.picked = appId;
+    S.pendingTarget = c.application_id || null;
+    renderRandomCompany(c, d.matched_by, d.scene);
+    openPane("targetPanel");
+    setTargetChip(c.company_name || "");
+    renderBrowse();
+    const who = (c.company_name || "") + (c.contact_role ? "（" + c.contact_role + "）" : "");
+    log("系统", "已选中：" + who + "。点「文字对话」即可基于它开始。");
+  } catch (e) {
+    log("系统", "取档案失败：" + (e && e.message ? e.message : e));
   }
 }
 
@@ -2498,6 +2630,18 @@ function wsPlayNext() {
 $("btnStart").addEventListener("click", () => startCall());
 $("btnText").addEventListener("click", () => startCall({ textOnly: true }));
 $("btnRandom").addEventListener("click", previewRandom);
+$("btnBrowse").addEventListener("click", toggleBrowse);
+$("btnBrowseClose").addEventListener("click", () => { $("browseBox").hidden = true; });
+$("browseChips").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-cat]");
+  if (!b) return;
+  BROWSE.filter = b.dataset.cat === "全部" ? "" : b.dataset.cat;
+  renderBrowse();
+});
+$("browseList").addEventListener("click", (e) => {
+  const b = e.target.closest(".browse-row");
+  if (b) pickApplication(b.dataset.app);
+});
 $("btnRec").addEventListener("click", toggleRec);
 $("btnEnd").addEventListener("click", endCall);
 $("btnEvents").addEventListener("click", refreshEvents);
