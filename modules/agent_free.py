@@ -253,6 +253,7 @@ def reply(session, user_text, flags, stage, base_text, official="", must=None):
         if not got:
             return None
         got = _drop_name_call(got, session)
+        got = _strip_echo_open(got, user_text)
         if not got:
             return None
         return _gates(session, got, base_text, stage, must, official, user_text)
@@ -283,7 +284,13 @@ def reply(session, user_text, flags, stage, base_text, official="", must=None):
            base_text[:160])
     )
 
-    meta = llm.chat([{"role": "system", "content": _SYSTEM},
+    _sys = _SYSTEM
+    if session.get("no_name_call"):
+        # 客户抗议过被叫姓名之后：这通里连道歉复述他的名字都不行。
+        _sys += ("\n【特别提醒】客户已经明确抗议过称呼他的姓名，这一通里任何情况下"
+                 "都不得再出现他的姓名或职务称呼（「X经理」也不行），"
+                 "一律只用「您」。")
+    meta = llm.chat([{"role": "system", "content": _sys},
                      {"role": "user", "content": prompt}],
                     model=(os.environ.get("AGENT_FREE_MODEL") or "").strip()
                           or _agent_cfg().get("model") or "qwen-flash",
@@ -311,10 +318,32 @@ def reply(session, user_text, flags, stage, base_text, official="", must=None):
     text = _drop_invented_ack(text, user_text)
     if not text:
         return None
+    text = _strip_echo_open(text, user_text)
+    if not text:
+        return None
     text = _drop_name_call(text, session)
     if not text:
         return None
     return _gates(session, text, base_text, stage, must, official, user_text)
+
+
+def _strip_echo_open(text, user_text):
+    """别鹦鹉学舌：不许用客户刚说的原词开头。
+
+    11-11 线上实录：客户问「怎么了」，模型回「怎么了，得先确认您是…」——
+    把客户的词当成自己的开场白。电话里这听起来像卡带。
+    只删**句首**与客户原话相同的部分，句中提及不动。
+    """
+    if not text or not user_text:
+        return text
+    head = user_text.strip().rstrip("？！?!.。，,！？ ")
+    if len(head) < 2:
+        return text
+    if text.startswith(head):
+        rest = text[len(head):].lstrip("，,、 ")
+        if rest:
+            return rest
+    return text
 
 
 def _drop_invented_ack(text, user_text):
@@ -508,6 +537,15 @@ def _gates(session, text, base_text, stage, must, official, user_text=""):
     # 2) 禁语闸
     if any(w in text for w in _BANNED):
         session["agent_free_reject"] = "banned"
+        return None
+    # 2b) 引导问句一通只问一次：这通里已经问过「您清楚怎么补吗/清楚了吗」，
+    #     模型再问一遍就是同一个问题问第二遍——客户明明刚答过
+    #     （11-11 线上实录：第 4/6/7 轮连着问了三次）。
+    #     骨架不受这道闸管：规则层自己决定要不要再问（求助分支会换内容）。
+    if (session.get("advance_ever_asked")
+            and any(w in text for w in ("清楚怎么补吗", "清楚了吗", "明白了吗",
+                                        "清楚要怎么准备"))):
+        session["agent_free_reject"] = "repeat_advance_question"
         return None
     # 3) 长度闸：太短等于把这一轮的信息丢了，太长外呼里听不下去。
     if not (8 <= len(text) <= 80):

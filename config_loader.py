@@ -445,6 +445,9 @@ _ALLOWED_PLACEHOLDERS = {
     # 这两个由 dialogue._fill_outbound 填（来源：外呼名单那条申请单），
     # 不走 _fill_application —— 后者填的是申请单的业务字段。
     "company_name", "contact_role",
+    # 求助步骤/赶时间短版用：复审截止日期（dialogue._fill_application 填，
+    # 来源：申请单档案的 recheck_deadline）。
+    "deadline",
 }
 
 _REQUIRED_TOP = ("scene_name", "stages", "slots", "answers", "compliance", "budget")

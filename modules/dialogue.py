@@ -606,6 +606,14 @@ def _intent_name(flags):
     return "unclear" if flags.get("vague") else "unknown"
 
 
+#: 这些环节的话术不走模型改写（也不走 nlg）：求助步骤、升级承诺、抗议称呼的
+#: 道歉、语言不通的说明、赶时间的短版——每一句都是**承诺**（发清单/回电/
+#: 不再称呼），模型换个说法把承诺改丢，比说错话更糟。
+_FREEZE_INTENTS = frozenset((
+    "help_steps", "help_escalate", "name_protest",
+    "language_barrier", "hurry_short"))
+
+
 def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
            end_reason="", stage_label=None, kb_hit=None, intent_conf=None,
            qa_hit=None):
@@ -665,7 +673,7 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     # 核对的东西（后四位/尾号/姓名/单号），说不出来就退回骨架。
     # _freeze_identity 仍然作用于下面 nlg 那条改写路径：骨架自己那句不许改。
     if (not end_reason and intent not in ("error", "empty")
-            and not _freeze_official):
+            and not _freeze_official and intent not in _FREEZE_INTENTS):
         try:
             from modules import agent_free
             _free = agent_free.reply(
@@ -683,7 +691,8 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
         text = _free
         session["agent_free_n"] = int(session.get("agent_free_n") or 0) + 1
     elif (not end_reason and intent not in ("error", "empty")
-            and not _freeze_identity and not _freeze_official):
+            and not _freeze_identity and not _freeze_official
+            and intent not in _FREEZE_INTENTS):
         text = nlg.say(session, _fill_application(text, session["slots"].get("application")),
                        stage_now,
                        # 命中官方口径的那一轮才有东西可"讲清楚"；其余轮次
@@ -720,6 +729,20 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
         text = _skeleton_variant(session, text, stage_now, end_reason)
     # 记的是**实际播出去**的那句（含适配后的引导语），下一轮判重复才准。
     session["last_reply_text"] = text
+
+    # 本轮播出的句子是否在问"清楚吗"类引导问题（句末问号才算——陈述里
+    # 提到"清楚"不算）。下一轮客户答"不清楚"时，_is_help_seek 靠它区分
+    # "在回答问题"和"没听清"；agent_free 与 persona 也用它避免同一句
+    # 引导问句在一通电话里问第二遍。
+    _asked = (any(w in text for w in _ADVANCE_ASK_MARKS)
+              and text.rstrip().endswith(("？", "?")))
+    session["last_advance_ask"] = _asked
+    if _asked:
+        session["advance_ever_asked"] = True
+    # NEED 的解释轮播完，事实就算"已讲过"——之后客户赶时间只给短版，
+    # 不再把驳回原因整段念第二遍。
+    if str(next_stage or "") == "NEED":
+        session["facts_spoken"] = True
 
     if next_stage:
         session["stage"] = next_stage
@@ -1274,15 +1297,15 @@ def _do_writeback(session, consent, changed=False):
 CLARIFY_TEXTS = {
     "NEED": (
         ("reply_unclear_need",
-         "不好意思，我这边没太听清。您方便再说一下主要想了解什么吗？"),
+         "不好意思，我这边没太听清。您是想问没通过的原因，还是想问要补哪些材料？"),
         ("reply_unclear_need_2",
-         "可能信号不太好。您是想了解产品使用，还是售后这方面的问题呢？"),
+         "我再说一遍重点：原因是{reason}，要补{materials}。您接着问就行。"),
     ),
     "OFFER": (
         ("reply_unclear_offer",
          "我这边可能没讲清楚。您是想让我再讲一遍这个方案，还是有别的顾虑？"),
         ("reply_unclear_offer_2",
-         "那我确认一下您的意思：您现在是同意，还是暂时不需要？简单回我一句就行。"),
+         "我换种说法：要补{materials}，在商家后台重新提交。您是清楚怎么弄了，还是需要我把清单发到后台？"),
     ),
 }
 
@@ -1301,6 +1324,194 @@ def _clarify(session, stage):
     pairs = CLARIFY_TEXTS.get(stage) or CLARIFY_TEXTS["NEED"]
     key, default = pairs[min(session["clarify_asks"], len(pairs)) - 1]
     return _reply(session, config_loader.fallback_text(key, default), intent="unclear")
+
+
+# ---------------------------------------------------------------------------
+# 「求助」与「含糊」是两回事（11-11 晚上三张截图的共性根因）
+#
+# 客服问「这一步您清楚怎么补吗」，客户答「不清楚」——这不是没听清，
+# 是在回答问题：答案是我不会。旧逻辑把这句话当含糊，走的路径是：
+# 反问「您是想让我再讲一遍吗」（白耗一轮）→ 整段复述第三遍 →
+# 收线「先不打扰您了」。客户从头到尾只想要一句"怎么操作"。
+#
+# 判据分两层：
+#   - 前一轮客服的结尾是引导问句（您清楚怎么补吗/清楚了吗），此时
+#     「不清楚/不知道/不会」是对问句的回答 → 求助；
+#   - 或者话里带明确的"怎么办"信号（咋补/怎么弄/怎么操作）→ 无论上下文都是求助。
+# 求助的处理是**直接给步骤**（一次），给完还不会就升级（发清单+专员回电），
+# 全程不复述已说过的事实、不反问、不收线。
+# ---------------------------------------------------------------------------
+_HELP_ANSWER_MARKS = ("不清楚", "不知道", "不会弄", "不会弄", "搞不懂", "弄不明白",
+                      "不了解", "没弄过")
+_HOW_SEEK_MARKS = ("咋补", "怎么补", "怎么弄", "怎么操作", "咋弄", "怎么准备",
+                   "怎么搞", "怎么办", "咋办")
+_ADVANCE_ASK_MARKS = ("清楚怎么补吗", "清楚了吗", "明白了吗", "清楚要怎么准备",
+                      "怎么补吗")
+
+
+def _is_help_seek(session, text):
+    """客户这句话是不是在求助（要操作指引），而不是没听清。
+
+    早期版本要求"上一轮问过引导问句"才认——线上实测不成立：NEED 解释完
+    事实后客户答"不清楚"，没有问句上下文，但意思同样是"我不会操作"。
+    求助词本身就是有效回答，直接给步骤永远比反问"要不要再讲一遍"强。
+    真正的没听清（"嗯""啊""啥"）不含这些词，仍走含糊梯子。
+
+    **只在资审场景生效**（本单申请档案已定位）：营销/售后场景里
+    "咋弄/怎么弄"是"怎么领取/怎么办理"这类合法提问，走提问链路；
+    那边没有材料清单和后台入口，套资审的步骤话术就是答非所问
+    （88 条评测 D05 抓过这条回归）。
+    """
+    if not (session["slots"].get("application") or {}):
+        return False
+    return _how_seek(text) or any(w in text for w in _HELP_ANSWER_MARKS)
+
+
+def _how_seek(text):
+    return any(w in text for w in _HOW_SEEK_MARKS)
+
+
+def _help_reply(session, stage):
+    """求助的统一出口：第一次给分步操作，第二次升级（发清单 + 专员回电）。
+
+    不复述驳回原因——那是客户已经听过三遍的东西；步骤和升级路径才是
+    他此刻要的。第二次之后仍不会，走 _handoff，但工单里带上
+    callback_needed 与 merchant_understood=False，专员接手时有据可查。
+    """
+    n = int(session.get("help_count", 0)) + 1
+    session["help_count"] = n
+    cfg = config_loader.stage_config(stage) or {}
+    if n <= 1:
+        return _reply(session, cfg.get("reply_help_steps")
+                      or "那我一步一步说：第一步，把{materials}都准备好；"
+                         "第二步，登录商家后台，找到资质审核入口，把这些材料逐张上传；"
+                         "第三步，重新提交，{deadline}前完成就行。"
+                         "您想先弄哪一样，我再细说。",
+                      intent="help_steps")
+    # 第二次还不会：升级。写进 slots，闭环回写时这两项会带进工单。
+    session["slots"]["callback_needed"] = True
+    session["slots"]["merchant_understood"] = False
+    if n == 2:
+        return _reply(session, cfg.get("reply_help_escalate")
+                      or "好，那我不再重复占用您时间：材料清单和操作步骤我稍后"
+                         "发到您商家后台，专员会用官方号码给您回电，带着您一步步弄。"
+                         "这单我先记成「需要专员协助」，可以吗？",
+                      intent="help_escalate")
+    # 升级都说了还是"不清楚"：不再原地打转。收尾，但把升级承诺说完整——
+    # 这通电话的产出（发清单 + 专员回电）必须在最后一句里再次兑现。
+    return _finish(
+        session,
+        cfg.get("reply_help_bye")
+        or "那这单我先帮您记录到这，材料清单和操作步骤会发到您商家后台，"
+           "稍后专员会用官方号码给您回电，带着您一步步弄。感谢您的接听，再见。",
+        "help_escalated")
+
+
+# ---------------------------------------------------------------------------
+# 语言不通：客户说英文 / 明确表示听不懂中文
+#
+# 11-11 线上实录：客户问 "can you speak english?"，客服回「没太听清，
+# 您方便再说一下主要想了解什么吗」；客户再说 "i can't understand CHinese"，
+# 客服回「可能信号不太好。您是想了解产品使用，还是售后这方面的问题呢」——
+# 场景都错乱了。宁可承认做不到，也不能装听不见。
+# ---------------------------------------------------------------------------
+_LANG_SEEK_MARKS = ("english", "chinese", "speak", "understand",
+                    "language", "中文", "英文", "普通话")
+
+
+def _is_foreign_lang(text):
+    """这句话是不是在**对我们说**语言不通（而不是环境里的英文噪声）。
+
+    只看"拉丁字母多"不够：嘈杂环境里 ASR 会吐出 "OK, thank you"
+    "Yeah right" 这类英文环境音（C6 N03 用例），把它们当成"客户说英文"
+    就会把一通正常电话挂成 language_barrier。判据加一层：带问号，或
+    明确提到语言（english/中文/听不懂…）——客户是在**问我们**，才接话。
+    """
+    letters = len(re.findall(r"[A-Za-z]", text))
+    if letters < 6:
+        return False
+    cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
+    if letters <= cjk * 2:
+        return False
+    low = text.lower()
+    return ("？" in text or "?" in text
+            or any(w in low for w in _LANG_SEEK_MARKS)
+            or any(w in text for w in _LANG_SEEK_MARKS))
+
+
+def _language_reply(session, stage):
+    """语言不通的统一出口：第一次如实承认 + 用中文再说一遍；第二次转专员。"""
+    n = int(session.get("lang_count", 0)) + 1
+    session["lang_count"] = n
+    cfg = config_loader.stage_config(stage) or {}
+    if n <= 1:
+        return _reply(session, cfg.get("reply_lang_barrier")
+                      or "不好意思，我这边暂时只能用普通话为您服务。"
+                         "我用中文再说一遍重点：原因是{reason}，要补{materials}，"
+                         "在商家后台重新提交。",
+                      intent="language_barrier")
+    return _finish(
+        session,
+        cfg.get("reply_lang_bye")
+        or "很抱歉，我暂时没办法用英文为您办理。我先把您的需求记下来，"
+           "稍后会有专员与您联系，感谢您的接听，再见。",
+        "language_barrier")
+
+
+# ---------------------------------------------------------------------------
+# 客户抗议称呼方式：「不要喊我名字！」
+#
+# 11-11 线上实录：客户喊「不要喊我名字！」，被当成拒绝 → 直接收线回写。
+# 客户抗议的是**称呼方式**，不是业务本身——正确动作是道歉、承诺不再称呼、
+# 继续办正事，而不是把一个还在配合的客户挂掉。
+# ---------------------------------------------------------------------------
+_NAME_PROTEST_MARKS = ("不要喊", "别喊", "不要叫", "别叫", "不许喊", "少喊",
+                       "不要提我", "别提我", "不要说我名字", "不要念名字",
+                       "叫什么名字", "喊什么名字", "不要直呼")
+
+
+def _is_name_protest(text):
+    if not any(w in text for w in _NAME_PROTEST_MARKS):
+        return False
+    return any(w in text for w in ("名字", "姓名", "称呼"))
+
+
+def _name_protest_reply(session, stage):
+    """抗议称呼的统一出口：道歉 + 承诺不再称呼 + 回到当前环节的正事。"""
+    session["no_name_call"] = True
+    cfg = config_loader.stage_config(stage) or {}
+    return _reply(session, cfg.get("reply_protest_next")
+                  or "不好意思，是我不好，接下来我不再提您的姓名。咱们接着说正事。",
+                  intent="name_protest")
+
+
+# ---------------------------------------------------------------------------
+# 英文报数：客户把 "4427" 说成 "four four two seven"
+#
+# ASR 原样给出英文单词，数字守卫把它当成"没报数"，客服只会让对方
+# "再重复一遍"。整句都是数字词时直接换算成数字，下游所有匹配照常工作。
+# ---------------------------------------------------------------------------
+_EN_DIGITS = {"zero": "0", "oh": "0", "o": "0", "one": "1", "two": "2",
+              "three": "3", "four": "4", "five": "5", "six": "6",
+              "seven": "7", "eight": "8", "nine": "9"}
+
+
+def _normalize_spoken_digits(text):
+    """整句都是英文数字词时换算成数字（"four four two seven" → "4427"）。
+
+    只处理**整句都是数字词**的情况：混着中文或其它词的句子不动，
+    免得把正常英文（"can you speak english"）错误改写。
+    """
+    words = [w.strip("，,.!?？!；;、 ").lower() for w in text.split()]
+    if len(words) >= 3 and all(w in _EN_DIGITS for w in words):
+        return "".join(_EN_DIGITS[w] for w in words)
+    return text
+
+
+# 急着结束闲聊、只要干货的说法。facts_spoken 立起来之后命中即给短版，
+# 不再把驳回原因整段念第二遍。
+_HURRY_MARKS = ("时间有点急", "有点急", "赶时间", "长话短说", "简单说",
+                "直接说重点", "说重点", "快点", "别啰嗦", "别绕弯子")
 
 
 # ---------------------------------------------------------------------------
@@ -1546,6 +1757,12 @@ def _fill_application(text, app):
         "{reason}": str(app.get("reject_reason") or "材料问题"),
         "{materials}": "、".join(app.get("required_materials") or []) or "对应材料",
         "{code}": str(app.get("reject_code") or ""),
+        # 求助步骤/短版话术用：截止日期；语言不通/抗议称呼时重新发问需要
+        # 公司名与岗位真值（GREETING 的话术另外由 _fill_outbound 先填过，
+        # 这里再兜一层：直接调 respond 的测试路径没有走开场白填充）。
+        "{deadline}": str(app.get("recheck_deadline") or "审核时限内"),
+        "{company_name}": str(app.get("company_name") or "贵公司"),
+        "{contact_role}": str(app.get("contact_role") or "负责人"),
     }
     for k, v in repl.items():
         text = text.replace(k, v)
@@ -2615,6 +2832,20 @@ def _stage_need(session, text, flags):
         session["slots"]["need"] = "用户表示不需要"
         return _do_writeback(session, False)
 
+    # 求助（"不清楚/咋补"）先于含糊处理：这是对「您清楚怎么补吗」的**回答**，
+    # 不是没听清——直接给步骤，不给就升级，绝不反问"要不要再讲一遍"。
+    if _is_help_seek(session, text):
+        return _help_reply(session, "NEED")
+
+    # 客户赶时间（"我时间有点急/长话短说"）且事实已经讲过：给短版，
+    # 不把驳回原因整段再念一遍。
+    if session.get("facts_spoken") and any(w in text for w in _HURRY_MARKS):
+        cfg_h = cfg
+        return _reply(session, cfg_h.get("reply_hurry")
+                      or "好，长话短说：补{materials}，在商家后台重新提交，"
+                         "{deadline}前完成就行。",
+                      intent="hurry_short")
+
     # 含糊/敷衍 → 追问，不把"说了等于没说"记成诉求
     if flags.get("vague"):
         return _clarify(session, "NEED")
@@ -2778,6 +3009,19 @@ def _stage_offer(session, text, flags):
         return _meta_repeat_reply(session, cfg, flags, stay="OFFER")
     # 进了 OFFER 就说明"这份权益"已经被提过一次，后面所有"那个""这个"都能落到它身上
     _note_referent(session, "benefit", "这份权益")
+
+    # 求助先于含糊：客户答"不清楚"是在说"我不会操作"，不是没听清。
+    # 11-11 线上实录：客服问"这一步您清楚怎么补吗"，客户答"不清楚"，
+    # 旧逻辑走含糊梯子，反问"您是想让我再讲一遍吗"，白耗一轮。
+    if _is_help_seek(session, text):
+        return _help_reply(session, "OFFER")
+
+    # 赶时间且事实已讲过 → 短版，不整段复述。
+    if session.get("facts_spoken") and any(w in text for w in _HURRY_MARKS):
+        return _reply(session, cfg.get("reply_hurry")
+                      or "好，长话短说：补{materials}，在商家后台重新提交，"
+                         "{deadline}前完成就行。",
+                      intent="hurry_short")
 
     # 含糊/敷衍先判。这里尤其危险：用户"嗯……"一声就被推进 CONFIRM，
     # 下一轮客服问"您同意吗"，用户会觉得刚说过的话没被听见。
@@ -3367,6 +3611,20 @@ def _stage_confirm(session, text, flags):
             _reset_ambiguity(session, True)
             return _reply(session, _rep, next_stage="CONFIRM", intent="repair")
 
+    # 求助先于「没听懂」：CONFIRM 里答"不清楚"的客户是在说"操作上我不会"，
+    # 给步骤 / 升级专员，而不是"您清楚了吗"问到第三次然后收线。
+    # 11-11 线上实录：客户三次"不清楚"，客服复述了三遍全文后放弃——
+    # 客户要的从来不是第四遍复述。
+    # CONFIRM 不要求上一轮问过引导问句：这个环节的全部职责就是让客户
+    # 弄清楚，客户在这里说"不清楚"永远是"需要帮助"，不是没听清。
+    # 位置必须在 NOT_CLEAR_MARKS 之前——那张表里也有"不清楚"，先命中
+    # 就会走"整段复述第二遍→转专员收线"的老路（本轮改的就是它）。
+    # 判据统一走 _is_help_seek（含场景闸），这里不许用裸词表绕过：
+    # 营销/售后场景的 CONFIRM 里"不清楚"仍走原含糊梯子。
+    if _is_help_seek(session, text):
+        _reset_ambiguity(session, True)
+        return _help_reply(session, "CONFIRM")
+
     # 用户明确说没听懂：不回写同意、也不记拒绝，先把复述再讲一遍。
     # 第二次仍没听懂就转专员收线，**不产生回写事件**——回写会把
     # 「客户同意 / 拒绝」写进工单，而这通电话客户只是没听清，
@@ -3874,6 +4132,9 @@ def respond(session, user_text):
     返回：dict(reply_text, stage, next_stage, tool_call, intent, intent_conf)
     """
     text = (user_text or "").strip()
+    # 英文报数先换算（"four four two seven" → "4427"），再进意图识别与核身
+    # 匹配——数字守卫看见的就已经是数字了。
+    text = _normalize_spoken_digits(text)
     session["turn"] += 1
     session["slots"]["last_user_text"] = text
     # 轮内标志先清：上一轮「客户刚给过信息」的状态不能带进这一轮。
@@ -3915,7 +4176,18 @@ def respond(session, user_text):
     # 原因码沿用 W7 定下的 "handoff"（用户主动要求），
     # 这里不改是因为 3 号的用例与看板已按这个值统计；新增的"听不懂"那条分支
     # 用 "handoff_unclear" 区分，两者在事件里能分开归因。
-    if flags["handoff"] and session["stage"] not in ("WRITEBACK", "DONE"):
+    # 全局：语言不通 / 抗议称呼。都排在挂断判断之前：
+    #   - "i can't understand Chinese" 不含挂断词，但客户已经在说"我们没法
+    #     沟通"，装听不见只会火上浇油；
+    #   - "不要喊我名字！"带否定词，旧逻辑会落到各阶段的拒绝分支直接收线——
+    #     客户抗议的是称呼方式，不是业务，挂断等于把还在配合的人赶走。
+    # 两者都只在通话中的阶段生效（WRITEBACK/DONE 已经在收尾了，不再横生枝节）。
+    _live_stage = session["stage"] not in ("WRITEBACK", "DONE")
+    if _live_stage and _is_foreign_lang(text):
+        out = _language_reply(session, session["stage"])
+    elif _live_stage and _is_name_protest(text):
+        out = _name_protest_reply(session, session["stage"])
+    elif flags["handoff"] and session["stage"] not in ("WRITEBACK", "DONE"):
         out = _handoff(session)
     # 全局：要求挂断。注意与"明确拒绝"区分——两者同时出现时按拒绝处理，
     # 因为拒绝是业务结果，必须回写留痕（"不需要，别打了"属于这一类）。

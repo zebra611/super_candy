@@ -2937,17 +2937,30 @@ def main():
     _nc = dialogue.new_session("verify-not-clear")
     _nc["stage"] = "CONFIRM"
     _nc["slots"]["identity_confirmed"] = True
+    # 求助梯子只在档案定位后生效（资审场景），与线上一致：给一份本单档案。
+    _nc["slots"]["application"] = {
+        "reject_reason": "授权链路不完整",
+        "required_materials": ["品牌授权书", "逐级授权链路证明", "授权方营业执照"],
+        "recheck_deadline": "2026-10-27",
+    }
     _r1 = dialogue.respond(_nc, "哎呀，我还是没听明白")
     _r2 = dialogue.respond(_nc, "哎呀，这我搞不懂")
-    check("客户说没听明白：不回写同意，复述一次后转专员且无回写事件",
+    _r3 = dialogue.respond(_nc, "还是搞不懂")
+    _r4 = dialogue.respond(_nc, "搞不懂")
+    # 11-11 改版：第二次"搞不懂"不再直接收线——求助梯子接管
+    # （给步骤 → 升级专员 → 收尾）。要守的**业务属性**不变：
+    # 全程不回写同意、不把"没听懂"记成任何结论。
+    check("客户说没听明白/搞不懂：不回写同意；步骤→升级→收尾全程无回写",
           _r1["next_stage"] == "CONFIRM"
           and not _r1.get("end_reason")
           and "清楚了吗" in _r1["reply_text"]
-          and _nc["slots"].get("consent") in ("", None)
-          and bool(_r2.get("end_reason"))
+          and _r2["intent"] == "help_steps" and not _r2.get("end_reason")
+          and _r3["intent"] == "help_escalate"
+          and _r4.get("end_reason") == "help_escalated"
           and _nc["slots"].get("consent") in ("", None),
-          ["一轮=%s 二轮=%s consent=%r"
-           % (_r1["next_stage"], _r2.get("end_reason"), _nc["slots"].get("consent"))])
+          ["一轮=%s 二轮=%s 三轮=%s 四轮 end=%r consent=%r"
+           % (_r1["next_stage"], _r2.get("intent"), _r3.get("intent"),
+              _r4.get("end_reason"), _nc["slots"].get("consent"))])
 
     _yc = dialogue.new_session("verify-yes-clear")
     _yc["stage"] = "CONFIRM"
@@ -3072,6 +3085,94 @@ def main():
     check("讨回应型后缀（急脾气）在讲事实的句子后面仍然不加（不回归）",
           _adv3 == _FACT_LINE and not _adv3_ok,
           ["适配后=%r" % _adv3])
+
+    # ---- 11-11 晚上三张截图的共性根因：求助被当含糊、抗议称呼被收线、
+    # 英文报数听不懂、澄清话术错乱到"产品使用还是售后"。四条分支的回归。----
+    # ① OFFER 里答"不清楚" → 分步操作，不反问"要不要再讲一遍"
+    _hs = dialogue.new_session("verify-help-seek-offer")
+    _hs["stage"] = "OFFER"
+    # 求助分支只在资审场景（档案已定位）生效——给这一会话挂一份本单档案。
+    _hs["slots"]["application"] = {
+        "reject_reason": "授权链路不完整",
+        "required_materials": ["品牌授权书", "逐级授权链路证明", "授权方营业执照"],
+        "recheck_deadline": "2026-10-27",
+    }
+    _h1 = dialogue.respond(_hs, "不清楚")
+    check("OFFER 里答「不清楚」：给分步操作，不反问要不要再讲一遍",
+          _h1["intent"] == "help_steps" and "第一步" in _h1["reply_text"]
+          and "再讲一遍" not in _h1["reply_text"],
+          ["回复=%s" % _h1["reply_text"][:44]])
+    # ② 第二次还不会 → 升级承诺（发清单+专员回电，写 callback_needed）；
+    #    第三次 → 干脆收尾，不再把升级话术原样念第二遍
+    _h2 = dialogue.respond(_hs, "还是不清楚")
+    _h3 = dialogue.respond(_hs, "不清楚")
+    check("求助两次：升级承诺（发清单+专员回电），第三次干脆收尾",
+          _h2["intent"] == "help_escalate" and "可以吗" in _h2["reply_text"]
+          and _h3.get("end_reason") == "help_escalated"
+          and _hs["slots"].get("callback_needed") is True
+          and _hs["slots"].get("merchant_understood") is False,
+          ["二轮 intent=%s" % _h2["intent"],
+           "三轮 end=%r" % _h3.get("end_reason"),
+           "slots=%s/%s" % (_hs["slots"].get("callback_needed"),
+                            _hs["slots"].get("merchant_understood"))])
+    # ③ 抗议称呼：道歉、承诺不再称呼、继续服务——不许当拒绝收线
+    _np = dialogue.new_session("verify-name-protest")
+    _np["stage"] = "NEED"
+    _n1 = dialogue.respond(_np, "不要喊我名字！")
+    check("客户抗议被叫姓名：道歉+承诺不再称呼，继续服务不收线",
+          _n1["intent"] == "name_protest"
+          and "不再提您的姓名" in _n1["reply_text"]
+          and not _n1.get("end_reason")
+          and _np.get("no_name_call") is True,
+          ["回复=%s" % _n1["reply_text"][:44]])
+    # ④ 语言不通：承认只能普通话（旧话术回「产品使用还是售后」，场景都错乱）
+    _lg = dialogue.new_session("verify-language-barrier")
+    _lg["stage"] = "NEED"
+    _l1 = dialogue.respond(_lg, "can you speak english?")
+    _l2 = dialogue.respond(_lg, "i can't understand CHinese")
+    check("客户说英文：承认只能普通话，不装听不清、不答「产品使用还是售后」",
+          _l1["intent"] == "language_barrier"
+          and "普通话" in _l1["reply_text"]
+          and "产品使用" not in _l1["reply_text"],
+          ["一轮=%s" % _l1["reply_text"][:44]])
+    check("客户再说我听不懂中文：如实转专员收线（end=language_barrier）",
+          _l2.get("end_reason") == "language_barrier"
+          and "没办法用英文" in _l2["reply_text"],
+          ["二轮=%s" % _l2["reply_text"][:44]])
+    # ⑤ 英文报数整句换算；混着别的词不动（不误伤正常英文）
+    from modules.agent_free import _strip_echo_open as _seo
+    check("英文报数换算成数字；正常英文句子不被误改",
+          dialogue._normalize_spoken_digits("zero zero eight six") == "0086"
+          and dialogue._normalize_spoken_digits("four four two seven") == "4427"
+          and dialogue._normalize_spoken_digits("can you speak english")
+              == "can you speak english",
+          [])
+    # ⑥ 模型出话不许用客户刚说的词开头（「怎么了，得先确认…」）
+    check("模型出话不许鹦鹉学舌：客户刚说的词不作开场白",
+          _seo("怎么了，得先确认您是哪家公司。", "怎么了") == "得先确认您是哪家公司。"
+          and _seo("您这笔申请没通过，是因为授权链路不完整。", "怎么了")
+          == "您这笔申请没通过，是因为授权链路不完整。",
+          [])
+    # ⑦ 引导问句一通只问一次：问过之后 persona 不再挂同款后缀
+    _aq = dialogue.new_session("verify-advance-once")
+    _aq["persona_code"] = "quiet"
+    _aq["advance_ever_asked"] = True
+    _aq_text, _aq_ok = _pm.adapt(_aq, _FACT_LINE, "OFFER")
+    check("引导问句已经问过：「您清楚怎么补吗」不再挂第二遍",
+          _aq_text == _FACT_LINE and not _aq_ok,
+          ["适配后=%r" % _aq_text])
+    # ⑧ 澄清话术不许再带售后场景的残留（"产品使用还是售后"）。
+    #    显式切到 pop 场景：前一段 L2 体检会把场景切到 evolution 快照，
+    #    快照里的 fallback 还是旧话术，测的就不是线上这套了。
+    _cl_prev_scene = config_loader.scene_path()
+    config_loader.set_scene("pop_reject")
+    _cl1 = dialogue._clarify(dialogue.new_session("verify-clarify-pop-1"), "NEED")
+    config_loader.set_scene(_cl_prev_scene)
+    check("pop 场景的澄清话术贴场景（不再问产品使用/售后）",
+          "产品使用" not in _cl1["reply_text"]
+          and ("没通过的原因" in _cl1["reply_text"]
+               or "要补哪些材料" in _cl1["reply_text"]),
+          ["澄清=%s" % _cl1["reply_text"][:44]])
 
     # ---- 真实通话挖掘出来的三处缺陷（11-09，证据来自 data/events.db） ----
     # 1) 核身前用户问「为什么驳回 / 要补什么材料」：不能答（会泄露别人申请信息），

@@ -315,6 +315,13 @@ def adapt(session, text, stage="", freeze=False):
     if session.get("fact_ack_turn"):
         rule = dict(rule)
         rule["suffix"] = ""
+    # 引导问句一通电话只问一次：上一轮已经问过「您清楚怎么补吗/清楚了吗」，
+    # 这一轮再挂后缀就是把同一个问题问第二遍——客户明明刚答过。
+    # 11-11 线上实录：复述完挂一次「这一步您清楚怎么补吗？」，下一轮
+    # 又整段复述再挂「您清楚了吗？」，同一个问题问了三遍。
+    if session.get("advance_ever_asked"):
+        rule = dict(rule)
+        rule["suffix"] = ""
     try:
         new = _apply_actions(text, rule, freeze=freeze,
                              repeated=repeated, repeat_n=n)

@@ -122,7 +122,13 @@ def main():
     with nlg.template_only():
         st = start_call(application_id="QZ202611060002")
         sid2 = st["session_id"]
-        for u in ("对，是我", "后四位1111", "补什么材料", "那我接下来怎么弄"):
+        for u in ("对，是我", "后四位1111", "补什么材料",
+                  # 「那我接下来怎么弄」以前靠"问一句→答一句"推进 CONFIRM，
+                  # 现在这句会被求助分支接住（给分步操作、阶段不动）——
+                  # 这是本轮改对的行为。进确认阶段改用明确的确认词；
+                  # NEED 里第一次"清楚了"只是继续解释并推进 OFFER，
+                  # OFFER 里第二次才落进 CONFIRM，所以连说两次。
+                  "好的，清楚了", "好的，清楚了"):
             r2 = handle_turn(sid2, user_text=u)
             if (r2.get("next_stage") or "") == "CONFIRM":
                 break
