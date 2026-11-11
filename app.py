@@ -204,6 +204,11 @@ _EVOLVE_ID_OK = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 # 同时跑会抢外呼名单（tools 的名单是进程内游标），跑出来的档案对不上。
 _SELFPLAY_LOCK = threading.Lock()
 _SELFPLAY_DIR = os.path.join(_ROOT, "eval", "reports")
+#: 上一场自对练的时间戳。`/api/selfplay/run` 一按就是 30 秒 + 十几次模型调用，
+#: 而线上页面是公开链接——没有冷却的话，一个人连点五次就是五次调用。
+#: 冷却期按"上一次开跑"算，不是按完成算：跑挂了也不该让人立刻重试。
+_SELFPLAY_LAST = {"ts": 0.0}
+_SELFPLAY_COOLDOWN_S = 45
 
 
 def _evolve_runs(limit=12):
@@ -342,6 +347,12 @@ def _selfplay_run(calls=1, card_index=None, user="llm", assist="on"):
         这跟 `/api/evolve/train` 用子进程是同一个原因，只是后果更严重。
     """
     calls = max(1, min(4, int(calls or 1)))
+    now = time.time()
+    if now - float(_SELFPLAY_LAST.get("ts") or 0) < _SELFPLAY_COOLDOWN_S:
+        return {"error": "SELFPLAY_COOLDOWN",
+                "detail": "上一场才跑过，%d 秒后再试（一场要跑十几轮模型调用）"
+                          % int(_SELFPLAY_COOLDOWN_S - (now - float(_SELFPLAY_LAST["ts"])))}
+    _SELFPLAY_LAST["ts"] = now
     stamp = time.strftime("%Y%m%d_%H%M%S")
     out_json = os.path.join(_SELFPLAY_DIR, "selfplay_live_%s.json" % stamp)
     out_md = os.path.join(_SELFPLAY_DIR, "selfplay_live_%s.md" % stamp)
