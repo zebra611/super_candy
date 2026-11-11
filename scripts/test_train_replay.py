@@ -17,6 +17,10 @@
 跑法：python scripts/test_train_replay.py
 """
 
+# 跑批必须可复现：模型客服每次说的话不一样，验收口径会漂，这里强制关掉。
+import os as _os_agent
+_os_agent.environ.setdefault("AGENT_FREE", "0")
+
 import os
 import re
 import sys

@@ -9,6 +9,10 @@
     python scripts/run_eval.py N01 I02              # 只跑指定用例
 
 `--scene` 必须在 import app **之前**生效：app 里有几处「启动时读一次」的缓存，
+# 跑批必须可复现：模型客服每次说的话不一样，验收口径会漂，这里强制关掉。
+import os as _os_agent
+_os_agent.environ.setdefault("AGENT_FREE", "0")
+
 import 之后再切场景，赛题用例会被售后话术与售后假客户跑一遍——
 分数看着绿，其实测的不是赛题链路。所以参数在模块级就解析（见 `_scan_argv`）。
 

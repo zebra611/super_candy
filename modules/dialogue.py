@@ -651,7 +651,31 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     # 11-08 实测，按 intent 判会漏掉它，措辞层把整句压缩成
     # "麻烦您确认下，您是XX公司的负责人吗"，官方答案被丢掉了。
     _freeze_official = bool(qa_hit) or intent in ("qa", "official_script")
+    # 先让**模型客服**说这一句（modules/agent_free）：它的输入是"本环节目标 +
+    # 本单事实 + 最近对话"，不是已经定死的骨架——客户说"我早报过三遍了"，
+    # 它可以直接认账，而骨架里压根没有这个选项。
+    # 说不出来（超时/编数字/少说必答要素/和上一轮重复）就返回 None，
+    # 下面照旧走骨架 + 措辞层，行为与接入前一致。
+    _free = None
     if (not end_reason and intent not in ("error", "empty")
+            and not _freeze_identity and not _freeze_official):
+        try:
+            from modules import agent_free
+            _free = agent_free.reply(
+                session,
+                session.get("last_user_text") or "",
+                session.get("last_flags") or {},
+                stage_now,
+                _fill_application(text, session["slots"].get("application")),
+                must=agent_free._must_say(stage_now))
+        except Exception as exc:          # 模型层任何故障都不能影响出话
+            from modules import agent_free as _af
+            _af._warn_once = getattr(_af, "_warn_once", None)
+            _free = None
+    if _free:
+        text = _free
+        session["agent_free_n"] = int(session.get("agent_free_n") or 0) + 1
+    elif (not end_reason and intent not in ("error", "empty")
             and not _freeze_identity and not _freeze_official):
         text = nlg.say(session, _fill_application(text, session["slots"].get("application")),
                        stage_now,
@@ -692,6 +716,10 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
         intent_conf = session.get("last_intent_conf", 0.0)
     out = {
         "reply_text": text,
+        # 这一句是模型组织的还是骨架话术。录制脚本靠它统计"模型接管了几轮"，
+        # 质检也靠它回答"这句到底是谁说的"——没有这个字段，两种输出在
+        # 事件里长得一模一样，出了事没法追。
+        "reply_source": "model" if _free else "skeleton",
         "stage": stage_now,
         "next_stage": session["stage"],
         "tool_call": tool_call,

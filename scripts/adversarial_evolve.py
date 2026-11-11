@@ -140,6 +140,7 @@ def run_one(persona, max_turns=14, llm_sim=False, application_id=None):
             "reply_text": res.get("reply_text", ""),
             "stage": res.get("stage", ""), "next_stage": res.get("next_stage", ""),
             "intent": res.get("intent", ""), "end_reason": res.get("end_reason", ""),
+            "reply_source": res.get("reply_source", ""),
         }})
         if user_out["action"] == HANGUP:
             end_by = "user_hangup"
@@ -488,4 +489,10 @@ def main():
 
 
 if __name__ == "__main__":
+    # 跑批必须可复现：模型客服每次说的话不一样，验收口径会漂。
+    # 这一行**只能放在这里**，不能放模块级——`app.py` 的训练接口会
+    # `from scripts import adversarial_evolve`，模块级设置会把线上演示
+    # 的模型客服一起关掉（录第一遍时就是这个坑：三通全部"模型说 0 轮"）。
+    import os as _os_agent
+    _os_agent.environ.setdefault("AGENT_FREE", "0")
     sys.exit(main())

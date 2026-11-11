@@ -14,6 +14,10 @@
     - 只测 nlg 自己，不碰对话流程。
 """
 
+# 跑批必须可复现：模型客服每次说的话不一样，验收口径会漂，这里强制关掉。
+import os as _os_agent
+_os_agent.environ.setdefault("AGENT_FREE", "0")
+
 import json
 import os
 import re

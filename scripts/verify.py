@@ -18,6 +18,9 @@
     - 每条都打印实际数据，不只打印"PASS"——结论可以被伪造，原始输出不能。
 """
 
+import os as _os_agent
+_os_agent.environ.setdefault("AGENT_FREE", "0")
+
 import glob
 import json
 import math
@@ -3187,6 +3190,9 @@ def main():
 
     _env_off = dict(os.environ)
     _env_off["LLM_DISABLE"] = "1"
+    # 模型客服（modules/agent_free）同上：验收要可复现，子进程一律关掉。
+    # 它说的话每次都不一样，开着跑 88 条，今天绿明天红，闸门就没有意义了。
+    _env_off["AGENT_FREE"] = "0"
     _env_off.pop("LLM_MAX_CALLS", None)
 
     _r35 = subprocess.run(

@@ -22,6 +22,10 @@
     并保留上一代快照路径，供人判断是"课程变难"还是"系统退化"。
 """
 
+# 跑批必须可复现：模型客服每次说的话不一样，验收口径会漂，这里强制关掉。
+import os as _os_agent
+_os_agent.environ.setdefault("AGENT_FREE", "0")
+
 import argparse
 import json
 import os
