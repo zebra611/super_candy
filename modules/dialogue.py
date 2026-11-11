@@ -2591,6 +2591,10 @@ def _stage_need(session, text, flags):
     有订单就说订单细节（可溯源），没订单就走通用回访话术。
     """
     cfg = config_loader.stage_config("NEED")
+    # 客户说"你不是知道吗""我说过了"——元话语，在说"你在问废话"。
+    # 必须先认账，不许落到 reply_unknown 回"这个我确认不到"。
+    if _meta_repeat(text):
+        return _meta_repeat_reply(session, cfg, flags, stay="NEED")
     app0 = session["slots"].get("application")
 
     # 只在第一次进入时查，避免每轮都打接口。
@@ -2770,6 +2774,8 @@ def _stage_offer(session, text, flags):
     替换完把 placeholder 改成 false。内容是否替换过，`scripts/kb_check.py` 会提示。
     """
     cfg = config_loader.stage_config("OFFER")
+    if _meta_repeat(text):
+        return _meta_repeat_reply(session, cfg, flags, stay="OFFER")
     # 进了 OFFER 就说明"这份权益"已经被提过一次，后面所有"那个""这个"都能落到它身上
     _note_referent(session, "benefit", "这份权益")
 
@@ -3213,14 +3219,20 @@ _META_REPEAT_MARKS = ("我刚才不是说了", "我刚不是说了", "刚才不�
                       # 只收"报过/说过/问过 + 遍数"，不收光秃秃的"多少遍"
                       # （"这要等多少遍"不是这个意思）。
                       "报过三遍", "报过几遍", "说过三遍", "说过几遍",
-                      "问过几遍", "问了三遍", "说了三遍")
+                      "问过几遍", "问了三遍", "说了三遍",
+                      # 11-11 线上复跑：NEED 里客户问完"怎么补"，客服答了，
+                      # 客户接着说「你不是知道吗？」——意思是"这些你本来就该知道"，
+                      # 旧词表没有这一条，落到 reply_unknown 回
+                      # 「您说的这个我确认不到，稍后让专员给您回电」。
+                      # 客户在说"你在问废话"，客服答"我不知道"，最刺人的一种答错。
+                      "你不是知道", "你不知道吗", "你们不是知道", "还用问")
 
 
 def _meta_repeat(text):
     return any(w in (text or "") for w in _META_REPEAT_MARKS)
 
 
-def _meta_repeat_reply(session, cfg, flags):
+def _meta_repeat_reply(session, cfg, flags, stay=None):
     """客户指出客服重复问：先认账，再**停止追问**。不许回「确认不到」。
 
     不能再挂「您也可以对照申请单编号核实」这类要信息型后缀——客户刚说
@@ -3238,8 +3250,10 @@ def _meta_repeat_reply(session, cfg, flags):
         or "确实问重了，我不问了。材料清单后台都能看到，您照着弄；"
            "有卡住的地方，您说一句我接着。",
     ]
+    # stay：NEED/OFFER 里认账时不能顺手把阶段推到 CONFIRM——
+    # 客户只是说"你在问废话"，事还没讲完，推到确认等于跳过解释。
     return _reply(session, _soothe(lines[(n - 1) % len(lines)], flags),
-                  next_stage="CONFIRM", intent="ambiguous")
+                  next_stage=stay or "CONFIRM", intent="ambiguous")
 
 
 def _fact_ack_reply(session, text, cfg, flags):
