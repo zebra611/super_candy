@@ -173,6 +173,37 @@ class TestAcceptPath(unittest.TestCase):
         self.assertTrue(out.endswith(("。", "？", "！")),
                         "截断后必须是完整句：%r" % out)
 
+    def test_open_kept_or_fallback(self):
+        """第 9 道守卫：承接句被改写层压掉时，必须退回骨架。
+
+        11-11 线上 A15 第 6 轮：骨架「对，是您本人」，改写后只剩
+        「您这边清楚这几样材料怎么准备吗」——客户确认了身份，客服一句没认，
+        然后又问一遍。
+
+        这条测的是**接线**，不是判据：`_open_kept` 本身在
+        test_train_replay 里另有一条纯函数用例。只测纯函数抓不到
+        「say 里根本没调用它」——变异 m14 就是这么漏过去的。
+        """
+        base = "对，是您本人。那这几样材料您清楚怎么准备吗？"
+        sess = dict(SESSION)
+        sess["must_keep_open"] = "对，是您本人"
+        cfg = dict(CFG, max_chars=80)
+        # 改写把承接半句整段砍掉，只剩追问 → 必须退回骨架
+        with mock.patch.object(config_loader, "secret", return_value="sk-test"), \
+             mock.patch.object(config_loader, "nlg_config", return_value=cfg), \
+             mock.patch("urllib.request.urlopen",
+                        return_value=_ok_response("您这边清楚这几样材料怎么准备吗？")):
+            out = nlg.say(sess, base, "CONFIRM")
+        self.assertEqual(out, base, "承接句被吃掉却没退回骨架：%r" % out)
+
+        # 反向：改写保留了承接句，就该用改写结果（守卫不能把正常改写也挡掉）
+        with mock.patch.object(config_loader, "secret", return_value="sk-test"), \
+             mock.patch.object(config_loader, "nlg_config", return_value=cfg), \
+             mock.patch("urllib.request.urlopen",
+                        return_value=_ok_response("对，是您本人，那这几样材料您清楚怎么准备吗？")):
+            ok = nlg.say(sess, base, "CONFIRM")
+        self.assertIn("是您本人", ok, "正常改写被误挡：%r" % ok)
+
     def test_no_half_sentence_cut(self):
         """max_chars 内只有逗号/顿号：必须退回骨架，不许切出半句。
 

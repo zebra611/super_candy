@@ -168,6 +168,15 @@ def say(session, base_text, stage="", kb=None, qa=None, user_text="", flags=None
     if not _entities_ok(base_text, rewritten, session):
         _warn_once("entity", "改写把关键实体（公司名/申请单号等）改没了，已丢弃")
         return base_text
+    # 第 9 道守卫：**承接句不许被压掉**。
+    # dialogue 在"客户报了信息、客服要先接住"那一轮把承接半句放进
+    # must_keep_open（去标点）。改写层很爱砍开头那半句——线上第 6 轮
+    # 「对，是您本人」被压成「您这边清楚这几样材料怎么准备吗」，
+    # 客户确认了身份，客服一句都没认，然后又问了一遍。
+    # 砍掉就退回骨架：骨架本来就是给人听的话，退回不吃亏。
+    if not _open_kept(rewritten, session.get("must_keep_open")):
+        _warn_once("open", "改写把承接句吃掉了，已丢弃")
+        return base_text
     return rewritten
 
 
@@ -270,6 +279,21 @@ def _must_keep(session):
         if len(v) >= 2 and v not in out:
             out.append(v)
     return out
+
+
+_PUNCT = re.compile(r"[，。；？！、\s]")
+
+
+def _open_kept(text, hint):
+    """承接句还在不在。hint 是 dialogue 给的承接半句（如「对，是您本人」）。
+
+    去掉标点再比，避免改写只动了一个顿号就被判成"吃掉了"。
+    hint 为空（非承接轮）时一律通过——这不是通用校验，只守那一轮的开头。
+    """
+    want = _PUNCT.sub("", hint or "")
+    if not want:
+        return True
+    return want in _PUNCT.sub("", text or "")
 
 
 def _entities_ok(base_text, text, session):

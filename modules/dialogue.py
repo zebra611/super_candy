@@ -2986,6 +2986,48 @@ def _still_engaged(session, text, flags):
     return ""
 
 
+#: 客户在**指客服重复**，不是在问新问题。
+#: 11-11 线上 A15 第 9 轮：「我刚才不是说过了吗？」——这是元话语，
+#: 客户在说"你刚才没听"。旧逻辑判不出提问/质疑，落到 engaged="talk" 的兜底，
+#: 回「我这边确认不到，稍后让专员给您回电」——客户明明在抱怨重复，
+#: 客服答"我确认不到"，等于把「你没听」听成了「你答不上」。
+_META_REPEAT_MARKS = ("我刚才不是说了", "我刚不是说了", "刚才不是说过了",
+                      "我刚说过了", "我说过了", "不是说了吗", "你刚问过了",
+                      "又问一遍", "怎么又问", "重复问",
+                      # 11-11 线上 A15 第 14 轮：「QZ202611060019，这号我早报过
+                      # 三遍了！」——带具体遍数，是最明确的一种"你重复问"。
+                      # 只收"报过/说过/问过 + 遍数"，不收光秃秃的"多少遍"
+                      # （"这要等多少遍"不是这个意思）。
+                      "报过三遍", "报过几遍", "说过三遍", "说过几遍",
+                      "问过几遍", "问了三遍", "说了三遍")
+
+
+def _meta_repeat(text):
+    return any(w in (text or "") for w in _META_REPEAT_MARKS)
+
+
+def _meta_repeat_reply(session, cfg, flags):
+    """客户指出客服重复问：先认账，再**停止追问**。不许回「确认不到」。
+
+    不能再挂「您也可以对照申请单编号核实」这类要信息型后缀——客户刚说
+    "我说过了"，客服转头又要一遍单号，等于当场打自己脸。线上 A15 第 8 轮
+    就挂了这条后缀，是这一轮逐句读出来的。
+    """
+    session["fact_ack_turn"] = True
+    n = int(session.get("meta_repeat_n", 0)) + 1
+    session["meta_repeat_n"] = n
+    lines = [
+        cfg.get("reply_meta_repeat")
+        or "是我刚才没接住，抱歉。您说的我记下了，不重复问了。"
+           "这几样材料您照着准备就行，哪一步卡住直接说。",
+        cfg.get("reply_meta_repeat_2")
+        or "确实问重了，我不问了。材料清单后台都能看到，您照着弄；"
+           "有卡住的地方，您说一句我接着。",
+    ]
+    return _reply(session, _soothe(lines[(n - 1) % len(lines)], flags),
+                  next_stage="CONFIRM", intent="ambiguous")
+
+
 def _fact_ack_reply(session, text, cfg, flags):
     """客户在 CONFIRM 里报已核过的信息：先**接住他给的那个值**，再决定追不追问。
 
@@ -3016,13 +3058,28 @@ def _fact_ack_reply(session, text, cfg, flags):
     elif tail4:
         head = cfg.get("reply_fact_tail") or "尾号 %s，对上了。" % tail4.group(1)
     elif who:
-        head = cfg.get("reply_fact_self") or "对，是您本人。"
+        # 「是我公司」和「是我本人」不是一回事，别一律回"是您本人"。
+        # 档案在 outbound_target（pop 场景的 slots.application 是空的）。
+        _tgt = session.get("outbound_target") or {}
+        _co = _tgt.get("company_name") or ""
+        _nm = _tgt.get("contact_name") or ""
+        if ("公司" in (text or "") or "企业" in (text or "")) and _co:
+            head = cfg.get("reply_fact_company") or "对，%s就是您公司。" % _co
+        elif _nm:
+            head = cfg.get("reply_fact_self") or "对，是您本人，%s。" % _nm
+        else:
+            head = cfg.get("reply_fact_self") or "对，是您本人。"
     else:
         head = cfg.get("reply_fact_ack") or "好的，收到。"
 
     # 本轮客户刚递上信息：性格适配层不得再追加「要信息型」后缀，
     # 否则「尾号 9403 对上了……您也可以对照申请单编号核实」读起来像又要一遍。
     session["fact_ack_turn"] = True
+    # 承接那半句交给 nlg 守：改写层不许把它压掉。
+    # 线上第 6 轮骨架是「对，是您本人」，改写后只剩「您这边清楚这几样材料
+    # 怎么准备吗」——客户确认了身份，客服一句都没认。数字/单号有专门的
+    # 数字守卫，姓名和"是您公司"没有，靠这一条兜住。
+    session["must_keep_open"] = re.sub(r"[，。；？！、\s]", "", head)
 
     if n >= 3:
         return _reply(session, _soothe(
@@ -3185,6 +3242,12 @@ def _stage_confirm(session, text, flags):
     if _routed:
         _reset_ambiguity(session, True)
         return _routed
+
+    # 客户指出「你刚才问过了」：这不是提问，是在说客服没接住。
+    # 必须在 engaged 判定之前——否则落到 talk 兜底，回「我这边确认不到」。
+    if _meta_repeat(text):
+        _reset_ambiguity(session, True)
+        return _meta_repeat_reply(session, cfg, flags)
 
     # 客户还在提问 / 质疑 / 提供信息，而这一轮没有明确表态：这不是「含糊表态」。
     # 旧逻辑把它计入 confirm_asks，两次就回写 unknown 收线，等于替一个还没
@@ -3578,6 +3641,7 @@ def respond(session, user_text):
     session["slots"]["last_user_text"] = text
     # 轮内标志先清：上一轮「客户刚给过信息」的状态不能带进这一轮。
     session.pop("fact_ack_turn", None)
+    session.pop("must_keep_open", None)
     # 性格证据：只看这一句用户话的字面（不读 stage / intent / 画像标签）。
     # 放在所有分支之前，空输入与直接收尾的路径也能正确累积证据。
     persona.observe(session, text)
