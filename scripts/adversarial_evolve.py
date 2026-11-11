@@ -98,12 +98,30 @@ def load_personas():
     return _load(PERSONAS_PATH).get("personas") or []
 
 
-def run_one(persona, max_turns=14):
+def run_one(persona, max_turns=14, llm_sim=False, application_id=None):
+    """跑一通对抗电话。
+
+    `llm_sim=True` 只给**训练回放的现场演示**用：客户由模型把规则层选定的
+    动作说成真人话。跑批（run / gate / verify）一律用默认的 False——
+    闸门要比的是"同一批客户、只换一处配置"，模型每轮都有采样随机性，
+    拿它当判据，红绿就会跟着采样走，那种结论不可辩护。
+
+    `application_id`：把这一通绑到指定申请单上，让模型手里的档案卡
+    与 `start_call()` 抽到的外呼目标一致。默认 None = 沿用原来"按名单取"，
+    跑批的行为因此一个字节都没变。
+    """
+    from modules import customer_data
     tools._reset_for_test()
-    started = start_call()
+    started = start_call(application_id=application_id)
     sid = started["session_id"]
     company = started.get("company") or {}
-    sim = AdversarySim(persona, company, seed=persona["id"])
+    if llm_sim:
+        from modules import llm_user
+        card = customer_data.card_by_application(company.get("application_id"))
+        sim = llm_user.build_adversary(persona, company, card=card, seed=persona["id"])
+    else:
+        card = None
+        sim = AdversarySim(persona, company, seed=persona["id"])
     turns, agent_text, end_by = [], started.get("opening") or "", ""
 
     for _ in range(max_turns):
@@ -114,6 +132,9 @@ def run_one(persona, max_turns=14):
         if user_out is None:
             end_by = "user_hangup"
             break
+        # 规则版没有 source 字段；补上"这句是规则层说的"，
+        # 前端两种模式才能用同一套徽标显示（不然规则档看起来像字段缺失）。
+        user_out.setdefault("source", "rule")
         res = handle_turn(sid, user_text=user_out["text"])
         turns.append({"user": user_out, "agent": {
             "reply_text": res.get("reply_text", ""),
@@ -136,7 +157,7 @@ def run_one(persona, max_turns=14):
     evs = events.list_events(sid)
     closed = any(e["type"] == "writeback" for e in evs)
     end_call(sid)
-    return {
+    out = {
         "id": persona["id"], "label": persona.get("label", ""),
         "goal": persona.get("goal", ""), "split": persona.get("split", "train"),
         "company": {k: company.get(k) for k in
@@ -146,7 +167,15 @@ def run_one(persona, max_turns=14):
         "final_stage": (turns[-1]["agent"]["next_stage"] if turns else ""),
         "level_peak": max(sim.levels) if sim.levels else 1,
         "weakness": dict(sim.hits),
+        "user_mode": "llm" if llm_sim else "rule",
     }
+    if llm_sim and hasattr(sim, "report"):
+        out["sim_report"] = sim.report()
+        out["user_coverage"] = out["sim_report"].get("coverage", 0.0)
+    if card:
+        out["card_id"] = card.get("card_id")
+        out["card_brief"] = "  ".join((customer_data.brief(card) or "").split())
+    return out
 
 
 def by_level(rows, sessions):

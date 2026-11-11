@@ -70,6 +70,11 @@ def available():
     return True
 
 
+def model_name():
+    """当前会用的模型名。页面上要写"这通是谁扮的客户"，不该去摸私有函数。"""
+    return _model()
+
+
 def stats():
     """当前进程的累计用量（深拷贝，调用方改了也不影响内部）。"""
     with _LOCK:

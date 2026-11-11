@@ -3185,6 +3185,37 @@ def main():
           ["退出码 %d；%s" % (_r37.returncode,
                              ((_r37.stdout or "") or (_r37.stderr or ""))[-200:])])
 
+    # ---- 训练回放与"AI 用户"合并（11-11）----
+    # 用户的原话是"把 AI 用户和训练回放结合，不要再单设一个另外的面"。
+    # 合并之后有三件事会悄悄退化，普通用例都测不到：
+    #   ① 画像又变成随机抽商户——客户报的号码和客服手上的档案对不上；
+    #   ② 首页又长出一块新面板，两个入口跑同一件事、数字各说各的；
+    #   ③ 模型一关，这块面板直接白屏（它现在是线上公开链接的主功能区）。
+    _tp = app_mod._train_personas()
+    _tp_ok = bool(_tp) and all(p.get("merchant") for p in _tp)
+    check("训练回放：每个对抗画像都绑定确定的一家商户（复跑只差「改了什么」）",
+          _tp_ok, ["%d 条画像；缺失商户：%s" % (
+              len(_tp), [p.get("id") for p in _tp if not p.get("merchant")][:5])])
+
+    _html = open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8").read()
+    check("首页只有一块「训练回放」，第二个自对练面板已合并掉",
+          "trainUser" in _html and "selfplayCard" not in _html
+          and "/api/selfplay" not in _html,
+          ["trainUser=%s selfplayCard=%s api=%s" % (
+              "trainUser" in _html, "selfplayCard" in _html,
+              "/api/selfplay" in _html)])
+
+    from scripts import adversarial_evolve as _adv_v
+    _p01 = [p for p in _adv_v.load_personas() if p["id"] == "A01"][0]
+    _train_out = app_mod._train_run(_p01, user="rule")     # 规则版，不联网
+    check("模型关掉时「训练回放」仍能跑完一场（客户退回规则层，逐轮轨迹完整）",
+          bool(_train_out.get("turns")) and _train_out.get("user_mode") == "rule"
+          and all((t.get("user") or {}).get("text") for t in _train_out["turns"])
+          and _train_out.get("card_id"),
+          ["轮数 %d；mode=%s；card=%s；end_by=%s" % (
+              len(_train_out.get("turns") or []), _train_out.get("user_mode"),
+              _train_out.get("card_id"), _train_out.get("end_by"))])
+
     print()
     print("=" * 74)
     total = len(results)

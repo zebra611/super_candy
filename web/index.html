@@ -82,15 +82,7 @@
   .evwhy { font-size: 12px; color: var(--ink); }
   .evquote { font-size: 11px; color: var(--muted); padding-left: 10px; }
   #spBody { margin-top: 10px; }
-  .spgrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-top: 10px; }
-  .spcell { background: var(--gray-bg); border-radius: 8px; padding: 8px 10px; }
-  .spcell .k { font-size: 11px; color: var(--muted); }
-  .spcell .v { font-size: 15px; font-weight: 500; }
-  .spturn { border-top: 1px dashed var(--line); padding: 7px 0; font-size: 12px; line-height: 1.55; }
-  .spturn:first-child { border-top: 0; }
-  .spturn .u { color: #0c447c; }
-  .spturn .a { color: var(--ink); }
-  .spturn .m { font-size: 11px; color: var(--muted); }
+  .bubble .m { display: inline-block; margin-left: 6px; vertical-align: middle; }
   .spbadge { display: inline-block; font-size: 11px; padding: 0 5px; border-radius: 4px; background: var(--gray-bg); color: var(--muted); margin-right: 4px; }
   .spbadge.llm { background: #e3f4ec; color: #0f6e56; }
   .spbadge.rule { background: var(--amber-bg); color: var(--amber); }
@@ -143,14 +135,19 @@
 
   <div class="card" id="trainCard">
     <div class="row" style="justify-content:space-between;margin-bottom:8px">
-      <strong style="font-weight:500">训练回放 · 让对抗客户给客服上难度</strong>
+      <strong style="font-weight:500">训练回放 · 模型扮客户，真链路当客服</strong>
       <span class="hint" id="trainState">未开始</span>
     </div>
     <div class="row">
       <select id="trainPersona" class="sel"></select>
+      <select id="trainUser" class="sel" style="max-width:168px">
+        <option value="llm">客户：模型扮演</option>
+        <option value="rule">客户：规则（可复现）</option>
+      </select>
       <button id="btnTrain" class="primary">开始训练</button>
     </div>
-    <div class="hint" style="margin-top:6px">现场真跑一场，逐轮播放客户与客服的对话：客户按客服露出的破绽把难度从 L1 拉到 L4，红标是这一轮被抓住的弱点。训练用独立事件库、强制模板话术，结果可复现、不写生产数据；有通话进行中会被拒绝。</div>
+    <div class="hint" id="trainTarget" style="margin-top:6px">正在读取画像…</div>
+    <div class="hint" style="margin-top:4px">客户这一侧由大模型按<b>本人档案</b>开口（哪个品牌、驳回什么、要补哪几样），客服就是线上那条真链路。对抗策略仍在规则层：难度 L1→L4 由客服露出的破绽推动，模型只换措辞、不改动作——所以红标出的弱点仍是"客服哪里没做好"，不是模拟器自己编出来的。选「规则」则两端都念模板，与跑批闸门同一个世界，用来对照。</div>
     <div id="trainFlow"></div>
     <div id="trainSummary"></div>
   </div>
@@ -167,21 +164,6 @@
     </div>
     <div class="hint" style="margin-top:6px">每轮只改一处策略开关，改完复跑同一批客户：目标缺陷与负面反馈总量必须同时下降、通过数与 holdout 不降，才采纳；否则退回并记原因。训练只写运行记录，不改线上配置。</div>
     <div id="evolveBody"></div>
-  </div>
-
-  <div class="card" id="selfplayCard">
-    <div class="row" style="justify-content:space-between;margin-bottom:8px">
-      <strong style="font-weight:500">AI 双端自对练 · 客户资料喂给模型，模型自己来问</strong>
-      <span class="hint" id="spState">未加载</span>
-    </div>
-    <div class="row">
-      <select id="spCard" class="sel"></select>
-      <button id="btnSpRun" class="primary">跑一场</button>
-      <button id="btnSpView">看上次结果</button>
-    </div>
-    <div class="hint" style="margin-top:6px">客户由大模型按档案扮演（<span id="spSrc">正在读取档案…</span>）；客服仍是线上这条真链路，不是另写的假客服。客户只能说自己档案里的事实，说漏嘴会被拦下来（记录在每轮的徽标里）。</div>
-    <div id="spStats"></div>
-    <div id="spBody"></div>
   </div>
 
   <div class="card" id="randomCard" style="display:none">
@@ -1633,36 +1615,54 @@ const TRAIN_WEAK = {
 
 function trainSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// 画像清单。顺手把"这个画像这次会坐到哪家店"记住：
+// 客户说的话必须和客服手上的档案是同一份，下拉里直接写出来，
+// 谁看都能一眼对上"他说的品牌"和"客服查到的品牌"是不是一回事。
+let TRAIN_P = [];
+
 async function loadTrainPersonas() {
   try {
     const r = await fetch("/api/train/personas");
     const d = await r.json();
     const sel = $("trainPersona");
     sel.innerHTML = "";
-    (d.personas || []).forEach(p => {
+    TRAIN_P = d.personas || [];
+    TRAIN_P.forEach(p => {
       const o = document.createElement("option");
       o.value = p.id;
       o.textContent = p.id + " · " + p.label +
         "（" + (p.split === "holdout" ? "留出集" : "训练集") + "，最高 L" + p.max_level + "）";
       sel.appendChild(o);
     });
-    if (!sel.options.length) $("trainState").textContent = "没有可用画像";
+    if (!sel.options.length) { $("trainState").textContent = "没有可用画像"; }
+    trainTarget();
   } catch (e) {
     $("trainState").textContent = "画像清单加载失败";
   }
 }
 
+function trainTarget() {
+  const p = TRAIN_P.find(x => x.id === $("trainPersona").value);
+  if (!p) { $("trainTarget").textContent = ""; return; }
+  $("trainTarget").innerHTML = "本场客户档案：" +
+    escapeHtml(p.merchant || "（无）") +
+    (p.reject ? '｜驳回：<span class="weak">' + escapeHtml(p.reject) + "</span>" : "") +
+    "｜同一画像每次都抽同一家，两次训练只差「改了什么」";
+}
+
 async function runTrain() {
   const pid = $("trainPersona").value;
   if (!pid) return;
+  const mode = $("trainUser").value;
   $("btnTrain").disabled = true;
-  $("trainState").textContent = "训练中…（真跑一场，约 5–15 秒）";
+  $("trainState").textContent = mode === "llm"
+    ? "训练中…（客户由模型扮演，约 20–40 秒）" : "训练中…（规则版，约 5–15 秒）";
   $("trainFlow").innerHTML = "";
   $("trainSummary").innerHTML = "";
   try {
     const r = await fetch("/api/train/run", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ persona_id: pid })
+      body: JSON.stringify({ persona_id: pid, user: mode })
     });
     const d = await r.json();
     if (d.error) {
@@ -1689,6 +1689,11 @@ async function playTrain(d) {
     const u = turns[i].user || {};
     const a = turns[i].agent || {};
     const found = (u.found || []).map(w => TRAIN_WEAK[w] || w);
+    const tags = [];
+    if (u.source) tags.push('<span class="spbadge ' + (u.source === "llm" ? "llm" : "rule") + '">' +
+      (u.source === "llm" ? "模型" : (d.user_mode === "llm" ? "回退" : "规则")) + "</span>");
+    if (u.feel) tags.push('<span class="spbadge">' + escapeHtml(u.feel) + "</span>");
+    if (u.veto) tags.push('<span class="spbadge rule">拦:' + escapeHtml(u.veto) + "</span>");
     const div = document.createElement("div");
     div.className = "tl";
     div.innerHTML =
@@ -1697,7 +1702,7 @@ async function playTrain(d) {
       (found.length ? '<span class="weak">露怯：' + escapeHtml(found.join(" / ")) + "</span>" : "") +
       "</div>" +
       '<div class="msg"><div class="who">客户</div><div class="bubble">' +
-      escapeHtml(u.text || "") + "</div></div>" +
+      escapeHtml(u.text || "") + '<span class="m">' + tags.join("") + "</span></div></div>" +
       '<div class="msg"><div class="who">客服</div><div class="bubble agent">' +
       escapeHtml(a.reply_text || "") + '<span class="tag">' +
       escapeHtml((a.stage || "") + "→" + (a.next_stage || "")) + "</span></div></div>";
@@ -1716,16 +1721,31 @@ function renderTrainSummary(d) {
     '<div class="weakcell"><div class="k">' + escapeHtml(TRAIN_WEAK[k]) +
     '</div><div class="v">' + (w[k] || 0) + "</div></div>").join("");
   const want = d.expect && d.expect.closed === true ? "闭环" : "不闭环";
+  // 客户侧到底是谁在说话，要写在结果里而不是只写在提示里：
+  // 模型扮演时通数不可复现，引用这些数字的人得知道这一点。
+  const sim = d.sim_report || {};
+  let who = "客户侧：规则模板（与跑批闸门同一世界，可复现）";
+  if (d.user_mode === "llm") {
+    who = "客户侧：模型 " + escapeHtml(d.llm_model || "") + "｜调用 " +
+      (sim.llm_calls || 0) + " 次，通过 " + (sim.llm_ok || 0) + " 次" +
+      (sim.vetoes && sim.vetoes.length
+        ? "，被打回 " + sim.vetoes.length + " 次（" +
+          escapeHtml(sim.vetoes.slice(0, 3).map(v => v.reason).join("、")) + "）"
+        : "") + "｜覆盖率 " + Math.round((sim.coverage || 0) * 100) + "%" +
+      "（打回的那几句退回规则原话，不算模型说的）";
+  }
   $("trainSummary").innerHTML =
     '<div class="verdict ' + (d.ok ? "ok" : "bad") + '">判定：' + escapeHtml(d.verdict || "") +
     "（期望" + want + "，实际" + (d.closed ? "闭环" : "不闭环") + "）· 难度峰值 L" +
     (d.level_peak || 1) + " · 结束于 " + escapeHtml(d.end_by || "") + "</div>" +
     '<div class="weakgrid">' + cells + "</div>" +
-    '<div class="hint" style="margin-top:8px">这一场露出的弱点就是自进化的输入：失败簇 → 候选话术 → 闸门。' +
+    '<div class="hint" style="margin-top:8px">' + who +
+    "。这一场露出的弱点就是自进化的输入：失败簇 → 候选话术 → 闸门。" +
     "训练用独立事件库，不写生产数据。</div>";
 }
 
 $("btnTrain").onclick = runTrain;
+$("trainPersona").onchange = trainTarget;
 loadTrainPersonas();
 
 // ---------------------------------------------------------------------------
@@ -1878,137 +1898,7 @@ $("btnEvolveView").onclick = viewEvolve;
 $("btnEvolveRun").onclick = runEvolve;
 loadEvolveRuns(false).then(() => { if ($("evolveRun").options.length) viewEvolve(); });
 
-// ---------------- AI 双端自对练 ----------------
-// 这块和后端的关系：客户档案卡来自 data/customer_cards.json（由
-// modules/customer_data.py 从申请单/客户/订单/画像编译），客户由大模型扮演，
-// 客服仍是线上那条真链路。前端只做展示，不参与判定。
-let _spBusy = false;
 
-async function loadSpCards() {
-  try {
-    const r = await fetch("/api/selfplay/cards");
-    const d = await r.json();
-    const s = d.stats || {};
-    $("spSrc").textContent = (s.cards || 0) + " 张档案卡 / " + (s.personas || 0) +
-      " 条性格画像 / " + (s.business_facts || 0) + " 条官方口径";
-    const sel = $("spCard");
-    sel.innerHTML = "";
-    (d.cards || []).forEach((c, i) => {
-      const o = document.createElement("option");
-      o.value = String(i);
-      o.textContent = (c.company || c.card_id) + "｜" + (c.brand || "") +
-        "｜" + (c.reject || "");
-      sel.appendChild(o);
-    });
-    $("spState").textContent = sel.options.length
-      ? "共 " + sel.options.length + " 位客户可选" : "档案卡为空";
-  } catch (e) {
-    $("spState").textContent = "档案卡加载失败：" + e;
-  }
-}
-
-function spCell(k, v) {
-  return '<div class="spcell"><div class="k">' + k + '</div><div class="v">' +
-    (v === undefined || v === null ? "—" : v) + "</div></div>";
-}
-
-function renderSp(d) {
-  const b = $("spBody");
-  if (!d || d.ok === false) {
-    b.innerHTML = '<div class="hint" style="margin-top:8px">' +
-      escapeHtml((d && d.detail) || "还没有结果：点「跑一场」现场跑一次") + "</div>";
-    return;
-  }
-  const a = d.agg || {};
-  let html = '<div class="spgrid">' +
-    spCell("通话", a.calls) +
-    spCell("闭环", (a.closed || 0) + "/" + (a.calls || 0)) +
-    spCell("平均轮数", a.avg_turns) +
-    spCell("客服负面句", (a.neg || 0) + " / " + (a.turns || 0)) +
-    spCell("原地复读", a.stall) +
-    spCell("追问未答", a.unanswered) + "</div>";
-
-  const cmp = (d.compare || [])[0];
-  if (cmp) {
-    const c = cmp.agg || {};
-    html += '<div class="verdict ok">智能客户 ' + (a.closed || 0) + "/" + (a.calls || 0) +
-      " 闭环 vs 模板客户 " + (c.closed || 0) + "/" + (c.calls || 0) +
-      "｜客服负面 " + (a.neg || 0) + " vs " + (c.neg || 0) +
-      "｜平均轮数 " + a.avg_turns + " vs " + c.avg_turns + "</div>";
-  }
-  const codes = a.codes || {};
-  const keys = Object.keys(codes);
-  html += '<div class="hint" style="margin-top:6px">' +
-    (d.llm_model ? "客户模型 " + escapeHtml(d.llm_model) + "｜" : "") +
-    (keys.length ? "缺陷码：" + keys.map(k => escapeHtml(k) + "×" + codes[k]).join("、")
-                 : "没有可归因到系统的缺陷码") +
-    (d.at ? "｜" + escapeHtml(d.at) : "") + "</div>";
-
-  (d.sessions || []).forEach(s => {
-    html += '<div style="margin-top:14px"><div class="evwhy">' +
-      escapeHtml(s.id) + "（" + escapeHtml(s.label || "") + "）｜" +
-      (s.closed ? '<span class="evtag ok">闭环</span>'
-                : '<span class="evtag no">未闭环 ' + escapeHtml(s.end_by || "") + "</span>") +
-      '</div><div class="hint">档案：' + escapeHtml(s.company || "") + "</div>";
-    (s.turns || []).forEach((t, i) => {
-      const tags = [];
-      if (t.source) tags.push('<span class="spbadge ' + (t.source === "llm" ? "llm" : "rule") + '">' +
-        (t.source === "llm" ? "模型" : "规则回退") + "</span>");
-      if (t.feel) tags.push('<span class="spbadge">' + escapeHtml(t.feel) + "</span>");
-      if (t.veto) tags.push('<span class="spbadge rule">拦:' + escapeHtml(t.veto) + "</span>");
-      const hit = t.kb ? " KB:" + escapeHtml(t.kb) : (t.qa ? " QA:" + escapeHtml(t.qa) : "");
-      html += '<div class="spturn"><div class="u">' + (i + 1) + ". 客户（" +
-        escapeHtml(t.action || "") + "）" + escapeHtml(t.user || "") +
-        ' <span class="m">' + tags.join("") + "</span></div>" +
-        '<div class="a">客服（' + escapeHtml(t.stage || "") + "/" +
-        escapeHtml(t.intent || "") + "）" + escapeHtml(t.agent || "") +
-        '<span class="m">' + hit + "</span></div></div>";
-    });
-    html += "</div>";
-  });
-  b.innerHTML = html;
-}
-
-async function viewSp() {
-  $("spState").textContent = "读取上次结果…";
-  try {
-    const r = await fetch("/api/selfplay/latest");
-    const d = await r.json();
-    renderSp(d);
-    $("spState").textContent = d.ok ? "上次：" + (d.at || d.file) : (d.detail || "无记录");
-  } catch (e) {
-    $("spState").textContent = "读取失败：" + e;
-  }
-}
-
-async function runSp() {
-  if (_spBusy) return;
-  _spBusy = true;
-  $("btnSpRun").disabled = true;
-  $("spState").textContent = "正在跑：模型扮客户、真链路当客服，约 20–40 秒…";
-  try {
-    const r = await fetch("/api/selfplay/run", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ calls: 1, card: $("spCard").value, assist: "on" })
-    });
-    const d = await r.json();
-    if (d.error) {
-      $("spState").textContent = d.error + "：" + (d.detail || "");
-      return;
-    }
-    renderSp(d);
-    $("spState").textContent = "完成：" + (d.at || "刚刚");
-  } catch (e) {
-    $("spState").textContent = "跑失败了：" + e;
-  } finally {
-    _spBusy = false;
-    $("btnSpRun").disabled = false;
-  }
-}
-
-$("btnSpView").onclick = viewSp;
-$("btnSpRun").onclick = runSp;
-loadSpCards().then(viewSp);
 
 </script>
 </body>

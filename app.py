@@ -48,6 +48,7 @@ import events
 import ws_channel
 from modules import dialogue, eval as eval_mod, official_script, tools, voice
 from modules import nlg
+from modules import llm
 from modules import semantic_judge
 from modules import wsproto
 
@@ -200,16 +201,6 @@ _EVOLVE_LOCK = threading.Lock()
 _EVOLVE_ROOT = os.path.join(_ROOT, "eval", "reports", "self_evolve")
 _EVOLVE_ID_OK = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
-# 双端自对练的并发闸门。它和自进化用不同的锁：两者都会起子进程跑对话，
-# 同时跑会抢外呼名单（tools 的名单是进程内游标），跑出来的档案对不上。
-_SELFPLAY_LOCK = threading.Lock()
-_SELFPLAY_DIR = os.path.join(_ROOT, "eval", "reports")
-#: 上一场自对练的时间戳。`/api/selfplay/run` 一按就是 30 秒 + 十几次模型调用，
-#: 而线上页面是公开链接——没有冷却的话，一个人连点五次就是五次调用。
-#: 冷却期按"上一次开跑"算，不是按完成算：跑挂了也不该让人立刻重试。
-_SELFPLAY_LAST = {"ts": 0.0}
-_SELFPLAY_COOLDOWN_S = 45
-
 
 def _evolve_runs(limit=12):
     """自进化运行清单（读 index.jsonl，最新在前）。
@@ -253,147 +244,62 @@ def _evolve_run(run_id):
     return run
 
 
-def _selfplay_cards(limit=40):
-    """档案卡清单（自对练用）。只回展示字段，不回身份证/银行卡这类档案细节。"""
+def _train_personas():
+    """对抗画像清单：只回展示需要的字段，不回 knows / traits / style。
+
+    顺带回一句"这个画像这次会抽到哪家店"：训练回放里客户说的话必须与客服
+    手上的档案是同一份，前端把店名显示出来，谁看都知道两边对得上。
+    """
+    from scripts import adversarial_evolve as adv
+    out = []
+    for p in adv.load_personas():
+        card = _train_target(p) or {}
+        knows = card.get("knows") or {}
+        out.append({
+            "id": p["id"], "label": p.get("label", ""), "goal": p.get("goal", ""),
+            "split": p.get("split", "train"),
+            "max_level": int(p.get("max_level") or 4),
+            "expect": p.get("expect") or {},
+            "merchant": knows.get("company_name") or "",
+            "reject": knows.get("reject_reason_short") or "",
+        })
+    return out
+
+
+def _train_target(persona):
+    """给一个画像固定一家商户：同一个 A11 每次演示都是同一个人。
+
+    不随机抽是为了对照——两次训练只有"改了什么"不同，客户换了人就没法比。
+    """
     try:
         from modules import customer_data
-        data = customer_data.load()
-    except Exception as exc:
-        return {"error": "CARDS_UNAVAILABLE", "detail": str(exc)[:200],
-                "stats": {}, "cards": []}
-    stats = (data.get("_meta") or {}).get("stats") or {}
-    # 只回本场景用得上的那类卡：POP 资审用商家卡，售后场景用客户卡。
-    # 不过滤的话，前端下拉里的第 0 项可能是售后客户，而 `selfplay --cards 0`
-    # 会在商家卡里取第 0 张——点一个人、跑出另一个人，最难查的那类错。
-    kind = "merchant" if (config_loader.load() or {}).get("application_mode") else "consumer"
-    cards = []
-    for c in (data.get("cards") or []):
-        if c.get("kind") != kind:
-            continue
-        k = c.get("knows") or {}
-        cards.append({
-            "card_id": c.get("card_id"),
-            "kind": c.get("kind"),
-            "name": k.get("contact_name") or k.get("name") or "",
-            "company": k.get("company_name") or "",
-            "brand": k.get("brand_name") or "",
-            "reject": k.get("reject_reason_short") or "",
-        })
-        if len(cards) >= limit:
-            break
-    return {"stats": stats, "cards": cards}
+        cards = customer_data.callable_cards()
+    except Exception:
+        return None
+    if not cards:
+        return None
+    n = int(re.sub(r"\D", "", str(persona.get("id") or "")) or 0)
+    return cards[n % len(cards)]
 
 
-def _selfplay_latest():
-    """最近一次自对练结果，压成前端能直接画的结构。
-
-    读盘而不是读内存：报告是 `scripts/selfplay.py` 在**子进程**里写的，
-    主进程拿不到它的变量；而看板刷新时最该看到的就是"上一次真跑的结果"。
-    """
-    import glob
-    files = sorted(glob.glob(os.path.join(_SELFPLAY_DIR, "selfplay_*.json")),
-                   key=os.path.getmtime)
-    if not files:
-        return {"ok": False, "detail": "还没有自对练记录"}
-    path = files[-1]
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as exc:
-        return {"ok": False, "detail": "报告读不出来：%s" % str(exc)[:160]}
-    runs = data.get("runs") or []
-    main = runs[0] if runs else {}
-    sessions = []
-    for s in (main.get("sessions") or [])[:4]:
-        turns = []
-        for t in (s.get("turns") or []):
-            u, a = t.get("user") or {}, t.get("agent") or {}
-            turns.append({
-                "action": u.get("action") or "",
-                "user": (u.get("text") or "")[:90],
-                "source": u.get("source") or "",
-                "feel": u.get("feel") or "",
-                "veto": u.get("veto") or "",
-                "stage": a.get("stage") or "",
-                "intent": a.get("intent") or "",
-                "agent": (a.get("reply_text") or "")[:120],
-                "kb": (a.get("kb") or {}).get("id") or "",
-                "qa": (a.get("qa") or {}).get("id") or "",
-            })
-        sessions.append({"id": s.get("id"), "label": s.get("label"),
-                         "closed": bool(s.get("closed")), "end_by": s.get("end_by"),
-                         "company": (s.get("company") or {}).get("company_name"),
-                         "turns": turns})
-    return {
-        "ok": True,
-        "file": os.path.basename(path),
-        "at": data.get("generated_at"),
-        "scene": data.get("scene"),
-        "nlg_mode": data.get("nlg_mode"),
-        "llm_model": data.get("llm_model"),
-        "agg": main.get("agg") or {},
-        "compare": [{"label": r.get("label"), "agg": r.get("agg") or {}}
-                    for r in runs[1:]],
-        "sessions": sessions,
-    }
-
-
-def _selfplay_run(calls=1, card_index=None, user="llm", assist="on"):
-    """真跑一场双端自对练（子进程）。返回精简结果。
-
-    为什么起子进程而不是在本进程里 import scripts.selfplay：
-        那个脚本在**模块级**就切了事件库、定了场景（APP_SCENE）、覆盖了 tts 配置。
-        import 一次就会把主进程的事件库指到临时目录，之后所有真实通话都写丢。
-        这跟 `/api/evolve/train` 用子进程是同一个原因，只是后果更严重。
-    """
-    calls = max(1, min(4, int(calls or 1)))
-    now = time.time()
-    if now - float(_SELFPLAY_LAST.get("ts") or 0) < _SELFPLAY_COOLDOWN_S:
-        return {"error": "SELFPLAY_COOLDOWN",
-                "detail": "上一场才跑过，%d 秒后再试（一场要跑十几轮模型调用）"
-                          % int(_SELFPLAY_COOLDOWN_S - (now - float(_SELFPLAY_LAST["ts"])))}
-    _SELFPLAY_LAST["ts"] = now
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    out_json = os.path.join(_SELFPLAY_DIR, "selfplay_live_%s.json" % stamp)
-    out_md = os.path.join(_SELFPLAY_DIR, "selfplay_live_%s.md" % stamp)
-    cmd = [sys.executable, os.path.join(_ROOT, "scripts", "selfplay.py"),
-           "--calls", str(calls), "--assist", assist, "--user", user,
-           "--json", out_json, "--report", out_md, "--quiet"]
-    if card_index is not None:
-        cmd += ["--cards", str(int(card_index))]
-    try:
-        r = subprocess.run(cmd, cwd=_ROOT, capture_output=True, text=True, timeout=420)
-    except Exception as exc:
-        return {"error": "SELFPLAY_FAILED", "detail": str(exc)[:300]}
-    if r.returncode != 0:
-        # 机器上没配 key 时这是最常见的一种失败，把话说明白，别让前端只显示"失败"。
-        return {"error": "SELFPLAY_FAILED",
-                "detail": ((r.stderr or "") + (r.stdout or ""))[-700:]}
-    return _selfplay_latest()
-
-
-def _train_personas():
-    """对抗画像清单：只回展示需要的字段，不回 knows / traits / style。"""
-    from scripts import adversarial_evolve as adv
-    return [{
-        "id": p["id"], "label": p.get("label", ""), "goal": p.get("goal", ""),
-        "split": p.get("split", "train"),
-        "max_level": int(p.get("max_level") or 4),
-        "expect": p.get("expect") or {},
-    } for p in adv.load_personas()]
-
-
-def _train_run(persona):
+def _train_run(persona, user="llm"):
     """真跑一场对抗对话，返回逐轮轨迹。
 
     两条隔离都必须做：
         1. 事件库切到临时目录——训练不是真实通话，不能混进会话数与时延分位数；
-        2. 改写层强制 template——改写有随机性，回放要逐字节可复现，也不该看一次训练调一次模型。
+        2. 说出口的东西必须能降级——模型不可用时退回纯规则，绝不能让页面白屏。
     两处都在 finally 里恢复，即使跑批抛异常，也不会把生产库路径留在临时目录。
+
+    `user="rule"` 走「强制模板话术 + 模板客户」：这一档可逐字节复现，
+    和 `scripts/adversarial_evolve.py` 的跑批是同一个世界，用来对照。
     """
     from scripts import adversarial_evolve as adv
     old_dir, old_db = events.DATA_DIR, events.DB_PATH
     old_tts = config_loader.tts_config
+    old_nlg = config_loader.nlg_config
+    card = _train_target(persona) or {}
+    application_id = (card.get("knows") or {}).get("application_id") or None
+    use_llm = (str(user) == "llm") and llm.available()
     tmp = tempfile.mkdtemp(prefix="sc_train_")
     events.DATA_DIR = tmp
     events.DB_PATH = os.path.join(tmp, "train.db")
@@ -402,12 +308,23 @@ def _train_run(persona):
     config_loader.tts_config = lambda: {"provider": "browser",
                                         "voice": "zh-CN-XiaoxiaoNeural", "rate": 1.05}
     try:
-        with nlg.template_only():
-            out = adv.run_one(persona, max_turns=_TRAIN_MAX_TURNS)
+        if use_llm:
+            # 客服侧也开表达层：这一档是"双端都像人"的现场演示，
+            # 报告里会分开记客户侧与客服侧各自的模型调用次数。
+            base_nlg = dict((config_loader.load() or {}).get("nlg") or {})
+            config_loader.nlg_config = lambda: dict(
+                base_nlg, provider="dashscope", assist=True)
+            out = adv.run_one(persona, max_turns=_TRAIN_MAX_TURNS, llm_sim=True,
+                              application_id=application_id)
+        else:
+            with nlg.template_only():
+                out = adv.run_one(persona, max_turns=_TRAIN_MAX_TURNS,
+                                  application_id=application_id)
     finally:
         events.DATA_DIR, events.DB_PATH = old_dir, old_db
         events.init_db()
         config_loader.tts_config = old_tts
+        config_loader.nlg_config = old_nlg
         shutil.rmtree(tmp, ignore_errors=True)
 
     expect = persona.get("expect") or {}
@@ -417,6 +334,11 @@ def _train_run(persona):
     out["verdict"] = "通过" if out["ok"] else "失败"
     out["scene"] = config_loader.scene_name()
     out["max_turns"] = _TRAIN_MAX_TURNS
+    out["user_mode"] = "llm" if use_llm else "rule"
+    out["llm_model"] = llm.model_name() if use_llm else ""
+    # 两档都回同一个 card_id：前端靠它说明"客户报的号码就是客服手上这张单"，
+    # 也方便复现"这一场是谁"。规则档由 app 自己补，run_one 只在模型档回它。
+    out["card_id"] = card.get("card_id") or ""
     return out
 
 
@@ -1563,14 +1485,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(run)
             return
-        if path == "/api/selfplay/cards":
-            # 客户档案卡（自对练的"客户资料"就从这里来）。
-            # 只回展示字段：公司名、品牌、驳回摘要，不回身份证/银行账号/邮箱。
-            self._send_json(_selfplay_cards())
-            return
-        if path == "/api/selfplay/latest":
-            self._send_json(_selfplay_latest())
-            return
         if path == "/api/company/random":
             # 纯预览：随机抽一条可电话外呼的档案回传，**不创建会话**。
             # 用途：测试页"随机"按钮先看清这家公司的信息，再决定用哪家与客服对话——
@@ -1719,7 +1633,7 @@ class Handler(BaseHTTPRequestHandler):
                                  "detail": "上一场训练还没跑完"}, 409)
                 return
             try:
-                out = _train_run(raw)
+                out = _train_run(raw, user=(body.get("user") or "llm"))
             except Exception as e:
                 self._send_json({"error": "TRAIN_FAILED", "detail": str(e)}, 500)
                 return
@@ -1759,32 +1673,6 @@ class Handler(BaseHTTPRequestHandler):
             latest = _evolve_runs(limit=1)
             run = _evolve_run((latest[0] or {}).get("run_id") or "")
             self._send_json({"ok": True, "run": run, "log_tail": r.stdout[-1200:]})
-            return
-
-        if path == "/api/selfplay/run":
-            # 现场跑一场"模型扮客户、真链路当客服"的对练。
-            # 和自进化用两把不同的锁：两边都会起子进程，同时跑会抢外呼名单。
-            try:
-                calls = int(body.get("calls") or 1)
-            except (TypeError, ValueError):
-                calls = 1
-            card_index = body.get("card")
-            try:
-                card_index = int(card_index) if card_index not in (None, "") else None
-            except (TypeError, ValueError):
-                card_index = None
-            if not _SELFPLAY_LOCK.acquire(blocking=False):
-                self._send_json({"error": "SELFPLAY_BUSY",
-                                 "detail": "上一场自对练还没跑完"}, 409)
-                return
-            try:
-                out = _selfplay_run(calls=calls, card_index=card_index,
-                                    user=(body.get("user") or "llm"),
-                                    assist=(body.get("assist") or "on"))
-            finally:
-                _SELFPLAY_LOCK.release()
-            self._send_json(out if out.get("ok") else out,
-                            200 if out.get("ok") else 500)
             return
 
         if path == "/api/call/start":

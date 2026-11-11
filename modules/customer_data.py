@@ -398,6 +398,40 @@ def persona_by_id(pid, path=None):
     return None
 
 
+def card_by_application(application_id, path=None):
+    """按申请单号取档案卡。
+
+    训练回放用它把「这一通电话的外呼目标」和「模型手里的客户资料」对上：
+    `start_call()` 返回的 company 里就有 application_id，拿它回查这张卡，
+    模型看到的公司/原因/材料才是**这一单**的，不是随机另一单的。
+    找不到返回 None（调用方据此退化成"只有基础事实"的客户），不抛异常。
+    """
+    aid = str(application_id or "").strip()
+    if not aid:
+        return None
+    for c in load(path).get("cards") or []:
+        if str((c.get("knows") or {}).get("application_id") or "") == aid:
+            return c
+    return None
+
+
+def callable_cards(kind="merchant", path=None):
+    """可以真打个电话的档案卡：排除京麦单与「无需外呼」单。
+
+    这两类的官方口径就是不外呼。拿它们去跑训练，第一轮就会
+    `agent_end:jingmai_no_call`——那不是客服不行，是这一单不该打这个渠道。
+    """
+    out = []
+    for c in load(path).get("cards") or []:
+        if kind and c.get("kind") != kind:
+            continue
+        case = c.get("case") or {}
+        if case.get("close_mode") == "京麦" or case.get("call_status") == "无需外呼":
+            continue
+        out.append(c)
+    return out
+
+
 def pair_for(index=0, kind="merchant", path=None):
     """按序号取一张卡 + 它配对的画像。自对练用它保证每通电话"人不一样"。"""
     data = load(path)

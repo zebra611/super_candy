@@ -25,8 +25,8 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
 from modules import agent_llm, customer_data, llm, llm_user, nlg  # noqa: E402
-from modules.user_sim import (ANSWER_TAIL, CONFIRM, DENY, HANGUP,  # noqa: E402
-                              UserSim)
+from modules.user_sim import (ANSWER_TAIL, ASK_WHY, CONFIRM, DENY,  # noqa: E402
+                              HANGUP, UserSim)
 
 
 class TestExtractJson(unittest.TestCase):
@@ -222,6 +222,105 @@ class TestUserFallback(unittest.TestCase):
         out = sim.say("请说一下预留手机号的后四位。")
         self.assertEqual(out["source"], "rule")
         self.assertTrue(out["text"])
+
+
+class TestAdvSim(unittest.TestCase):
+    """对抗客户接模型（训练回放用）：动作锁死，事实仍以规则层为准。
+
+    训练回放里客户由模型开口，但**这一层不负责决定"做什么"**：
+    难度 L1→L4 与"客服露出的破绽"都是从动作序列推出来的。模型一旦把
+    「报尾号」说成「质问」，等级会虚涨、缺陷会变，看上去是训练变难了，
+    实际是模拟器自己造的失败。所以这条用例守的就是"动作不许换"。
+    """
+
+    def setUp(self):
+        os.environ.pop("LLM_DISABLE", None)
+        self._orig_json = llm.chat_json
+        self._orig_avail = llm.available
+        llm.available = lambda: True
+        self.profile = {
+            "id": "A11", "label": "赶时间的供货商（挑战）", "goal": "confirm",
+            "max_level": 4, "traits": {"patience": 6}, "style": ["麻利点"],
+            "knows": {"phone_tail": True, "contact_name": True,
+                      "application_id": True, "company_name": True},
+        }
+        self.company = {"company_name": "江西省云涛商贸中心", "contact_name": "虞扶苏",
+                        "phone_tail": "0497", "application_id": "QZ202611060014"}
+        self.card = customer_data.card_by_application("QZ202611060014")
+
+    def tearDown(self):
+        llm.chat_json = self._orig_json
+        llm.available = self._orig_avail
+
+    def _fake(self, say, feel="", action=""):
+        llm.chat_json = lambda *a, **k: (
+            {"say": say, "action": action, "feel": feel, "got_answer": None},
+            {"ok": True, "ms": 1})
+
+    def _sim(self):
+        return llm_user.LLMAdvSim(self.profile, self.company, card=self.card, seed="A11")
+
+    def test_action_change_is_blocked(self):
+        # 模型嘴上在应声，动作却标成"确认"——这一轮的规则动作是"报公司名"。
+        self._fake("好的我明白了，就按你说的办。", action="confirm")
+        sim = self._sim()
+        out = sim.say("请问您是江西省云涛商贸中心的负责人吗？")
+        self.assertTrue(out["veto"].startswith("action_locked"))
+        self.assertEqual(out["source"], "rule")            # 退回规则层原话
+        self.assertTrue(out["text"])                       # 但话还在，通话不断
+        self.assertEqual(out["action"], sim.rule.last_action)   # 动作仍按规则层
+
+    def test_action_is_locked_directly(self):
+        sim = self._sim()
+        self.assertTrue(sim._veto("我尾号 0497", ASK_WHY,
+                                  {"action": ANSWER_TAIL}).startswith("action_locked"))
+
+    def test_fact_mismatch_is_blocked(self):
+        sim = self._sim()
+        base = {"action": ANSWER_TAIL}
+        self.assertTrue(sim._veto("我尾号 1234", ANSWER_TAIL, base))
+        self.assertEqual(sim._veto("尾号 0497", ANSWER_TAIL, base), "")
+
+    def test_company_short_name_is_allowed(self):
+        """真人不会每句都念全称；说"我们云涛"应当放行，说别人的名字不行。"""
+        sim = self._sim()
+        base = {"action": llm_user.ANSWER_COMPANY}
+        self.assertEqual(sim._veto("对，就是我们云涛。", llm_user.ANSWER_COMPANY, base), "")
+        self.assertTrue(sim._veto("对，我们是南昌鼎盛商贸中心。",
+                                  llm_user.ANSWER_COMPANY, base))
+
+    def test_grounded_line_passes(self):
+        self._fake("我们这儿就是江西省云涛商贸中心。")
+        sim = self._sim()
+        out = sim.say("请问您是江西省云涛商贸中心的负责人吗？")
+        # 动作恰好不是"报公司名"时，这句换动作会被拦——那也是正确行为。
+        if out["source"] == "llm":
+            self.assertIn("云涛", out["text"])
+        else:
+            self.assertTrue(out["veto"].startswith("action_locked"))
+
+    def test_level_and_weakness_come_from_rule_layer(self):
+        """模型改了措辞，也不能改难度与弱点统计——它们指回"客服哪里没做好"。"""
+        self._fake("嗯，你说。")
+        sim = self._sim()
+        sim.say("请问您是江西省云涛商贸中心的负责人吗？")
+        sim.say("请问您是江西省云涛商贸中心的负责人吗？")   # 原话重复 = 客服复读
+        self.assertGreaterEqual(sim.hits.get("repeat", 0), 1)
+        self.assertGreaterEqual(max(sim.levels or [0]), 1)
+        self.assertEqual(sim.rule.level, sim.level)
+
+    def test_branch_company_is_same_entity(self):
+        """档案写"…有限公司成都市分公司"，客户说"…有限公司"是同一家（A16 实测误拦）。"""
+        sim = self._sim()
+        sim.card = {"knows": {"company_name": "四川省栖梧云启科技有限公司成都市分公司"}}
+        self.assertTrue(sim._entities_ok("对，我们是栖梧云启科技有限公司。"))
+        self.assertFalse(sim._entities_ok("对，我们是南昌鼎盛商贸有限公司。"))
+
+    def test_build_adversary_falls_back_when_disabled(self):
+        llm.available = lambda: False
+        from modules.adversary import AdversarySim
+        self.assertIsInstance(llm_user.build_adversary(self.profile, self.company),
+                              AdversarySim)
 
 
 class TestAgentAssist(unittest.TestCase):
