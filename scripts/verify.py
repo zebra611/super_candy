@@ -806,7 +806,10 @@ def main():
     # 兜底与挂断必须豁免改写。用"总是改写"的假函数来验，而不是读源码找字符串——
     # 读源码只能证明"有个 if"，证明不了"这个 if 真的起了作用"。
     orig_say = nlg.say
-    nlg.say = lambda s, t, st="": "【被改写了】" + (t or "")
+    # **kw 是必须的：nlg.say 现在多带了 kb/qa/user_text/flags（给表达增强层用），
+    # 桩函数不接受就会 TypeError。这里刻意用 **kw 而不是把参数列全——
+    # 以后接缝再加参数，这条证据不该因为"忘了改桩"而红。
+    nlg.say = lambda s, t, st="", **kw: "【被改写了】" + (t or "")
     try:
         s_fb = dialogue.new_session("s_fallback_probe")
         out_fb = dialogue.safe_fallback(s_fb)                 # intent=error
@@ -3142,6 +3145,45 @@ def main():
     _dup = {k: v for k, v in _nums.items() if len(v) > 1}
     check("docs 文档编号不撞号", not _dup,
           ["重号：%s" % _dup if _dup else "共 %d 个编号，无重号" % len(_nums)])
+
+    print()
+    print("=" * 74)
+    print("证据 35：客户数据注入 / 模型客户 / 客服表达层（全离线，不联网）")
+    print("=" * 74)
+    print("守什么：四道闸真的拦得住（编造数字、跨动作族、出戏、禁语、丢公司名）、")
+    print("        模型不可用时真的静默降级、档案卡的「客户不知道什么」没漏进简报。")
+    print("为什么不在这里真调模型：自检每次改代码都要跑，一旦联网，红绿就跟着配额走，")
+    print("        那种红没有诊断价值。真实效果由 scripts/selfplay.py 出报告（docs/40）。")
+
+    _env_off = dict(os.environ)
+    _env_off["LLM_DISABLE"] = "1"
+    _env_off.pop("LLM_MAX_CALLS", None)
+
+    _r35 = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "test_llm_layer.py")],
+        cwd=ROOT, capture_output=True, text=True, timeout=240, env=_env_off)
+    _last35 = ((_r35.stderr or "").strip().splitlines() or [""])[-1]
+    check("大模型接入层离线自测全过（闸门 / 降级 / 受知边界）",
+          _r35.returncode == 0 and _last35.startswith("OK"),
+          ["退出码 %d；末行：%s" % (_r35.returncode, _last35[:80])])
+
+    _r36 = subprocess.run(
+        [sys.executable, "-m", "modules.customer_data", "--check"],
+        cwd=ROOT, capture_output=True, text=True, timeout=120)
+    check("档案卡与源数据一致（改了 mock 数据却没重编译，这里会红）",
+          _r36.returncode == 0,
+          ["退出码 %d；%s" % (_r36.returncode, (_r36.stdout or "").strip()[:120])])
+
+    # 这一条是"没有 key 的队友 clone 下来能不能跑"的实证：
+    # LLM_DISABLE=1 + 骨架话术，一通电话必须能从头走到尾。
+    _r37 = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "selfplay.py"),
+         "--calls", "1", "--assist", "off", "--nlg", "template", "--quiet"],
+        cwd=ROOT, capture_output=True, text=True, timeout=180, env=_env_off)
+    check("模型被关掉时自对练仍能跑完一通（客户自动退回规则层，不抛异常）",
+          _r37.returncode == 0 and "闭环" in (_r37.stdout or ""),
+          ["退出码 %d；%s" % (_r37.returncode,
+                             ((_r37.stdout or "") or (_r37.stderr or ""))[-200:])])
 
     print()
     print("=" * 74)
