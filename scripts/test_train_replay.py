@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""把 11-11 线上那段「全是问题」的对话固化成回归用例。
+
+来源：用户截图的那通 A15（留出集·半信半疑的财务），13 轮里同时出现了
+五类毛病，全都不是"话说得不好听"，而是：
+
+    1. 客户只说"单号我真记不住、号码 4656 没存"，客服回"您报的**单号**我这边对得上"
+       ——把客户刚否认的事当成确认，后面每一轮都建在错前提上；
+    2. 客服连着两轮逐字相同地念"您可以简单回我一句清楚了或者还有疑问就行"；
+    3. 客户说"材料页面根本打不开"，客服把材料清单再念一遍，连着两轮；
+    4. 客户最后说"打错了，没这个人！"，客服**照样写了一张工单**并收线；
+    5. 客户从头到尾只说"嗯"，客服也照样回写一张 consent=unknown 的工单。
+
+这些都不是聚合指标能看出来的：闭环率、覆盖率、veto 次数当时全是绿的。
+所以这个文件的每一条断言，都直接**读对话本身**。
+
+跑法：python scripts/test_train_replay.py
+"""
+
+import os
+import re
+import sys
+import tempfile
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+import events  # noqa: E402
+
+_tmp = tempfile.mkdtemp(prefix="sc_replay_")
+events.DATA_DIR = _tmp
+events.DB_PATH = os.path.join(_tmp, "replay.db")
+events.init_db()
+
+import config_loader  # noqa: E402
+from modules import nlg  # noqa: E402
+
+config_loader.tts_config = lambda: {"provider": "browser"}
+
+from app import end_call, handle_turn, start_call  # noqa: E402
+
+_checks = []
+
+
+def check(name, ok, detail=""):
+    _checks.append((name, bool(ok), detail))
+
+
+def _replay(application_id, lines):
+    """逐句走一遍，返回 (每轮 (客户, 客服), end_reason, 事件列表)。"""
+    with nlg.template_only():
+        started = start_call(application_id=application_id)
+        sid = started["session_id"]
+        pairs, end_reason = [], ""
+        for u in lines:
+            res = handle_turn(sid, user_text=u)
+            pairs.append((u, res.get("reply_text") or "", res.get("end_reason") or ""))
+            if res.get("end_reason"):
+                end_reason = res["end_reason"]
+                break
+        evs = events.list_events(sid)
+        end_call(sid)
+    return started, pairs, end_reason, evs
+
+
+#: 截图里用户的原话，一字未改（尾号是那单的真实尾号）。
+def _lines(tail):
+    return [
+        "单号？我只记得尾号，别的记不清了。",
+        "啥？备案凭证和单号不一致？我这材料明明都对得上啊！",
+        "补啥材料？上哪儿补去？",
+        "后台审核我看材料页面都打不开，店里还一堆事等着呢",
+        "单号？我真记不住，号码%s的手机上也没存！" % tail,
+        "单号？真记不住了，就记得尾号%s" % tail,
+        "都当我一时真想不起来",
+        "补这些材料，平台收不收费啊？",
+        "记住，就记得尾号%s" % tail,
+        "都当我一时真想不起来",
+        "后台审核我看材料页面都打不开",
+        "打错了，没这个人！",
+    ]
+
+
+def main():
+    started, pairs, end_reason, evs = _replay("QZ202611060002", _lines("1111"))
+    company = (started.get("company") or {})
+    check("复现用的档案取到了（客户报的尾号与客服手上是同一张单）",
+          bool(company.get("company_name")), str(company.get("company_name")))
+
+    # 1) 客户从没报过单号，就不许说"您报的单号我这边对得上"
+    bad_claim = [(u, a) for u, a, _ in pairs if "您报的单号" in a or "单号没错" in a]
+    check("客户只说记不住单号时，客服不许说「您报的单号对得上」",
+          not bad_claim,
+          "踩了吗：%s" % (bad_claim[:1] or "否"))
+
+    # 2) 相邻两轮不许逐字相同
+    dup = [(pairs[i - 1][1], pairs[i][1]) for i in range(1, len(pairs))
+           if pairs[i][1] and pairs[i][1] == pairs[i - 1][1]]
+    check("相邻两轮客服回复不许逐字重复", not dup,
+          "重复：%s" % (dup[:1] or "无"))
+
+    # 3) 客户说后台打不开时，回复得接住"打不开"，不能只念材料清单
+    blocked = [(u, a) for u, a, _ in pairs if "打不开" in u]
+    ok_blocked = blocked and all(
+        any(w in a for w in ("打不开", "浏览器", "专员", "页面")) for _, a in blocked)
+    check("客户说「页面打不开」时，客服要接住这堵墙（不能只念材料清单）",
+          ok_blocked, "共 %d 轮；首句：%s" % (len(blocked), (blocked[0][1][:40] if blocked else "")))
+
+    # 4) 客户说打错了：必须停，且一张工单都不许写
+    wb = [e for e in evs if e.get("type") in ("writeback", "ticket")]
+    check("客户说「打错了，没这个人」时立即收线（not_me）",
+          end_reason == "not_me", "end_reason=%s" % end_reason)
+    check("打错人的电话不许回写工单", not wb, "回写事件 %d 条" % len(wb))
+
+    # 5) 只"嗯"两次不算表态：不许替他写结论
+    # 先走到确认环节（"嗯"在 NEED 会被当成含糊，走的是另一条澄清路，
+    # 那一条本来就不回写；这里要测的是确认环节的含糊出口）。
+    with nlg.template_only():
+        st = start_call(application_id="QZ202611060002")
+        sid2 = st["session_id"]
+        for u in ("对，是我", "后四位1111", "补什么材料", "那我接下来怎么弄"):
+            r2 = handle_turn(sid2, user_text=u)
+            if (r2.get("next_stage") or "") == "CONFIRM":
+                break
+        r2 = handle_turn(sid2, user_text="嗯")
+        r3 = handle_turn(sid2, user_text="嗯")
+        stage2 = r3.get("next_stage") or ""
+        end2 = r3.get("end_reason") or ""
+        r4 = handle_turn(sid2, user_text="嗯")     # 连续第三次才交给人
+        end3 = r4.get("end_reason") or ""
+        evs2 = events.list_events(sid2)
+        end_call(sid2)
+    wb2 = [e for e in evs2 if e.get("type") in ("writeback", "ticket")]
+    check("客户两次只说「嗯」：不回写、不收线，留在确认阶段等表态",
+          not wb2 and not end2 and stage2 == "CONFIRM",
+          "end_reason=%r；next_stage=%r；回写 %d 条" % (end2, stage2, len(wb2)))
+    check("连续第三次仍含糊才转专员，且全程一张工单都不写",
+          end3 == "unresolved_consent" and not wb2,
+          "end_reason=%r；回写 %d 条" % (end3, len(wb2)))
+
+    # 6) 客户同一动作不许连着来三次（读模拟器本身，不看客服）
+    from modules.adversary import AdversarySim
+    persona = {"id": "A15", "label": "测试", "goal": "offtopic", "max_level": 4,
+               "traits": {"patience": 20},
+               "knows": {"phone_tail": True, "contact_name": True,
+                         "application_id": True, "company_name": True}}
+    sim = AdversarySim(persona, {"company_name": "上海市白鹿商贸股份有限公司",
+                                 "contact_name": "虞扶苏", "phone_tail": "1111",
+                                 "application_id": "QZ202611060002"}, seed="A15")
+    acts = []
+    for _ in range(8):
+        out = sim.say("您可以简单回我一句清楚了或者还有疑问就行。")
+        if out is None:
+            break
+        acts.append(out["action"])
+    run = best = 1
+    for i in range(1, len(acts)):
+        run = run + 1 if acts[i] == acts[i - 1] else 1
+        best = max(best, run)
+    check("客户同一动作最多连两次（原实录连说 5 轮「记不住」）",
+          best <= 2, "最长连续 %d：%s" % (best, acts))
+
+    # 7) 核身阶段：客户连着不报信息、最后质问「你哪个部门的」，
+    #    不许甩给「信号不太好」（L2 基线 S05 的实录）。
+    #    变异靶子：把 _contentful 判据删掉，本条必须红。
+    # 用 L2 基线 S05 的**六句原话**（eval/reports/sim_baseline_v*.json 里
+    # 逐轮存着）。前两版都造错了场景：连着两句明确拒绝会被 identity_refusals
+    # 提前收尾；「嗯/啊」这类短句走的是「没听懂」通道，根本不累计 noise_turns。
+    # 只有这六句会真的顶到 NOISE_MAX 临界点，才能测到那个 no_voice 兜底。
+    _, pairs7, end7, _ = _replay("QZ202611060002", [
+        "我说，是我，你说",
+        "我说，这种电话我接多了，号码我不会报",
+        "我说，这种电话我接多了，号码我不会报",
+        "我说，那号在我儿子手机上，我记不住",
+        "我说，你先别问号，你说说这电话到底什么事",
+        "我说，我凭什么告诉你，你先说你是哪个部门的",
+    ])
+    last7 = pairs7[-1][1] if pairs7 else ""
+    check("S05：客户质问来意时不许甩给「信号不太好」并当噪声挂断",
+          last7 and "信号不太好" not in last7 and end7 != "no_voice",
+          "end_reason=%r；共 %d 轮；末句=%r" % (end7, len(pairs7), last7[:56]))
+
+    # 8) 客户复读 ≠ 含糊表态：短句真含糊仍要能触发转专员
+    from modules import dialogue
+    _eg = dialogue.new_session("verify-repeat")
+    _eg["prev_user_text"] = "少拿这些破权益堵我嘴"
+    check("客户把同一句抱怨又说一遍，判成「没接住」而不是「含糊」",
+          dialogue._self_repeated(_eg, "少拿这些破权益堵我嘴")
+          and not dialogue._self_repeated(_eg, "嗯")
+          and not dialogue._self_repeated(_eg, "再说吧"),
+          "长句=%s；嗯=%s；再说吧=%s"
+          % (dialogue._self_repeated(_eg, "少拿这些破权益堵我嘴"),
+             dialogue._self_repeated(_eg, "嗯"),
+             dialogue._self_repeated(_eg, "再说吧")))
+    _eg["prev_user_text"] = "少拿这些破权益堵我嘴"
+    _rr = [dialogue._self_repeat_reply(_eg, {}, {"yes": False, "no": False,
+                                                 "ask": False, "angry": False,
+                                                 "complain": False, "deny": False,
+                                                 "hangup": False, "handoff": False})
+           for _ in range(4)]
+    _rr_text = [r.get("reply_text") or "" for r in _rr]
+    check("客户连复读四轮，客服四轮不能逐字重复（轮换承接）",
+          all(a != b for a, b in zip(_rr_text, _rr_text[1:])),
+          "首两句：%r / %r" % (_rr_text[0][:36], _rr_text[1][:36]))
+
+    # 9) 半句保护：截断只许断在句末，不许停在「、，；」
+    from modules.nlg import _fit
+    sample = "您好，关于授权书公章与品牌名不一致的情况，需重新提交品牌授权书、逐级授权链路证明。"
+    got = _fit(sample, 30)
+    check("话术截断不许留下半句（句尾挂着「、」）",
+          got is None or not re.search(r"[、，；]$", got or ""), "截成：%r" % (got,))
+
+    print()
+    bad = [c for c in _checks if not c[1]]
+    for name, ok, detail in _checks:
+        print("  [%s] %s%s" % ("通过" if ok else "失败", name,
+                               ("　　" + str(detail)) if (detail and not ok) else ""))
+    print()
+    print("%d/%d 通过" % (len(_checks) - len(bad), len(_checks)))
+    return 0 if not bad else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

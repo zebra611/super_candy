@@ -146,6 +146,7 @@ class AdversarySim(object):
         self.levels = []
         self.blocked_by_missing_fact = []
         self.style = list(profile.get("style") or ["哎呀"])
+        self._same_n = 0
 
     # -- 观察：只用客服播出去的那句话 -------------------------------------
     def _observe(self, agent_text):
@@ -234,6 +235,41 @@ class AdversarySim(object):
             action = DENY
         return action, ""
 
+    #: 同一动作连说三遍就不像人了，换一个同族的说法。
+    _ALTS = {
+        CANT_REMEMBER: (REFUSE_INFO, ASK_WHY),
+        REFUSE_INFO: (CANT_REMEMBER, ASK_WHY),
+        ASK_MATERIAL: (ASK_FEE, ASK_WHY),
+        ASK_FEE: (ASK_MATERIAL, ASK_WHY),
+        ASK_WHY: (ASK_MATERIAL, CANT_REMEMBER),
+        DENY: (ASK_MATERIAL, CANT_REMEMBER),
+        MISHEAR: (ACK, DENY),
+        OFF_TOPIC: (ACK, ASK_MATERIAL),
+        # 「我刚才不是说过了吗」也是抱怨，连说四遍就成了录音。
+        # 11-11 回归用例抓到它连来 4 轮（A15 第 5~8 轮）。
+        REASK_ALREADY_TOLD: (DENY, ASK_MATERIAL),
+    }
+
+    def _vary(self, action):
+        """同一个动作最多连来两次，第三次换个同族的。
+
+        11-11 线上实录：客户连着 5 轮"单号？我真记不住"，语气词都换了、
+        意思一个字没变——读起来像卡带，而且把"客户到底卡在哪"这条信息
+        稀释掉了。真人第二次就会换说辞，第三次开始不耐烦或者干脆拒答。
+        只换动作、不改难度：难度仍由客服弱点驱动。
+        """
+        if action != self.last_action:
+            self._same_n = 1
+            return action
+        self._same_n += 1
+        if self._same_n <= 2:
+            return action
+        alts = [a for a in self._ALTS.get(action, ()) if a != action]
+        if not alts:
+            return action
+        self._same_n = 1
+        return alts[self.turn % len(alts)]
+
     # -- 渲染：不编事实，只按等级加噪 --------------------------------------
     def _render(self, action):
         need = _ACTION_FACT.get(action)
@@ -273,6 +309,7 @@ class AdversarySim(object):
                     "given_fact": "", "found": list(found)}
 
         action, probe = self._choose(found, asks)
+        action = self._vary(action)
         text, action = self._render(action)
         given = _ACTION_FACT.get(action, "") if action in _ACTION_FACT else ""
         if given and given not in self.facts:

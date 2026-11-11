@@ -226,17 +226,28 @@ def main():
            "writeback 事件数 = %d（应为 0）" % len(payloads(sid_c, "writeback"))])
     amb2 = handle_turn(sid_c, user_text="再说吧")
     last_ticket = tools.ticket_for_session(sid_c) or {}
-    check("第二次仍含糊：记 unknown 并回写（不是拒绝）",
-          amb2["next_stage"] == "DONE" and amb2["slots"].get("consent") == "unknown"
-          and len(payloads(sid_c, "writeback")) == 1,
+    # 11-11 改了契约：连续两次含糊**不写 consent=unknown 工单**——
+    # 客户一个字都没确认，写"不确定"也是替他编结论（用户的原话是
+    # "用户明明没有得到答案，却说知道了"）。但也**不结束通话**：
+    # 说清"我什么都没记"，留在 CONFIRM 等表态。第一版修法直接收线，
+    # 把 L02/L07 与课程 Gen3 后面那句"同意"全挂断了（86/88、8/12）。
+    # 这两条同时是变异靶子：把出口改回 _do_writeback("unknown") 或
+    # _finish(...)，下面任意一条都会当场红。
+    check("第二次仍含糊：不写工单、不结束通话，明说没下结论",
+          amb2["next_stage"] == "CONFIRM"
+          and amb2["slots"].get("consent") in ("", None)
+          and len(payloads(sid_c, "writeback")) == 0
+          and "不记任何结论" in amb2["reply_text"],
           ["consent = %r" % amb2["slots"].get("consent"),
-           "工单内容 consent = %r" % (last_ticket.get("content") or {}).get("consent"),
+           "writeback 事件数 = %d（应为 0）" % len(payloads(sid_c, "writeback")),
+           "next_stage = %r（应为 CONFIRM）" % amb2["next_stage"],
            "实际回复：%s" % amb2["reply_text"]])
     fixed = handle_turn(sid_c, user_text="那我要吧")
-    check("unknown 之后说清了，也要能更正过来",
-          fixed["slots"].get("consent") is True and len(payloads(sid_c, "writeback")) == 2,
+    check("没下结论之后说清了，仍要能正常回写（只写这一张）",
+          fixed["slots"].get("consent") is True
+          and len(payloads(sid_c, "writeback")) == 1,
           ["consent = %r" % fixed["slots"].get("consent"),
-           "writeback 事件数 = %d" % len(payloads(sid_c, "writeback")),
+           "writeback 事件数 = %d（应为 1）" % len(payloads(sid_c, "writeback")),
            "实际回复：%s" % fixed["reply_text"]])
     end_call(sid_c)
 
@@ -1850,12 +1861,21 @@ def main():
                           cwd=ROOT, capture_output=True, text=True, timeout=600,
                           env=_ENV)
     _qc2_out = ((_qc2.stdout or "") + (_qc2.stderr or "")).strip().splitlines()
-    check("Q2 三代课程可复算，且变异能抓到注入缺陷（课程不是摆设）",
+    # 只看 exit code 会漏掉"Gen3 崩了但脚本仍打印了全部行"的情况：
+    # 11-11 实测 Gen3 8/12 时这条断言照样绿。必须逐代读通过率。
+    _course_path = os.path.join(ROOT, "eval", "reports", "_verify_course.json")
+    try:
+        _gens = json.load(open(_course_path, encoding="utf-8")).get("gens") or []
+        _rates = [float(g.get("rate") or 0) for g in _gens]
+    except Exception:
+        _rates = []
+    check("Q2 三代课程可复算、Gen3 消耗战全过，且变异能抓到注入缺陷",
           _qc2.returncode == 0
+          and len(_rates) == 3 and all(r >= 1.0 for r in _rates)
           and any("Gen1 全矩阵" in l for l in _qc2_out)
           and any("已抓到" in l for l in _qc2_out),
-          ["退出码 %d；末行：%s" % (_qc2.returncode,
-                                    (_qc2_out or ["无输出"])[-1][:80])])
+          ["退出码 %d；三代通过率 %s；末行：%s"
+           % (_qc2.returncode, _rates, (_qc2_out or ["无输出"])[-1][:80])])
 
     _qc3 = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
                                                         "run_eval.py"),
@@ -3215,6 +3235,23 @@ def main():
           ["轮数 %d；mode=%s；card=%s；end_by=%s" % (
               len(_train_out.get("turns") or []), _train_out.get("user_mode"),
               _train_out.get("card_id"), _train_out.get("end_by"))])
+
+    # ---- 证据 36：截图那通对话的逐句复盘回归（11-11 下午）----
+    # 用户问的是"所以你跑的时候没感觉出来全是问题吗"。当时看的全是汇总数：
+    # 对抗 17/17、verify 250/250、客户侧覆盖率 0.9、负面 0 条——
+    # 打开逐轮实录才发现客户在说"记不住单号"、客服在念"您报的单号对得上"。
+    # 汇总指标对这类错误是**盲的**，所以这里直接把那段对话固化成断言。
+    print()
+    print("=" * 74)
+    print("证据 36：截图那通 A15 的逐句复盘回归（读对话本身，不读汇总指标）")
+    print("=" * 74)
+    _r38 = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "scripts", "test_train_replay.py")],
+        cwd=ROOT, capture_output=True, text=True, timeout=300, env=_env_off)
+    _last38 = ((_r38.stdout or "").strip().splitlines() or [""])[-1]
+    check("逐句复盘 13 条全过（单号/复读/障碍/打错人/含糊工单/半句/核身质疑）",
+          _r38.returncode == 0 and "13/13" in _last38,
+          ["退出码 %d；末行：%s" % (_r38.returncode, _last38[:80])])
 
     print()
     print("=" * 74)

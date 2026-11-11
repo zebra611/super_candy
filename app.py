@@ -332,6 +332,10 @@ def _train_run(persona, user="llm"):
     out["expect"] = expect
     out["ok"] = (want is None) or (bool(want) == bool(out.get("closed")))
     out["verdict"] = "通过" if out["ok"] else "失败"
+    # 期望单独回一个字段：前端原来用 `d.expect.closed === true` 推文案，
+    # 画像没写 expect 时会显示成"期望不闭环"，和"失败"自相矛盾。
+    # 判定与文案必须同源，否则看的人会怀疑整个结果。
+    out["expect_closed"] = None if want is None else bool(want)
     out["scene"] = config_loader.scene_name()
     out["max_turns"] = _TRAIN_MAX_TURNS
     out["user_mode"] = "llm" if use_llm else "rule"

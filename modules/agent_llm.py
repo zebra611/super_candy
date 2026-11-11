@@ -188,8 +188,10 @@ def _clean(text, max_chars):
     s = s.replace("\n", "，").replace("  ", " ").strip()
     if len(s) <= max_chars:
         return s
+    # 只认句末标点。允许在「，；」处断会切出"…需补充品牌授权书、"这种半句，
+    # 句尾挂着顿号，听的人以为断线（11-11 线上实录第 2 轮）。
     cut = s[:max_chars]
-    for sep in ("。", "！", "？", "，", "；"):
+    for sep in ("。", "！", "？"):
         pos = cut.rfind(sep)
         if pos >= 6:
             return cut[:pos + 1]
