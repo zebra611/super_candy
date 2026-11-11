@@ -242,8 +242,10 @@
     -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
     mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
   }
+  /* 空对话：不说具体尾号。尾号来自档案，首屏还没抽档案时
+     写死一个数字会让人照着输一个错号，核身直接失败。 */
   #log:empty::before {
-    content: "还没有开始。点「文字对话」，输入「尾号8866」试试。";
+    content: "还没有开始。点「文字对话」，客服会先核对你的手机尾号。";
     display: block; text-align: center;
     color: var(--ink-3); font-size: 13px; line-height: 1.8;
     padding: 62px 24px;
@@ -380,10 +382,8 @@
 
   /* ---------- 档案 ---------- */
   #randomCard { border: 0; box-shadow: none; padding: 0; margin: 0; background: transparent; }
-  #targetPanel.is-empty .p-body::before {
-    content: "点「看一份档案」，或直接开始通话，系统会自动带出一份。";
-    display: block; color: var(--ink-3); font-size: 12px; line-height: 1.6;
-  }
+  /* 原来这里还有一条 #targetPanel.is-empty .p-body::before 的空态文案。
+     重构后 .p-body 已经不存在，规则整条失效，且与新空态（见下方 ::after）重复，删掉。 */
   /* 档案：先给三行"待会儿真要用到的"，其余全字段收进折叠区。
      一张档案 40+ 个字段，全铺开等于让人现场读表格，所以按"用途"分层。 */
   .randinfo { display: block; }
@@ -673,9 +673,10 @@
   .pane .meter .k { font-size: 11px; }
   .pane .meter .v { font-size: 17px; }
 
-  /* 空态放在标题行之后（::after），否则"本次外呼目标"会被顶到提示语下面 */
+  /* 空态放在标题行之后（::after），否则"本次外呼目标"会被顶到提示语下面。
+     文案里不写方位：宽屏时三个入口在左栏、窄屏时在上方，写"上方/左侧"必有一边是错的。 */
   #targetPanel.is-empty::after {
-    content: "点上方「看一份档案」，或直接开始通话，系统会自动带出一份。";
+    content: "点「看一份档案」挑一份，或直接开始通话，系统会自动带出一份。";
     display: block; color: var(--ink-3); font-size: 12px; line-height: 1.7;
   }
 
@@ -792,7 +793,7 @@
 
     <div class="guide" id="firstGuide">
       <span class="g-k" id="guideStep">第 1 步</span>
-      <span class="g-t" id="guideText">先报身份：输入 <b>尾号8866</b> 并发送。</span>
+      <span class="g-t" id="guideText">先点「看一份档案」挑一份，或直接开始通话；客服会先核对手机尾号。</span>
     </div>
 
     <section class="card convo">
@@ -820,7 +821,7 @@
       <button id="btnJump" class="jump" hidden>有新消息 ↓</button>
 
       <div class="composer">
-        <input type="text" id="textInput" placeholder="输入一句话，例如「尾号8866」；留空发送 = 模拟用户不说话" disabled>
+        <input type="text" id="textInput" placeholder="输入一句话，例如「是什么原因没通过」；留空发送 = 模拟用户不说话" disabled>
         <button id="btnSend" class="primary" disabled>发送</button>
       </div>
       <div id="audioLine">麦克风未启用。点「语音通话」后会自动打开，直接说话即可，客服说话时可以插话打断。</div>
@@ -999,6 +1000,17 @@ function markStage(tag) {
 const TIP = { idx: -1, tail: "", reject: "", closed: false };
 let LOGSTICK = true;   // 对话框是否贴底：贴底才自动跟随新消息
 
+// 输入框的提示语也带"这一单"的信息：有档案就给出真实尾号当例子，
+// 没档案就用诉求当例子——写死一个数字，用户会照着输一个核身对不上的号。
+const INPUT_HINT = "输入一句话，例如「是什么原因没通过」；留空发送 = 模拟用户不说话";
+function setInputHint(tail) {
+  const el = $("textInput");
+  if (!el) return;
+  el.placeholder = tail
+    ? "输入一句话，例如「尾号" + tail + "」；留空发送 = 模拟用户不说话"
+    : INPUT_HINT;
+}
+
 // 驳回原因常是一长句，塞进提示条只要前半截就够认。
 function tipAsk() {
   const r = (TIP.reject || "").trim();
@@ -1010,11 +1022,16 @@ function renderTip() {
   const k = $("guideStep"), t = $("guideText");
   if (!k || !t) return;
   const i = TIP.closed ? 9 : TIP.idx;
-  const tail = escapeHtml(TIP.tail || "8866");
+  const tail = escapeHtml(TIP.tail || "");
   let step = "第 1 步", html = "";
-  if (i >= 5) {
+  if (TIP.closed) {
+    // 已经挂断：不再教人点「挂断」——那个按钮这时已经收了，
+    // 提示指向一个不存在的按钮，比不提示更让人茫然。
     step = "已完成";
-    html = "这通电话已经走完，结果会回写到工单。切到右侧「事件链」能看到回写记录，点「挂断」收尾。";
+    html = "这通电话已经结束，结果已回写到工单。「事件链」标签里有完整记录。";
+  } else if (i >= 5) {
+    step = "已完成";
+    html = "这通电话已经走完，结果会回写到工单。「事件链」标签里有回写记录，点「挂断」收尾。";
   } else if (i === 4) {
     step = "第 4 步";
     html = "客服在做最后确认：回一句 <b>「对」</b> 或 <b>「清楚」</b>，这通电话就闭环了。";
@@ -1024,6 +1041,10 @@ function renderTip() {
   } else if (i === 2) {
     step = "第 2 步";
     html = "接着说诉求，例如 <b>「" + escapeHtml(tipAsk()) + "」</b>，客服会讲清原因和要补的材料。";
+  } else if (!tail) {
+    // 还没抽档案：这里绝不能写死一个尾号。尾号是每份档案各自的，
+    // 编一个数出来，用户照着输就核身失败——比不提示更糟。
+    html = "先点「看一份档案」挑一份，或直接开始通话；客服会先核对手机尾号。";
   } else {
     html = "先报身份：输入 <b>尾号" + tail + "</b> 并发送，客服核对手机尾号。";
   }
@@ -1211,6 +1232,7 @@ function renderRandomCompany(company, matched_by, scene) {
     tag.textContent = "";
     TIP.tail = "";
     TIP.reject = "";
+    setInputHint("");
     renderTip();
     return;
   }
@@ -1219,6 +1241,7 @@ function renderRandomCompany(company, matched_by, scene) {
   // 提示条要能给出"这一单"的说法，所以把真实字段留一份
   TIP.tail = company.phone_tail || "";
   TIP.reject = company.reject_reason || "";
+  setInputHint(TIP.tail);
   renderTip();
 
   const esc = escapeHtml;
@@ -1302,7 +1325,7 @@ async function boot() {
 // opts.application_id=xxx → 指定某家（可复现复测）；
 // 都不带 → 优先用"随机预览"锁定的公司（S.pendingTarget），再没有就走外呼名单下一条。
 // opts.textOnly=true → 纯文字模式：不连麦克风、不合成/播放语音，只走打字对话。
-// 命中后后端会把"本次外呼目标"档案回传，我们在页面下方展示，便于对照客服开场白。
+// 命中后后端会把"本次外呼目标"档案回传，我们在右栏「外呼目标」面板展示，便于对照客服开场白。
 async function startCall(opts) {
   opts = opts || {};
   clearTimeout(S.hangupTimer);
@@ -1339,7 +1362,7 @@ async function startCall(opts) {
 
   if (textOnly) {
     // 纯文字模式：不启用任何语音系统，客服回复以文字形式显示在对话区。
-    $("audioLine").textContent = "纯文字模式：未启用语音系统（不连麦克风、不播放语音）。直接在下方输入框打字即可，客服会基于上方公司信息主动对话。";
+    $("audioLine").textContent = "纯文字模式：未启用语音系统（不连麦克风、不播放语音）。直接在下方输入框打字即可，客服会基于这一单的档案主动对话。";
     S.autoMode = false;
     S.phase = "idle";
     setPhaseLine();
@@ -1371,11 +1394,11 @@ async function startCall(opts) {
     if (!textOnly) speak(d.opening_tts || { text: d.opening, mode: "browser" }, 0);
   }
   log("系统", textOnly
-    ? "纯文字会话已建立。直接在下框输入，客服会基于上方公司信息主动发起询问。"
+    ? "纯文字会话已建立。直接在下框输入，客服会基于这一单的档案主动发起询问。"
     : "通话已建立。直接说话即可，说完会自动提交；客服说话时可以随时插话打断。");
 }
 
-// 纯预览：随机抽一家公司展示在下方，**不发起通话、不创建会话**。
+// 纯预览：随机抽一家公司展示在右栏「外呼目标」面板，**不发起通话、不创建会话**。
 // 锁定的公司（application_id）存进 S.pendingTarget，供随后「纯文字测试」或「开始通话」复用，
 // 这样客服就能基于"你刚预览的那家"主动发起四段式询问——即"客服也需要知道这家公司"。
 async function previewRandom() {
