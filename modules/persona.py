@@ -209,8 +209,13 @@ def _apply_actions(base, rule, freeze=False, repeated=False, repeat_n=0):
     # 就不再挂任何"请您回一句"类尾巴——两种尾巴（suffix 与 avoid_repeat）都要拦。
     # 11-11 实测：quiet 性格的 avoid_repeat 是「您回一个字也行。」，
     # 客户正被要求"报四个数字"，尾巴又来一句"回一个字也行"，自相矛盾。
+    # 还有一条：**已经说了整段内容就别再讨一句回应**。
+    # 11-11 线上实测：NEED 里解释完"为什么被驳回、要补哪三样"（60 多字），
+    # 末尾又挂一句「您回一个字也行。」——像在求人回话，也把刚说完的重点稀释了。
+    # 40 字是分界：短句（"感谢您的配合，再见。"）仍可以带引导，
+    # 整段解释不带。test_scene_isolation 的对照组就是那条短句。
     _quiet_tail = (any(w in out for w in _SKIP_SUFFIX_MARKS)
-                   or "？" in out or "?" in out)
+                   or "？" in out or "?" in out or len(out) >= 40)
     if repeated and not _quiet_tail:
         opts = rule.get("avoid_repeat") or []
         if opts:
