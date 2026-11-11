@@ -44,9 +44,14 @@
     3. 把 docs/17 第 3.5 节的验收表逐项过一遍。
 
 **一个必须遵守的数**
-    LLM 这一步的时间预算是 **400ms 硬上限**，不是参考值。
-    但实测 `qwen-flash` 的 P50 在 400–460ms 之间，400ms 会拦掉约一半调用。
-    建议按 600ms 配：服务端合计约 1.55s，真实首字约 1.75s，仍在 2000ms 门槛内。
+    LLM 这一步原本按 **400ms 硬上限**设计，实测 `qwen-flash` 的 P50 在 400–460ms，
+    400ms 会拦掉一半调用，于是配成 600ms。
+
+    2026-11-11 双端自对练跑批把这条又推了一次：600ms 下 `read timeout` 频繁出现
+    （一次 16 通的对练里出现 5 次以上），每一次都是一个"本该自然"的轮次
+    退回骨架话术。按服务端合计 974ms + 0.3s 仍在 2000ms 门槛内，
+    已把 `config/scene.json` 的 `timeout_ms` 提到 **900ms**。
+    再往上就要动 TTS 的字数上限了，那影响的是首字时延，不是这一步能决定的。
 """
 
 import contextlib
@@ -108,17 +113,27 @@ def template_only():
         _FORCE_TEMPLATE = prev
 
 
-def say(session, base_text, stage=""):
+def say(session, base_text, stage="", kb=None, qa=None, user_text="", flags=None):
     """把骨架话术改写成自然口语。
 
     参数：
         session    对话状态（**只读**，禁止修改；slots 里的业务事实唯一来源）
         base_text  骨架话术，来自 config/scene.json 对应环节
         stage      当前环节名，用于 prompt
+        kb / qa    本轮命中的官方口径（可选）。有值时交给 `agent_llm` 组织成
+                   "贴着这个客户说"的一句话——见 `modules/agent_llm.py`。
+        user_text  客户刚说的那句。决定这一轮要不要"接住他的话"。
+        flags      意图标记（angry/complain 等）。
 
     返回：str
         改写后的话术。**任何异常都必须返回 base_text 本身**，
         绝不抛异常、绝不返回空串——外呼里突然没声比话说得难听严重得多。
+
+    两条路，按代价从低到高：
+        1. `assist`（config 里 nlg.assist=true）—— 只在客户追问/带情绪/命中官方口径
+           的那一轮走，1-2 句 70 字，接受 2.5s。走完仍然过事实/实体/合规三闸。
+        2. `_rewrite` —— 其余轮次的快速改写，600ms，只换语气。
+    任何一步失败都往下掉，最后一定落在 base_text 上。
     """
     if not base_text:
         return base_text or ""
@@ -129,6 +144,18 @@ def say(session, base_text, stage=""):
     cfg = config_loader.nlg_config()
     if (cfg.get("provider") or "template").strip() != "dashscope":
         return base_text                       # 默认路径：原样返回，行为不变
+
+    # 先试"讲清楚"这条路。它自己会判该不该走，也会自己失败返回 None。
+    if cfg.get("assist"):
+        try:
+            from modules import agent_llm
+            if agent_llm.should_assist(user_text, kb, qa, stage, flags):
+                better = agent_llm.assist(session, base_text, stage, kb=kb, qa=qa,
+                                          user_text=user_text, flags=flags)
+                if better:
+                    return better
+        except Exception as exc:            # 增强层任何故障都不能影响出话
+            _warn_once("assist", "表达增强层异常，退回快速改写：%s" % _short(exc))
 
     rewritten = _rewrite(session, base_text, stage, cfg)
     if not rewritten:

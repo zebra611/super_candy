@@ -653,7 +653,12 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     if (not end_reason and intent not in ("error", "empty")
             and not _freeze_identity and not _freeze_official):
         text = nlg.say(session, _fill_application(text, session["slots"].get("application")),
-                       stage_now)
+                       stage_now,
+                       # 命中官方口径的那一轮才有东西可"讲清楚"；其余轮次
+                       # agent_llm 会自己判不该走，仍走 600ms 快速改写。
+                       kb=kb_hit, qa=qa_hit,
+                       user_text=session.get("last_user_text") or "",
+                       flags=session.get("last_flags") or {})
     else:
         # 挂断/拒绝/出错话术不走改写，但占位符仍要填（C5 统一兜底）。
         text = _fill_application(text, session["slots"].get("application"))
@@ -818,6 +823,43 @@ def _unreadable(text):
     return any(m in (text or "") for m in UNREADABLE_MARKS)
 
 
+#: 句子"没说完"的判据。官方表格导出时，27 条 QA 全都没有句末标点
+#: （"可在单据中授权书位置上传"），这不算残缺，补个句号就能念；
+#: 真正残缺的是话说到一半断掉的那种（"商标虽然是注册状态，但是如果商标"）。
+#:
+#: 11-11 双端自对练实测：客户问"已注册的对应类商标具体指啥"，客服播了
+#: QA-TS-004 的原文——**就是那半句**。客户听到"商标虽然是注册状态，但是如果商标"
+#: 之后彻底懵了，后面全靠猜。这不是话术不好，是数据本身断在那儿。
+#: 判据只看句尾，不猜语义，三条各自都有实测例子：
+#:   1. 结尾是裸数字/量词（"…提供6个月"）
+#:   2. 最后 8 个字里有关联词（"但是如果商标""您根据授权书"）
+#:   3. 结尾是"的/了/和/或/与"这类必须接宾语的虚词
+_DANGLING_WORDS = ("如果", "但是", "因为", "所以", "并且", "而且", "或者",
+                   "以及", "根据", "按照", "才能", "需您", "请您", "建议您提供")
+_TAIL_EMPTY = ("的", "了", "和", "或", "与", "跟", "把", "被", "在", "对")
+_TAIL_QUANT = ("个月", "件", "吨", "天", "年", "次", "份")
+
+
+def _truncated(text):
+    """这句话是不是"说到一半就断了"。"""
+    s = (text or "").strip()
+    if not s:
+        return True
+    if s[-1] in "。！？!?…：:；;":
+        return False
+    tail = s[-8:]
+    if any(w in tail for w in _DANGLING_WORDS):
+        return True
+    if s[-1] in _TAIL_EMPTY:
+        return True
+    # "…提供6个月" / "…累计≥200"：数字或量词收尾，后面明显还有话
+    if re.search(r"\d+\s*(个月|件|吨|天|年|次|份)?$", s) and s[-1].isdigit():
+        return True
+    if any(s.endswith(q) for q in _TAIL_QUANT):
+        return True
+    return False
+
+
 def _qa_lookup(session, text):
     """查官方 QA，返回 dict 或 None。
 
@@ -865,6 +907,19 @@ def _qa_lookup(session, text):
              "reason": "placeholder", "missing": []})
         return info
 
+    # 说到一半断掉的答案不播，理由和占位符一样：念半句比不答更糟。
+    # 记进 answer_blocked，谁去补这份官方数据，谁就能在这里看到是哪几条。
+    if _truncated(answer):
+        info["readable"], info["blocked"] = False, "truncated"
+        session.setdefault("answer_blocked", []).append(
+            {"via": "qa", "id": qid, "source": info["source"],
+             "reason": "truncated", "missing": []})
+        return info
+    # 官方表格导出的 27 条都没有句末标点。补一个句号是纯排版，
+    # 不改一个字的内容，但念出来才像一句话，不像被打断。
+    if answer and answer[-1] not in "。！？!?…":
+        answer = answer + "。"
+
     if qid and list(session.get("qa_answered") or []).count(qid) >= QA_MAX_PER_QID:
         return None
     if int(session.get("qa_count") or 0) >= QA_MAX_ANSWERS:
@@ -886,6 +941,35 @@ def _app_of(session):
             or session.get("outbound_target") or {})
 
 
+#: 官方话术与档案里"驳回原因"的最低词面重合度（2 字词交集占比）。
+#:
+#: 11-11 双端自对练实测出来的一条数据：97 条有官方话术的单里，话术与它自己的
+#: reject_reason 的中位重合度只有 0.11，只有 19 条（20%）对得上。
+#: 根因是 mock 档案的原因池比官方 68 条场景大得多，"海外公证认证""公章与持有人
+#: 名称不一致"这类原因官方库里根本没有条目，`best_code` 只能硬挑一条最像的。
+#: 后果很具体：客户问"海外采购凭证要哪几样"，客服念的是"商标状态为待审"，
+#: 客户照着错的答案去准备材料。
+#:
+#: 所以加这道闸：对不上就不念官方原话，退回 `reply_application_detail`——
+#: 那句话的原因和材料**都来自这张档案**，说的是这一单的真事。
+#: 宁可没有"官方原话"，也不要念成别人家的事。
+_OFFICIAL_MIN_COVER = 0.2
+
+
+def _kw2(text):
+    """中文 2 字词集合。不用分词器：这里只需要"有没有说到一块儿去"，不需要词性。"""
+    cn = re.sub(r"[^\u4e00-\u9fff]", "", text or "")
+    return {cn[i:i + 2] for i in range(len(cn) - 1)}
+
+
+def _reason_covered(line, reason):
+    """这条官方话术，讲的是不是档案里写的那条原因。"""
+    r, s = _kw2(reason), _kw2(line)
+    if not r or not s:
+        return True
+    return len(r & s) / float(len(r)) >= _OFFICIAL_MIN_COVER
+
+
 def _official_line(session):
     """本通档案的官方驳回话术（已填槽、已去掉自报身份与热线尾句）。
 
@@ -893,10 +977,45 @@ def _official_line(session):
     结果缓存在 session 里：一轮里可能问两次，没必要每次重读 kb_pop。
     """
     if "official_line" not in session:
-        got = official_script.script_for(_app_of(session))
-        session["official_line"] = official_script.dialogue_text(got["script"]) if got else ""
+        app = _app_of(session)
+        got = official_script.script_for(app)
+        line = official_script.dialogue_text(got["script"]) if got else ""
+        if line and not _reason_covered(line, app.get("reject_reason")):
+            session.setdefault("answer_blocked", []).append(
+                {"via": "script", "id": (got or {}).get("id", ""),
+                 "reason": "off_reason", "missing": []})
+            line = ""
+        session["official_line"] = line
         session["official_script_id"] = (got or {}).get("id", "")
     return session["official_line"] or ""
+
+
+def _kb_answers_question(hit, text, app):
+    """命中的条目，答的是不是**客户这一句问的东西**。
+
+    这一条是自对练挖出来的（11-11）：客户问"海外采购凭证具体要哪几样"
+    （本单驳回原因是"海外商标注册证明未完成公证认证"），检索命中了
+    `KB-POP-001`（讲"商标状态待审"），客服于是念"需您提供已注册状态的对应类商标"。
+    客户听到的是另一件事的答案，还照着去准备材料——比说"我确认不到"糟得多。
+
+    判据刻意不依赖分类体系（试过按 category 比，120 条档案的 reject_category
+    与 kb 的 category 是两套分类，一条都对不上，等于把检索全关了）：
+    只看**客户这句话里提到的本单材料词，在答案里有没有出现**。
+        · 客户没提本单材料 → 不判（放行），避免误伤通用问题；
+        · 客户提了材料 A，答案里连 A 都没有 → 这条答的不是他问的。
+    """
+    ans = str((hit or {}).get("answer") or "")
+    if not ans:
+        return False
+    keys = []
+    for m in ((app or {}).get("required_materials") or []):
+        for seg in re.split(r"[、，,；;（）()]+", str(m)):
+            seg = seg.strip()
+            if len(seg) >= 3 and seg in (text or ""):
+                keys.append(seg)
+    if not keys:
+        return True
+    return any(k in ans for k in keys)
 
 
 def _answer_official(session, text, flags):
@@ -918,6 +1037,12 @@ def _answer_official(session, text, flags):
     if qa and qa.get("readable") and qa.get("answer"):
         return _soothe(qa["answer"], flags), qa, None
     hit = kb.match(text, slots=session.get("slots") or {}) if kb.enabled() else None
+    if hit and hit.get("answer") and not _kb_answers_question(hit, text, _app_of(session)):
+        # 命中，但答的不是他问的东西——不播。记下来，谁看报告谁去修检索。
+        session.setdefault("answer_blocked", []).append(
+            {"via": "kb", "id": hit.get("id", ""), "source": hit.get("source_id", ""),
+             "reason": "off_question", "missing": []})
+        return None, None, None
     if hit and hit.get("answer"):
         # kb_pop 的 96 条驳回话术都是带【】的模板。以前填不满就整条不播，
         # 等于商家问"为什么驳回"时客服只会说"我这边查不到"。
@@ -932,6 +1057,18 @@ def _answer_official(session, text, flags):
                 {"via": "kb", "id": hit.get("id", ""), "source": hit.get("source_id", ""),
                  "reason": "placeholder", "missing": list(miss)})
             return None, None, None
+        # 去掉官方话术的固定头尾（"尊敬的商家伙伴您好，我是京东资质审核专员…"
+        # 与"如有疑问您可以电话联系 4006180092…"）。
+        #
+        # 11-11 双端自对练实测：客户在第 10 轮问"我这店就叫白鹿旗舰店，哪来的原品牌"，
+        # 客服把**整条驳回话术**念了出来——开头又自我介绍一遍，结尾还留热线，
+        # 中间才是答案。客户听到的是"您好我是审核专员…如有疑问请拨打电话"，
+        # 而他问的问题被夹在中间。开场白在第一轮已经说过，热线是挂断时才说的，
+        # 这两段在这里都属于"场合不对"。
+        # 删空说明这条话术除了头尾没内容，那就退回原文，不硬播半句。
+        _body = official_script.dialogue_text(filled)
+        if _body:
+            filled = _body
         spoken = session.get("spoken_answers") or []
         if filled in spoken:
             # 和刚才播过的某句逐字相同：不念第二遍（理由见 _qa_lookup 末尾）。
@@ -2100,11 +2237,30 @@ def _stage_identity(session, text, flags):
                 intent="identity_ask")
 
         # ③ 跑题 / 絮叨（有实义、既不是提问也不是拒绝）：中性承接 + 拉回话题。
-        return _reply(
-            session,
-            _identity_text("reply_offtopic",
-                           "嗯，您说的我记下了。咱们先把身份核对一下，方便说一下手机号后四位吗？"),
-            intent="identity_offtopic")
+        #
+        # 同一句最多说一次。11-11 双端自对练实测：客户连着两轮说"我这会儿真想
+        # 不起尾号，单号我也得查后台"，客服两轮**逐字相同**地把"没关系，记不住
+        # 号码也正常……说联系人姓名也行"念了一遍，客户耐心掉到 0，
+        # 整通卡在 IDENTITY 整整 14 轮没闭环。
+        # 第二次必须换一条真有出路的话（稍后回电 / 换人接听），
+        # 第三次还没进展就按"核不上"收尾转专员——继续磨只会把客户磨烦。
+        _n = int(session.get("identity_offtopic_n", 0)) + 1
+        session["identity_offtopic_n"] = _n
+        # 三条话术轮换，**不挂断**：C6 的硬要求是"连续三轮噪声不挂断、可恢复"。
+        # 第一版这里写成"第三次就 finish(identity_failed)"，直接踩红 C6——
+        # 客户只是没报出尾号，不是骗子，挂断是我们的问题。
+        # 真正该收尾的是"槽位问满次数仍核不上"，那条路在 _next_identity_slot 后面。
+        _off_keys = ("reply_offtopic", "reply_offtopic_2", "reply_offtopic_3")
+        _off_defaults = {
+            "reply_offtopic": "嗯，您说的我记下了。咱们先把身份核对一下，方便说一下手机号后四位吗？",
+            "reply_offtopic_2": "那这样，您查一下当初留的号码或者申请单号，我再给您打一次；"
+                                "或者现在请店里另一位同事接听，报一下他的姓名也行。",
+            "reply_offtopic_3": "不着急。您也可以直接说公司全名，我按公司名核一遍，"
+                                "一样能确认是您这单。",
+        }
+        _off_key = _off_keys[0] if _n == 1 else _off_keys[1 if _n % 2 == 0 else 2]
+        return _reply(session, _identity_text(_off_key, _off_defaults[_off_key]),
+                      intent="identity_offtopic")
 
     session["noise_turns"] = 0              # 人在回答了，噪声累计归零
     session["identity_attempts"] += 1
@@ -2326,9 +2482,19 @@ def _stage_need(session, text, flags):
                                   next_stage="CONFIRM", intent="confirm_after_ask")
                 session["official_line_spoken"] = True
                 return _reply(session, _soothe(_off, flags), intent="official_script")
-            return _reply(session,
-                          _fill_application(_soothe(cfg.get("reply_application_detail",
-                                                           "您这笔申请的驳回原因和需补材料我这边都有记录，我再说一遍：{reason}，需要补充{materials}。"), flags), app),
+            # 客户第二次追问同一件事时换一条说法，不要一字不差再念一遍清单。
+            # 11-11 双端自对练实测：客户连问两轮"具体要哪几样 / 找哪家机构"，
+            # 客服两轮逐字相同地把"您这笔申请是…需要补充…"念了一遍，判 2 次复读。
+            # 换说法不解决"答不到细节"（那要数据里有对应说明），但至少不再像卡带。
+            _n = int(session.get("need_detail_n", 0)) + 1
+            session["need_detail_n"] = _n
+            _tpl = cfg.get(
+                "reply_application_detail",
+                "您这笔申请的驳回原因和需补材料我这边都有记录，我再说一遍："
+                "{reason}，需要补充{materials}。")
+            if _n % 2 == 0:
+                _tpl = cfg.get("reply_application_detail_2") or _tpl
+            return _reply(session, _fill_application(_soothe(_tpl, flags), app),
                           intent="ask")
         order = session["slots"].get("order")
         if order:

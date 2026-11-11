@@ -241,6 +241,18 @@ def adapt(session, text, stage="", freeze=False):
     last = session.get("last_reply_text") or ""
     repeated = (text == last)
     n = int(session.get("persona_repeat_n") or 0)
+    # 同一个后缀在一通电话里最多挂 2 次。
+    #
+    # 11-11 双端自对练实测：客户被识别成"听不太清"之后，客服每一句陈述式回复
+    # 都挂「我放慢一点说。」——第 6/7/8/9/12 轮连续出现五次。单看每一句都没错，
+    # 连着听就是一个复读机；客户在第 9 轮已经说"哦，补这三样东西啊"，
+    # 客服还在"我放慢一点说"，等于没听见他。
+    # 这不是"语气太客气"，是**同一句话重复太多次**，规则表管不了次数，只能这里管。
+    _sfx = (rule.get("suffix") or "").strip()
+    _used = session.get("persona_suffix_used") or {}
+    if _sfx and int(_used.get(_sfx, 0)) >= 2:
+        rule = dict(rule)
+        rule["suffix"] = ""
     # 客户这一轮刚递上信息（报单号、重申身份）时，跳过「要信息型」后缀：
     # 规则表的后缀有些是在向客户要东西（如「您也可以对照申请单编号核实」），
     # 紧跟在客户刚报完单号之后读出来，等于当面又要一遍。
@@ -257,6 +269,9 @@ def adapt(session, text, stage="", freeze=False):
         session["persona_repeat_n"] = n + 1
     if new == text or not _guard(text, new, session):
         return text, False
+    if _sfx and _sfx in new:
+        _used[_sfx] = int(_used.get(_sfx, 0)) + 1
+        session["persona_suffix_used"] = _used
     session.setdefault("persona_applied", []).append(
         {"code": code, "stage": stage, "before": text, "after": new})
     return new, True
