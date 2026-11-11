@@ -193,7 +193,10 @@ def _append(out, tail):
 #: 仍需要追加引导语（test_scene_isolation 的对照组就是它）。
 _SKIP_SUFFIX_MARKS = ("后四位", "尾号", "四位数字", "四个数字", "姓名", "单号",
                       "公司名", "全名", "先忙", "不打扰",
-                      "稍后再联系", "稍后专员")
+                      "稍后再联系", "稍后专员",
+                      # 已经在讲本单事实（驳回原因/材料/后台入口）的句子，
+                      # 不再挂"请您回一句"类引导——见 _apply_actions 里的说明。
+                      "驳回", "材料", "授权书", "证明", "后台", "清单", "浏览器")
 
 
 def _apply_actions(base, rule, freeze=False, repeated=False, repeat_n=0):
@@ -212,10 +215,16 @@ def _apply_actions(base, rule, freeze=False, repeated=False, repeat_n=0):
     # 还有一条：**已经说了整段内容就别再讨一句回应**。
     # 11-11 线上实测：NEED 里解释完"为什么被驳回、要补哪三样"（60 多字），
     # 末尾又挂一句「您回一个字也行。」——像在求人回话，也把刚说完的重点稀释了。
-    # 40 字是分界：短句（"感谢您的配合，再见。"）仍可以带引导，
-    # 整段解释不带。test_scene_isolation 的对照组就是那条短句。
+    # 还有一条：**这一句已经在讲本单的事实**，就别再讨一句回应。
+    # 线上实测（37 字）：「这次没通过审核，是因为授权书上的公章和品牌持有人
+    # 名称不一致，得重新出授权书。您回一个字也行。」——重点刚讲完又追一句
+    # 求回话，把重点稀释了。
+    # 判据一开始想用长度（40 字、30 字），两版都不行：37 字漏掉，而
+    # verify 那条对照话术「好的，收到。咱们回到正题，您可以简单回我一句…」
+    # 有 31 字，按长度会把"该加后缀"的对照组也拦掉。改成看**内容**：
+    # 句子里已经有本单的事实（材料/驳回原因/后台入口），就不再挂引导。
     _quiet_tail = (any(w in out for w in _SKIP_SUFFIX_MARKS)
-                   or "？" in out or "?" in out or len(out) >= 40)
+                   or "？" in out or "?" in out)
     if repeated and not _quiet_tail:
         opts = rule.get("avoid_repeat") or []
         if opts:
