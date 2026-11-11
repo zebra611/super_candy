@@ -2579,6 +2579,34 @@ def _stage_offer(session, text, flags):
 
     # 提问：官方 QA 原话 → 知识条目（带出处）→ 配置里的固定话术
     if flags["ask"]:
+        # 先判一件事：客户是不是把**已经核过的信息**又报了一遍，然后反问
+        # "这不都对得上吗"。
+        #
+        # 11-11 线上自对练实测（这一条是线上跑出来的，本地没复现）：
+        #   客户：单号 QZ202611060002，9月4号交的，这不都对得上吗？
+        #   客服：单号和时间我这边确认不到，稍后让专员给您回电说明，可以吗？
+        #   客户：（又说一遍）
+        #   客服：（逐字相同再说一遍）
+        # 客户给的是这张单的真实单号，系统里明明有；回"确认不到"等于把他刚
+        # 递上的证据扔回去，而且同一句说两遍。这不是知识问题，是没接住。
+        # 正确动作：接住（单号对得上）→ 讲原因与材料（本来就在 slots 里）
+        # → 第二次起直接推进确认，不再念第三遍。
+        if _echoes_known_slot(session, text):
+            app = session["slots"].get("application")
+            if app:
+                _n = int(session.get("echo_slot_n", 0)) + 1
+                session["echo_slot_n"] = _n
+                if _n == 1:
+                    return _reply(session, _fill_application(_soothe(
+                        cfg.get("reply_confirm_slot_ok",
+                                "您报的单号我这边对得上，就是这笔：{application_desc}。"
+                                "驳回原因是{reason}，需要补充{materials}。"), flags), app),
+                        intent="ask")
+                return _reply(session, _fill_application(_soothe(
+                    cfg.get("reply_confirm_slot_ok_2",
+                            "对，单号没错，就是这笔。您按刚才说的把{materials}补齐、"
+                            "在后台重新提交就行，我这边会盯着结果。"), flags), app),
+                    next_stage="CONFIRM", intent="ask")
         # 求结果保证（框架合规红线）必须先于知识库拦截，见 _promise_block。
         blocked = _promise_block(session, text, flags)
         if blocked:
@@ -2626,6 +2654,22 @@ def _stage_offer(session, text, flags):
 #: 「为什么会驳回」「那我要补什么材料」，客服两轮都回同一句「号码是预留联系方式」。
 _RESULT_ASK_MARKS = ("为什么", "为啥", "驳回", "原因", "补什么", "材料", "怎么处理",
                      "怎么改", "整改", "什么情况", "没过", "没通过")
+
+
+def _echoes_known_slot(session, text):
+    """客户这一句里，有没有把**本单已核过的信息**又报一遍。
+
+    只看单号与预留尾号：这两样是核身时确认过的，客户再报一次，语义是
+    "我信息都对，你怎么还说不行"，不是知识提问。
+    姓名不查——"我是张三"和"我叫张三是吧"太容易混进普通问句。
+    """
+    app = _app_of(session) or {}
+    t = text or ""
+    for key in ("application_id", "phone_tail"):
+        v = str(app.get(key) or "")
+        if len(v) >= 4 and (v in t or v[-4:] in t):
+            return True
+    return False
 
 # 「客户还在谈」的信号：提问、质疑来电或费用、重复报已给过的核身信息。
 # 这些都不是表态。旧逻辑把它们一并算成「含糊」，追问两次就回写 unknown——

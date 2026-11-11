@@ -160,6 +160,7 @@
    ],
    "_why": "NEED 先问业务域（框架 2.2 五域路由），商家回答后由 OFFER/知识检索给出对应官方话术",
    "reply_application_detail_2": "这次驳回的具体问题是{reason}，要补的是{materials}，补完在后台重新提交就行。",
+   "reply_confirm_slot_ok_2": "对，单号没错，就是这笔。您按刚才说的把{materials}补齐、在后台重新提交就行，我这边会盯着结果。",
    "reply_provenance": "您的号码是商家入驻时预留的联系方式，我们是官方审核，只用来核对这笔资质申请，不会外传。",
    "reply_provenance_2": "这个号码是您提交这笔申请时留的，我们只用于资质审核这一件事，不会拿去做别的。",
    "reply_ask_fee": "整个审核和重新提交都不收取任何费用，您不用担心。"
@@ -169,6 +170,8 @@
    "reply_ask_fee": "整个审核和重新提交都不收取任何费用，您不用担心。",
    "reply_ask_validity": "材料上传之后，我们会完整审核后才能确定结果，有问题会再跟您联系。",
    "reply_unknown": "这个我这边确认不到，稍后让专员给您回电说明，可以吗？",
+   "reply_confirm_slot_ok": "您报的单号我这边对得上，就是这笔：{application_desc}。驳回原因是{reason}，需要补充{materials}。",
+   "reply_confirm_slot_ok_2": "对，单号没错，就是这笔。您按刚才说的把{materials}补齐、在后台重新提交就行，我这边会盯着结果。",
    "must_say": [
     "重新提交"
    ],
