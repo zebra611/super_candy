@@ -55,6 +55,10 @@
   "_why_two_voice_fields": "voice_name 是云端音色 ID（Cherry 是中文女声），voice 是浏览器 speechSynthesis 的音色名。两者不能混用：合成失败退回浏览器时，用的必须是后者，否则会静默无声。",
   "_todo": "现在是整句合成（非流式），首字要等整句出完。若实测首字逼近 2000ms 门槛，改成 X-DashScope-SSE 流式，首包就推给前端。"
  },
+ "agent": {
+  "llm_reply": true,
+  "_why": "模型客服开关：true 时由 modules/agent_free 决定这一句说什么（输入是本环节目标+本单事实+最近对话，不是骨架）。命中官方 QA 的轮次、核身问句、收线话术仍冻结，不让模型碰。跑批与自检强制关掉，保证可复现。"
+ },
  "nlg": {
   "provider": "template",
   "model": "qwen-flash",
@@ -153,6 +157,8 @@
   "NEED": {
    "reply": "{application_desc}没有通过审核，驳回原因是{reason}。需要我把要补的材料再说一遍，还是直接说重新提交的步骤？",
    "reply_application_detail": "您这笔申请是{application_desc}，驳回原因是{reason}，需要补充{materials}。",
+   "reply_blocked_ui": "页面打不开先别折腾：清单我这边能同步到您后台，您先把材料准备齐；换一个浏览器再试一次，通常就能进。",
+   "reply_blocked_ui_handoff": "后台的问题我这边确实处理不了，也不占用您时间了：材料您先备着，我把这情况交给专员，稍后用官方号码联系您一起看，再见。",
    "reply_no_order": "今天联系您，主要是同步您资质申请的审核结果，方便听一下吗？",
    "reply_order_detail": "您这笔申请提交的【材料类型】存在问题，具体要求我马上跟您说明。",
    "must_say": [
@@ -160,7 +166,6 @@
    ],
    "_why": "NEED 先问业务域（框架 2.2 五域路由），商家回答后由 OFFER/知识检索给出对应官方话术",
    "reply_application_detail_2": "这次驳回的具体问题是{reason}，要补的是{materials}，补完在后台重新提交就行。",
-   "reply_confirm_slot_ok_2": "对，单号没错，就是这笔。您按刚才说的把{materials}补齐、在后台重新提交就行，我这边会盯着结果。",
    "reply_provenance": "您的号码是商家入驻时预留的联系方式，我们是官方审核，只用来核对这笔资质申请，不会外传。",
    "reply_provenance_2": "这个号码是您提交这笔申请时留的，我们只用于资质审核这一件事，不会拿去做别的。",
    "reply_ask_fee": "整个审核和重新提交都不收取任何费用，您不用担心。"
@@ -171,6 +176,8 @@
    "reply_ask_validity": "材料上传之后，我们会完整审核后才能确定结果，有问题会再跟您联系。",
    "reply_unknown": "这个我这边确认不到，稍后让专员给您回电说明，可以吗？",
    "reply_confirm_slot_ok": "您报的单号我这边对得上，就是这笔：{application_desc}。驳回原因是{reason}，需要补充{materials}。",
+   "reply_confirm_tail_ok": "尾号我这边对得上，就是这笔：{application_desc}。单号不用您找了，我按尾号和公司名认的单。驳回原因是{reason}，需要补充{materials}。",
+   "reply_confirm_tail_ok_2": "尾号没错，就是这笔。单号不用您报，我这边已经认下了。您按刚才说的把{materials}补齐、在后台重新提交就行。",
    "reply_confirm_slot_ok_2": "对，单号没错，就是这笔。您按刚才说的把{materials}补齐、在后台重新提交就行，我这边会盯着结果。",
    "must_say": [
     "重新提交"
@@ -188,6 +195,9 @@
   "CONFIRM": {
    "reply": "我跟您复述一下：您这笔申请是因为材料问题被驳回，需要按刚才说的补充材料后重新提交，您清楚了吗？",
    "reply_again": "您可以简单回我一句清楚了或者还有疑问就行。",
+   "reply_again_2": "不用您复述全部，就一句：这几样材料您清楚要怎么准备了吗？",
+   "reply_blocked_ui": "页面打不开先别折腾：清单我这边能同步到您后台，您先把材料准备齐；换一个浏览器再试一次，通常就能进。",
+   "reply_blocked_ui_handoff": "后台的问题我这边确实处理不了，也不占用您时间了：材料您先备着，我把这情况交给专员，稍后用官方号码联系您一起看，再见。",
    "reply_after_ask": "您看这样解释清楚了吗？您可以简单回我一句清楚了或者还有疑问。",
    "confirm_yes_words": [
     "清楚了",

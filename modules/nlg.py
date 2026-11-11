@@ -168,6 +168,15 @@ def say(session, base_text, stage="", kb=None, qa=None, user_text="", flags=None
     if not _entities_ok(base_text, rewritten, session):
         _warn_once("entity", "改写把关键实体（公司名/申请单号等）改没了，已丢弃")
         return base_text
+    # 第 9 道守卫：**承接句不许被压掉**。
+    # dialogue 在"客户报了信息、客服要先接住"那一轮把承接半句放进
+    # must_keep_open（去标点）。改写层很爱砍开头那半句——线上第 6 轮
+    # 「对，是您本人」被压成「您这边清楚这几样材料怎么准备吗」，
+    # 客户确认了身份，客服一句都没认，然后又问了一遍。
+    # 砍掉就退回骨架：骨架本来就是给人听的话，退回不吃亏。
+    if not _open_kept(rewritten, session.get("must_keep_open")):
+        _warn_once("open", "改写把承接句吃掉了，已丢弃")
+        return base_text
     return rewritten
 
 
@@ -272,6 +281,21 @@ def _must_keep(session):
     return out
 
 
+_PUNCT = re.compile(r"[，。；？！、\s]")
+
+
+def _open_kept(text, hint):
+    """承接句还在不在。hint 是 dialogue 给的承接半句（如「对，是您本人」）。
+
+    去掉标点再比，避免改写只动了一个顿号就被判成"吃掉了"。
+    hint 为空（非承接轮）时一律通过——这不是通用校验，只守那一轮的开头。
+    """
+    want = _PUNCT.sub("", hint or "")
+    if not want:
+        return True
+    return want in _PUNCT.sub("", text or "")
+
+
 def _entities_ok(base_text, text, session):
     """改写后的文本是否还留着骨架里出现过的那些实体。
 
@@ -282,6 +306,14 @@ def _entities_ok(base_text, text, session):
         return True
     for token in _must_keep(session):
         if token in base_text and token not in text:
+            return False
+    # 骨架里的数字串（尾号 / 单号 / 金额 / 期限）改写时必须留住。
+    # 11-11 线上 A15：骨架「尾号 9403 对上了」被改写层压成「清楚了，还有
+    # 其他疑问吗？」——客户报了四次信息一次都没被确认，九轮停在同一句上。
+    # 上一条只查档案实体（公司名/单号），尾号不在其中；数字是业务事实，
+    # 改掉一位就是另一件事，这条闸门不许改写层碰。
+    for num in set(re.findall(r"\d{4,}", base_text)):
+        if num not in text:
             return False
     return True
 
@@ -447,16 +479,21 @@ def _fit(text, max_chars):
 
     **说不完就返回 None（退回骨架），不返回半句话。**
     两种必须退的情况：
-        - max_chars 内一个标点都没有（截出来是半句，用户听到会以为断线）；
+        - max_chars 内一个句末标点都没有（截出来是半句，用户听到会以为断线）；
         - 唯一能断的位置太靠前（只剩"好的，"三个字，等于把信息全丢了）。
     外呼里"话说得朴素"是可接受的失败，"话说一半"不是。
+
+    **只认句末标点（。！？）。** 原来也允许在「，、；」处断，于是 11-11
+    线上出现过"…关于授权书公章与品牌名不一致的情况，需重新提交品牌授权书、"
+    这种半句——读的人以为断线，听的人不知道还要补什么。列举被切断比
+    少说一句糟得多，宁可退回骨架重讲。
     """
     if max_chars <= 0 or len(text) <= max_chars:
         return text
 
     cut = text[:max_chars]
     best = ""
-    for sep in ("。", "！", "？", "，", "、", "；"):
+    for sep in ("。", "！", "？"):
         pos = cut.rfind(sep)
         if pos >= 0:
             cand = cut[:pos + 1]

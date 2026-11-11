@@ -282,7 +282,7 @@ def _train_target(persona):
     return cards[n % len(cards)]
 
 
-def _train_run(persona, user="llm"):
+def _train_run(persona, user="llm", max_turns=None):
     """真跑一场对抗对话，返回逐轮轨迹。
 
     两条隔离都必须做：
@@ -314,11 +314,11 @@ def _train_run(persona, user="llm"):
             base_nlg = dict((config_loader.load() or {}).get("nlg") or {})
             config_loader.nlg_config = lambda: dict(
                 base_nlg, provider="dashscope", assist=True)
-            out = adv.run_one(persona, max_turns=_TRAIN_MAX_TURNS, llm_sim=True,
-                              application_id=application_id)
+            out = adv.run_one(persona, max_turns=max_turns or _TRAIN_MAX_TURNS,
+                              llm_sim=True, application_id=application_id)
         else:
             with nlg.template_only():
-                out = adv.run_one(persona, max_turns=_TRAIN_MAX_TURNS,
+                out = adv.run_one(persona, max_turns=max_turns or _TRAIN_MAX_TURNS,
                                   application_id=application_id)
     finally:
         events.DATA_DIR, events.DB_PATH = old_dir, old_db
@@ -332,6 +332,10 @@ def _train_run(persona, user="llm"):
     out["expect"] = expect
     out["ok"] = (want is None) or (bool(want) == bool(out.get("closed")))
     out["verdict"] = "通过" if out["ok"] else "失败"
+    # 期望单独回一个字段：前端原来用 `d.expect.closed === true` 推文案，
+    # 画像没写 expect 时会显示成"期望不闭环"，和"失败"自相矛盾。
+    # 判定与文案必须同源，否则看的人会怀疑整个结果。
+    out["expect_closed"] = None if want is None else bool(want)
     out["scene"] = config_loader.scene_name()
     out["max_turns"] = _TRAIN_MAX_TURNS
     out["user_mode"] = "llm" if use_llm else "rule"
@@ -885,6 +889,10 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
         "stage": agent_out["stage"],
         "next_stage": agent_out["next_stage"],
         "intent": agent_out.get("intent", "unknown"),
+        # 这一句是模型说的还是骨架说的。编排层返回里带了，这里必须透传——
+        # 少这一行，训练轨迹里每一轮都显示"未知来源"，录制统计全是 0 轮
+        # （第一次录完就是 0 轮，代码里其实一直在调模型）。
+        "reply_source": agent_out.get("reply_source", ""),
         "end_reason": agent_out.get("end_reason", ""),
         # 这一轮说完就该收线（终态/拒绝/挂断）。ws_channel 靠它决定要不要挂电话；
         # 不透出来，服务端永远不会主动挂断（实测就是这样）。

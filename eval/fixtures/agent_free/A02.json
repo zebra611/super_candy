@@ -1,0 +1,62 @@
+{
+ "persona_id": "A02",
+ "persona_label": "低压力爱追问（对照）",
+ "application_id": "MC-QZ202611060003",
+ "user_mode": "llm",
+ "model": "qwen-plus",
+ "verdict": "通过",
+ "closed": true,
+ "recorded_at": "2026-11-11 16:18:07",
+ "turns": [
+  {
+   "turn": 1,
+   "stage": "GREETING",
+   "next_stage": "IDENTITY",
+   "intent": "identity_retry",
+   "user": "对，我是天津市静姝百货经营部的殷烟汀。",
+   "agent": "好的，核对申请单需要您预留手机号的后四位，说四个数字就行。",
+   "source": "skeleton",
+   "end_reason": ""
+  },
+  {
+   "turn": 2,
+   "stage": "IDENTITY",
+   "next_stage": "NEED",
+   "intent": "identity_ok",
+   "user": "1234",
+   "agent": "核对上了，感谢配合。辛夷品牌、美妆个护类目没有通过审核，原因是海外商标注册证明未完成公证认证，需要补充境外主体证明、中文译本、海外采购凭证、公证认证文件，具体我马上跟您说明。",
+   "source": "skeleton",
+   "end_reason": ""
+  },
+  {
+   "turn": 3,
+   "stage": "NEED",
+   "next_stage": "OFFER",
+   "intent": "need",
+   "user": "嗯，明白了，我这就去补材料。",
+   "agent": "这次没通过是因为海外商标注册证明没做公证认证，得补境外主体证明、中文译本、海外采购凭证和公证认证文件，再在后台重新提交。还有啥不清楚的吗？",
+   "source": "model",
+   "end_reason": ""
+  },
+  {
+   "turn": 4,
+   "stage": "OFFER",
+   "next_stage": "CONFIRM",
+   "intent": "unknown",
+   "user": "殷烟汀。",
+   "agent": "我跟您复述一下：您这笔申请是因为海外商标注册证明未完成公证认证没有通过审核，需要补充境外主体证明、中文译本、海外采购凭证、公证认证文件，然后在后台重新提交，您清楚了吗？",
+   "source": "skeleton",
+   "end_reason": ""
+  },
+  {
+   "turn": 5,
+   "stage": "WRITEBACK",
+   "next_stage": "DONE",
+   "intent": "consent",
+   "user": "嗯，清楚了，我马上补材料重新提交。",
+   "agent": "驳回原因和补材要求已记下，稍后短信同步到您后台，感谢配合，再见。",
+   "source": "skeleton",
+   "end_reason": ""
+  }
+ ]
+}

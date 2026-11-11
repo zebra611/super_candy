@@ -2679,7 +2679,19 @@ function renderTrainSummary(d) {
   const cells = Object.keys(TRAIN_WEAK).map(k =>
     '<div class="weakcell"><div class="k">' + escapeHtml(TRAIN_WEAK[k]) +
     '</div><div class="v">' + (w[k] || 0) + "</div></div>").join("");
-  const want = d.expect && d.expect.closed === true ? "闭环" : "不闭环";
+  // 判定与文案必须同源：以前"期望"是前端用 d.expect.closed === true 推的，
+  // 画像没写 expect 时会印出"期望不闭环"却判"失败"，自相矛盾。
+  const want = (d.expect_closed === null || d.expect_closed === undefined)
+    ? "未约定" : (d.expect_closed ? "闭环" : "不闭环");
+  // 复读：相邻两轮客服回复几乎逐字相同。这是用户一眼就能看出来的毛病，
+  // 结果里必须自己报出来，而不是等人截图指出来。
+  const rt = d.turns || [];
+  let rep = 0;
+  for (let i = 1; i < rt.length; i++) {
+    const a = (rt[i - 1].agent || {}).reply_text || "";
+    const b = (rt[i].agent || {}).reply_text || "";
+    if (a && b && (a === b || a.slice(0, 18) === b.slice(0, 18))) rep++;
+  }
   // 客户侧到底是谁在说话，要写在结果里而不是只写在提示里：
   // 模型扮演时通数不可复现，引用这些数字的人得知道这一点。
   const sim = d.sim_report || {};
@@ -2698,6 +2710,8 @@ function renderTrainSummary(d) {
     "（期望" + want + "，实际" + (d.closed ? "闭环" : "不闭环") + "）· 难度峰值 L" +
     (d.level_peak || 1) + " · 结束于 " + escapeHtml(d.end_by || "") + "</div>" +
     '<div class="weakgrid">' + cells + "</div>" +
+    '<div class="hint" style="margin-top:6px">客服复读相邻两轮：' + rep + " 次" +
+    (rep ? '　<span class="weak">这一项不为 0 就是缺陷</span>' : "") + "</div>" +
     '<div class="hint" style="margin-top:8px">' + who +
     "。这一场露出的弱点就是自进化的输入：失败簇 → 候选话术 → 闸门，训练用独立事件库、不写生产数据。</div>";
 }

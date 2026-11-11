@@ -14,8 +14,13 @@
     - 只测 nlg 自己，不碰对话流程。
 """
 
+# 跑批必须可复现：模型客服每次说的话不一样，验收口径会漂，这里强制关掉。
+import os as _os_agent
+_os_agent.environ.setdefault("AGENT_FREE", "0")
+
 import json
 import os
+import re
 import socket
 import sys
 import unittest
@@ -150,13 +155,18 @@ class TestAcceptPath(unittest.TestCase):
         self.assertFalse(out.startswith("“"), "首尾引号没剥掉：%r" % out)
 
     def test_truncated_to_max_chars(self):
-        """超过 max_chars 要截断，且必须断在标点上（不能说半句）。
+        """超过 max_chars 要截断，且必须断在**句末**标点上（不能说半句）。
 
         骨架要选够短的：`docs/17` 第 3.4 节第 4 条要求"字数差 2 倍就退回"，
         骨架太长时改写会先被那条拦掉，max_chars 走不到。两条规则的适用区间不同。
+
+        11-11 收紧：只认「。！？」。原来「，、；」也算断点，线上出现过
+        "…需重新提交品牌授权书、" 这种句尾挂顿号的半句，听的人以为断线。
+        所以这里把改写文本改成**前 15 字内真有一个句号**，测的是截断路径本身；
+        "只有逗号/顿号" 的那条路单独由 test_no_half_sentence_cut 守。
         """
         base = "好的，已经帮您登记好了"
-        reply = "好的，已经帮您登记好了，稍后会有短信通知您。"
+        reply = "好的，已经帮您登记好了。稍后会有短信通知您。"
         cfg = dict(CFG, max_chars=15)
         self.assertLess(len(reply), len(base) * 2 + 10, "用例本身要先过 2 倍检查")
         with mock.patch.object(config_loader, "secret", return_value="sk-test"), \
@@ -164,8 +174,58 @@ class TestAcceptPath(unittest.TestCase):
              mock.patch("urllib.request.urlopen", return_value=_ok_response(reply)):
             out = nlg.say(SESSION, base, "WRITEBACK")
         self.assertLessEqual(len(out), 15, "没截断到 max_chars：%r" % out)
-        self.assertTrue(out.endswith(("。", "？", "！", "，", "、", "；")),
-                        "截断后不该是半句：%r" % out)
+        self.assertTrue(out.endswith(("。", "？", "！")),
+                        "截断后必须是完整句：%r" % out)
+
+    def test_open_kept_or_fallback(self):
+        """第 9 道守卫：承接句被改写层压掉时，必须退回骨架。
+
+        11-11 线上 A15 第 6 轮：骨架「对，是您本人」，改写后只剩
+        「您这边清楚这几样材料怎么准备吗」——客户确认了身份，客服一句没认，
+        然后又问一遍。
+
+        这条测的是**接线**，不是判据：`_open_kept` 本身在
+        test_train_replay 里另有一条纯函数用例。只测纯函数抓不到
+        「say 里根本没调用它」——变异 m14 就是这么漏过去的。
+        """
+        base = "对，是您本人。那这几样材料您清楚怎么准备吗？"
+        sess = dict(SESSION)
+        sess["must_keep_open"] = "对，是您本人"
+        cfg = dict(CFG, max_chars=80)
+        # 改写把承接半句整段砍掉，只剩追问 → 必须退回骨架
+        with mock.patch.object(config_loader, "secret", return_value="sk-test"), \
+             mock.patch.object(config_loader, "nlg_config", return_value=cfg), \
+             mock.patch("urllib.request.urlopen",
+                        return_value=_ok_response("您这边清楚这几样材料怎么准备吗？")):
+            out = nlg.say(sess, base, "CONFIRM")
+        self.assertEqual(out, base, "承接句被吃掉却没退回骨架：%r" % out)
+
+        # 反向：改写保留了承接句，就该用改写结果（守卫不能把正常改写也挡掉）
+        with mock.patch.object(config_loader, "secret", return_value="sk-test"), \
+             mock.patch.object(config_loader, "nlg_config", return_value=cfg), \
+             mock.patch("urllib.request.urlopen",
+                        return_value=_ok_response("对，是您本人，那这几样材料您清楚怎么准备吗？")):
+            ok = nlg.say(sess, base, "CONFIRM")
+        self.assertIn("是您本人", ok, "正常改写被误挡：%r" % ok)
+
+    def test_no_half_sentence_cut(self):
+        """max_chars 内只有逗号/顿号：必须退回骨架，不许切出半句。
+
+        变异靶子：把 `_fit` 的 sep 里加回「、」或「，」，本用例必须当场红。
+        """
+        base = "好的，已经帮您登记好了"
+        reply = "关于授权书公章与品牌名不一致的情况，需重新提交品牌授权书、逐级授权链路证明。"
+        cfg = dict(CFG, max_chars=30)
+        from modules.nlg import _fit
+        got = _fit(reply, 30)
+        self.assertTrue(got is None or got.endswith(("。", "？", "！")),
+                        "只准退回或整句，实际截成：%r" % got)
+        with mock.patch.object(config_loader, "secret", return_value="sk-test"), \
+             mock.patch.object(config_loader, "nlg_config", return_value=cfg), \
+             mock.patch("urllib.request.urlopen", return_value=_ok_response(reply)):
+            out = nlg.say(SESSION, base, "WRITEBACK")
+        self.assertFalse(re.search(r"[、，；]$", out or ""),
+                         "句尾挂了顿号/逗号，等于列举被切断：%r" % out)
 
     def test_unsplittable_reply_falls_back(self):
         """max_chars 内断不出完整分句时，必须退回骨架，而不是说半句话。"""
