@@ -99,8 +99,6 @@
     letter-spacing: -.01em;
   }
   .launch .sub { font-size: 13px; color: var(--ink-2); margin: 0 0 16px; }
-
-  .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
   .mode {
     position: relative; text-align: left; cursor: pointer;
     display: flex; flex-direction: column; gap: 3px;
@@ -133,6 +131,25 @@
     border-radius: 999px; background: var(--brand); color: #fff;
     letter-spacing: .02em;
   }
+  /* 两个动作组：① 选对象（不发起通话）② 开始对话（文字/语音）。
+     之前三个按钮并排等权，用户不知道哪个算"正式开始"。 */
+  .modes { display: grid; grid-template-columns: 1fr 1.7fr; gap: 12px; }
+  .mgroup { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .mgroup .mode { flex: 1; }
+  .mpair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-width: 0; flex: 1; }
+  .mlabel { font-size: 11px; color: var(--ink-3); letter-spacing: .04em; }
+  #targetChip {
+    /* 放在启动条里、入口按钮右边：桌面端的 .ctrl 在未通话时整行隐藏
+       （那一行只有通话中才有意义），目标牌要是放那儿，"看一份档案"之后
+       用户恰恰看不到锁了哪家。margin-left:auto 把它推到行尾。 */
+    margin-left: auto;
+    font-size: 12px; color: var(--ink-2); max-width: 260px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    background: var(--surface-3); border: 1px solid var(--line);
+    border-radius: 999px; padding: 3px 10px;
+    align-self: center;
+  }
+  #targetChip b { color: var(--ink); font-weight: 600; }
 
   .ctrl {
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -635,6 +652,11 @@
     overflow-x: auto; scrollbar-width: none;
   }
   .tabbar::-webkit-scrollbar { display: none; }
+  .tgroup {
+    flex: none; align-self: center;
+    font-size: 10.5px; color: var(--ink-3); letter-spacing: .06em;
+    padding: 0 8px; white-space: nowrap;
+  }
   .tab {
     flex: 1 1 0; min-width: 54px; position: relative;
     padding: 11px 2px 10px;
@@ -753,39 +775,48 @@
 
     <section class="card launch">
       <div class="modes">
-        <button id="btnText" class="mode is-reco" title="不开启语音系统：不连麦克风、不合成播放语音，直接在下方打字与客服对话">
-          <span class="ico">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-            </svg>
-          </span>
-          <span class="mt">文字对话</span>
-          <span class="reco">推荐</span>
-        </button>
-
-        <button id="btnStart" class="mode" title="完整语音链路：打开麦克风，客服会说话，你也可以直接插话打断">
-          <span class="ico">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-            </svg>
-          </span>
-          <span class="mt">语音通话</span>
-        </button>
-
-        <button id="btnRandom" class="mode" title="只抽一份商户档案看，不发起通话。看完再点「文字对话」即可让客服基于它开场">
-          <span class="ico">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="4" width="18" height="16" rx="2"/>
-              <path d="M3 9h18M9 9v11"/>
-            </svg>
-          </span>
-          <span class="mt">看一份档案</span>
-        </button>
+        <div class="mgroup">
+          <span class="mlabel">① 先选对象</span>
+          <button id="btnRandom" class="mode" title="只抽一份商户档案看，不发起通话。看完再点「文字对话」即可让客服基于它开场">
+            <span class="ico">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="16" rx="2"/>
+                <path d="M3 9h18M9 9v11"/>
+              </svg>
+            </span>
+            <span class="mt">看一份档案</span>
+            <span class="md">不发起通话</span>
+          </button>
+        </div>
+        <div class="mgroup mgroup-wide">
+          <span class="mlabel">② 再开始对话</span>
+          <div class="mpair">
+            <button id="btnText" class="mode is-reco" title="不开启语音系统：不连麦克风、不合成播放语音，直接在下方打字与客服对话">
+              <span class="ico">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+              </span>
+              <span class="mt">文字对话</span>
+              <span class="reco">推荐</span>
+            </button>
+            <button id="btnStart" class="mode" title="完整语音链路：打开麦克风，客服会说话，你也可以直接插话打断">
+              <span class="ico">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                </svg>
+              </span>
+              <span class="mt">语音通话</span>
+            </button>
+          </div>
+        </div>
       </div>
 
+      <span id="targetChip" hidden>本次目标：<b id="targetChipName"></b></span>
+
       <div class="ctrl">
-        <button id="btnRec" disabled>暂停聆听</button>
+        <button id="btnRec" hidden>暂停聆听</button>
         <button id="btnEnd" class="danger" disabled>挂断</button>
         <span id="phaseLine">未开始</span>
       </div>
@@ -821,7 +852,8 @@
       <button id="btnJump" class="jump" hidden>有新消息 ↓</button>
 
       <div class="composer">
-        <input type="text" id="textInput" placeholder="输入一句话，例如「是什么原因没通过」；留空发送 = 模拟用户不说话" disabled>
+        <input type="text" id="textInput" placeholder="输入一句话，例如「是什么原因没通过」；开始通话后才能发送" disabled>
+        <button id="btnSilence" class="ghost" title="发一个空轮次：模拟用户没说话（用于验证沉默处理，不推进状态机）" hidden>模拟不说话</button>
         <button id="btnSend" class="primary" disabled>发送</button>
       </div>
       <div id="audioLine">麦克风未启用。点「语音通话」后会自动打开，直接说话即可，客服说话时可以插话打断。</div>
@@ -833,16 +865,18 @@
 
     <section class="card tools">
       <div class="tabbar" id="toolTabs" role="tablist">
+        <span class="tgroup">本次通话</span>
         <button class="tab is-on" role="tab" aria-selected="true" data-pane="targetPanel" title="这次打给谁：公司、联系人、驳回原因与官方话术">外呼目标</button>
         <button class="tab" role="tab" aria-selected="false" data-pane="paneMetric" title="首字响应、处理耗时、P50 / P95、闭环通话数">运行指标</button>
         <button class="tab" role="tab" aria-selected="false" data-pane="eventsPane" title="这通电话在系统里到底发生了什么">事件链</button>
+        <span class="tgroup">离线评测</span>
         <button class="tab" role="tab" aria-selected="false" data-pane="trainCard" title="模型扮客户、真链路当客服：客户按自己的档案开口，红标是客服露怯处">训练回放</button>
         <button class="tab" role="tab" aria-selected="false" data-pane="evolveCard" title="每轮只改一个策略开关，指标双降才采纳">自进化</button>
       </div>
 
       <div class="panes">
 
-        <div class="pane is-on" id="targetPanel">
+        <div class="pane is-on" role="tabpanel" aria-label="targetPanel" id="targetPanel">
           <div class="pane-top">
             <span>本次外呼目标</span>
             <span class="p-state" id="randomMatched">未选</span>
@@ -852,7 +886,7 @@
           </div>
         </div>
 
-        <div class="pane" id="paneMetric">
+        <div class="pane" role="tabpanel" aria-label="paneMetric" id="paneMetric">
           <div class="meters">
             <div class="meter"><div class="k" title="本轮首字响应（T4−T0）">首字响应</div><div class="v" id="mFirst">—</div></div>
             <div class="meter"><div class="k" title="本轮处理耗时（服务端）">处理耗时</div><div class="v" id="mTotal">—</div></div>
@@ -862,14 +896,14 @@
           <div id="metricNote">门槛 2000ms。首字口径要等第一通语音电话才有样本。</div>
         </div>
 
-        <div class="pane" id="eventsPane">
+        <div class="pane" role="tabpanel" aria-label="eventsPane" id="eventsPane">
           <div class="row" style="justify-content:flex-end;margin-bottom:10px">
             <button id="btnEvents" class="ghost" disabled>刷新</button>
           </div>
           <div id="events">暂无事件</div>
         </div>
 
-        <div class="pane" id="trainCard">
+        <div class="pane" role="tabpanel" aria-label="trainCard" id="trainCard">
           <div class="pane-top">
             <span>让 AI 扮客户给客服上难度</span>
             <span class="p-state" id="trainState">未开始</span>
@@ -887,7 +921,7 @@
           <div id="trainSummary"></div>
         </div>
 
-        <div class="pane" id="evolveCard">
+        <div class="pane" role="tabpanel" aria-label="evolveCard" id="evolveCard">
           <div class="pane-top">
             <span>最近一次进化</span>
             <span class="p-state" id="evolveState">未加载</span>
@@ -912,6 +946,12 @@
 // token 是这通电话的读取凭证：没有它，别人拿到 session_id 也查不到事件与报告。
 const S = { sessionId: null, token: null, pendingTarget: null, textOnly: false,
             busy: false, turnId: 0, t0: 0,
+            // 界面状态机（idle/text/voice/paused/closed），见 render()
+            ui: "idle",
+            // 事件链快照：服务端 end_call 会把会话从内存里删掉，挂断后再查
+            // 就是 UNKNOWN_SESSION。挂断瞬间（会话还活着时）先拉好一份存着，
+            // 之后「事件链」标签的「刷新」用这份快照——比"点了没反应"诚实。
+            lastEvents: "",
             // 连续通话状态机：idle → listening → user → thinking → agent → (打断) → user
             phase: "idle", autoMode: false,
             silentFrames: 0, bargeHits: 0, onsetHits: 0, prevPhase: "idle",
@@ -1002,12 +1042,12 @@ let LOGSTICK = true;   // 对话框是否贴底：贴底才自动跟随新消息
 
 // 输入框的提示语也带"这一单"的信息：有档案就给出真实尾号当例子，
 // 没档案就用诉求当例子——写死一个数字，用户会照着输一个核身对不上的号。
-const INPUT_HINT = "输入一句话，例如「是什么原因没通过」；留空发送 = 模拟用户不说话";
+const INPUT_HINT = "输入一句话，例如「是什么原因没通过」；要测沉默请点「模拟不说话」";
 function setInputHint(tail) {
   const el = $("textInput");
   if (!el) return;
   el.placeholder = tail
-    ? "输入一句话，例如「尾号" + tail + "」；留空发送 = 模拟用户不说话"
+    ? "输入一句话，例如「尾号" + tail + "」；要测沉默请点「模拟不说话」"
     : INPUT_HINT;
 }
 
@@ -1023,23 +1063,24 @@ function renderTip() {
   if (!k || !t) return;
   const i = TIP.closed ? 9 : TIP.idx;
   const tail = escapeHtml(TIP.tail || "");
-  let step = "第 1 步", html = "";
+  // 不再用"第 N 步"编号：右侧进度条是后端 7 个阶段，两套编号对不上，
+  // 用户看到"第 2 步"却找不到进度条上的"第 2 格"。这里只说"下一步做什么"，
+  // 编号叙事交给进度条一条线。
+  let step = "下一步", html = "";
   if (TIP.closed) {
     // 已经挂断：不再教人点「挂断」——那个按钮这时已经收了，
     // 提示指向一个不存在的按钮，比不提示更让人茫然。
-    step = "已完成";
+    step = "已结束";
     html = "这通电话已经结束，结果已回写到工单。「事件链」标签里有完整记录。";
   } else if (i >= 5) {
     step = "已完成";
     html = "这通电话已经走完，结果会回写到工单。「事件链」标签里有回写记录，点「挂断」收尾。";
   } else if (i === 4) {
-    step = "第 4 步";
+    step = "收尾";
     html = "客服在做最后确认：回一句 <b>「对」</b> 或 <b>「清楚」</b>，这通电话就闭环了。";
   } else if (i === 3) {
-    step = "第 3 步";
     html = "方案已经给出。同意就回 <b>「办吧」</b> 或 <b>「同意」</b>——含糊的回答不会被当作同意。";
   } else if (i === 2) {
-    step = "第 2 步";
     html = "接着说诉求，例如 <b>「" + escapeHtml(tipAsk()) + "」</b>，客服会讲清原因和要补的材料。";
   } else if (!tail) {
     // 还没抽档案：这里绝不能写死一个尾号。尾号是每份档案各自的，
@@ -1089,58 +1130,69 @@ function initLogScroll() {
   });
 }
 
-// 语音状态行加一个"活的"圆点，区分"未开始"和"正在听"。
-function watchPhase() {
-  const el = $("phaseLine");
-  if (!el) return;
-  const sync = () => {
-    const t = el.textContent || "";
-    const live = /在听|正在|客服在说|即将停下|进行中/.test(t);
-    el.classList.toggle("live", live);
-  };
-  new MutationObserver(sync).observe(el, { childList: true, characterData: true, subtree: true });
-  sync();
+// ---------------------------------------------------------------------------
+// 界面状态机：全页只有 5 个状态，按钮/输入框/状态行全部由 render() 推导。
+//
+// 为什么必须这样：之前的状态是"看"出来的——3 个 MutationObserver 盯着
+// btnEnd.disabled、phaseLine 文本、档案卡 display 反推，外加 7 处直接改按钮。
+// 结果是"现在为什么不能点发送"没有一处能单独回答，纯文字模式的状态行
+// 还得靠观察器补一句"文字对话进行中"。现在事件只改 S.ui 然后调 render()，
+// 每个按钮为什么是这个样子，只有一个地方能解释。
+// ---------------------------------------------------------------------------
+const UI_STATES = {
+  idle:   { label: "未开始",          end: false, input: false, entries: true,  live: false },
+  text:   { label: "文字对话进行中",   end: true,  input: true,  entries: false, live: true  },
+  voice:  { label: "未开始",          end: true,  input: true,  entries: false, live: true  },
+  paused: { label: "已暂停聆听",       end: true,  input: true,  entries: false, live: false },
+  closed: { label: "已结束，可看「事件链」", end: false, input: false, entries: true, live: false },
+};
+
+function setUiState(state) {
+  if (!UI_STATES[state]) return;
+  S.ui = state;
+  render();
 }
 
-// 档案出现时：只有"用户主动点了看档案"才自动展开。
-// 通话开始时系统也会带出一份档案，那种情况不该抢走对话的视线，只留一个小标签提示可展开。
-function watchTarget() {
-  const card = $("randomCard"), panel = $("targetPanel");
-  if (!card || !panel) return;
-  $("btnRandom").addEventListener("click", () => { window.__askTarget = true; });
-  const syncEmpty = () => panel.classList.toggle("is-empty", card.style.display === "none");
-  syncEmpty();
-  new MutationObserver(() => {
-    syncEmpty();
-    if (card.style.display === "none" || !window.__askTarget) return;
-    window.__askTarget = false;
-    openPane("targetPanel");
-  }).observe(card, { attributes: true, attributeFilter: ["style"] });
+function render() {
+  const st = UI_STATES[S.ui] || UI_STATES.idle;
+  const on = !st.entries;
+  $("btnText").disabled = on;
+  $("btnStart").disabled = on;
+  $("btnRandom").disabled = on;
+  // 「暂停聆听」只在语音模式存在。纯文字模式根本没有麦克风，
+  // 一个永远点不动的按钮比没有按钮更让人怀疑自己点错了——直接隐藏。
+  const rec = $("btnRec");
+  rec.hidden = !(S.ui === "voice" || S.ui === "paused");
+  rec.textContent = S.ui === "paused" ? "恢复聆听" : "暂停聆听";
+  $("btnEnd").disabled = !st.end;
+  $("textInput").disabled = !st.input;
+  $("btnSend").disabled = !st.input || !!S.busy;
+  $("btnSilence").hidden = !st.input;
+  // 启动区只在通话进行中收成工具栏（CSS：.launch.compact）。
+  // 挂断后要退回完整入口区——closed 还收着，用户就找不到"再打一通"的按钮
+  // （冒烟测试第 ⑦ 步抓到的）。
+  document.querySelector(".launch").classList.toggle(
+    "compact", S.ui === "text" || S.ui === "voice" || S.ui === "paused");
+  const ph = $("phaseLine");
+  ph.classList.toggle("live", !!st.live);
+  // voice 的状态行是动态的（在听/正在处理/客服在说/即将停下），由 setPhaseLine 写；
+  // 其余状态在这里一次写死——纯文字模式再也不用靠观察器补一句。
+  if (S.ui !== "voice") ph.textContent = st.label;
 }
 
-// 通话开始后把启动区收成一条工具栏，把屏幕让给对话。
-function watchCall() {
-  const end = $("btnEnd"), box = document.querySelector(".launch"), ph = $("phaseLine");
-  if (!end || !box) return;
-  // 纯文字模式下 setPhaseLine 不会被调用，状态行会一直停在"未开始"——这里补一句真实状态。
-  $("btnText").addEventListener("click", () => { window.__textMode = true; });
-  $("btnStart").addEventListener("click", () => { window.__textMode = false; });
-  const sync = () => {
-    const running = !end.disabled;
-    box.classList.toggle("compact", running);
-    if (running && window.__textMode && ph && /未开始/.test(ph.textContent)) {
-      ph.textContent = "文字对话进行中";
-    }
-  };
-  new MutationObserver(sync).observe(end, { attributes: true, attributeFilter: ["disabled"] });
-  sync();
+// 「本次目标」常驻小牌：点了「看一份档案」、或开了会话之后，用户随时能看见
+// 这一通打给谁。之前锁定关系只存在 S.pendingTarget 里，界面上只有 log 里
+// 一行字——翻上去就找不到了，连抽两次档案也不知道现在锁的是哪家。
+function setTargetChip(name) {
+  const chip = $("targetChip");
+  if (!chip) return;
+  if (!name) { chip.hidden = true; return; }
+  $("targetChipName").textContent = name;
+  chip.hidden = false;
 }
 
 const AVATAR = { "客服": "客", "用户": "你", "系统": "·" };
 
-watchPhase();
-watchTarget();
-watchCall();
 initTabs();
 initLogScroll();
 renderTip();
@@ -1226,6 +1278,10 @@ function renderRandomCompany(company, matched_by, scene) {
   const card = $("randomCard");
   const info = $("randomInfo");
   const tag = $("randomMatched");
+  // 右栏空态标记：没有档案时把面板收薄（原来是观察器盯 card.style.display，
+  // 现在数据一到就顺手写，不再需要 MutationObserver）。
+  const empty = $("targetPanel");
+  if (empty) empty.classList.toggle("is-empty", !company || typeof company !== "object");
   if (!company || typeof company !== "object") {
     card.style.display = "none";
     info.innerHTML = "";
@@ -1339,21 +1395,32 @@ async function startCall(opts) {
   if (opts.random) body.random = true;
   const textOnly = !!opts.textOnly;
 
-  const r = await fetch("/api/call/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  const d = await r.json();
+  // 服务没起来时这里会抛——不接住的话，点「开始通话」页面毫无反应，
+  // 只有控制台红字（11-11 评审发现）。
+  let d;
+  try {
+    const r = await fetch("/api/call/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    d = await r.json();
+  } catch (e) {
+    setUiState("idle");
+    log("系统", "服务没连上（" + (e && e.message ? e.message : e) + "）。确认后端已启动再点一次。");
+    return;
+  }
   S.sessionId = d.session_id;
   S.token = d.read_token;
   S.textOnly = textOnly;
+  S.ui = textOnly ? "text" : "voice";
   S.pendingTarget = null;          // 已用于开会话，清掉；下次不重预览会走外呼名单
+  // 第二通开始清屏：两通对话混在同一个框里，分不清哪句是哪通。
+  // 历史不丢——「事件链」标签里有完整记录，这里只清看得见的这块。
+  $("log").innerHTML = "";
+  LOGSTICK = true;
+  $("btnJump").hidden = true;
   $("sessionLine").textContent = "会话 " + d.session_id + (textOnly ? "（纯文字）" : "");
-  $("btnStart").disabled = true;
-  $("btnRandom").disabled = true;   // 通话进行中两个起通话的入口都锁住，避免孤儿会话
-  $("btnText").disabled = true;
-  $("btnRec").disabled = true;      // 纯文字模式本就无麦克风；语音模式在拿到麦克风后再开
-  $("btnEnd").disabled = false;
-  $("textInput").disabled = false;
-  $("btnSend").disabled = false;
   $("btnEvents").disabled = false;
+  render();
+  const _who = (d.company && d.company.company_name) || "";
+  if (_who) setTargetChip(_who);
 
   // 展示本次外呼目标：随机/指定/名单命中的公司档案，让测试者一眼核对。
   TIP.idx = -1;
@@ -1365,10 +1432,7 @@ async function startCall(opts) {
     $("audioLine").textContent = "纯文字模式：未启用语音系统（不连麦克风、不播放语音）。直接在下方输入框打字即可，客服会基于这一单的档案主动对话。";
     S.autoMode = false;
     S.phase = "idle";
-    setPhaseLine();
-    // 纯文字模式没有 setPhaseLine 的后续调用，状态行会一直停在"未开始"；
-    // 这里直接写一句真实状态，免得看起来像没接通。
-    $("phaseLine").textContent = "文字对话进行中";
+    setUiState("text");            // 状态行「文字对话进行中」由 render() 统一写
   } else {
     wsConnect();                   // S2：实时音频通道；纯文字模式不会走到这里（也不连麦克风）
     // 连续通话：进来就把麦克风打开，用户直接说话，不用点任何按钮。
@@ -1383,6 +1447,9 @@ async function startCall(opts) {
     } catch (e) {
       S.autoMode = false;
       S.phase = "idle";
+      // 拿不到麦克风就退回文字模式：界面按"能打字"渲染，
+      // 别停在语音状态让人对着一个没声音的麦克风说话。
+      setUiState("text");
       log("系统", "拿不到麦克风：" + (e && e.message ? e.message : e) +
           "（可用下面打字；或检查浏览器权限）");
     }
@@ -1412,8 +1479,12 @@ async function previewRandom() {
     }
     S.pendingTarget = c.application_id || null;
     renderRandomCompany(c, d.matched_by, d.scene);
+    // 用户主动点了「看一份档案」：这一份就是他要看的，右栏直接展开给他。
+    // 通话开始时系统也会带出档案，那种情况不抢视线（renderRandomCompany 不展开）。
+    openPane("targetPanel");
+    setTargetChip(c.company_name || "");
     const who = (c.company_name || "") + (c.contact_role ? "（" + c.contact_role + "）" : "");
-    log("系统", "已选中：" + who + "。点「文字对话」即可开始。");
+    log("系统", "已选中：" + who + "。点「文字对话」即可基于它开始。");
   } catch (e) {
     log("系统", "随机预览失败：" + (e && e.message ? e.message : e));
   }
@@ -1853,8 +1924,8 @@ function setPhaseLine() {
   else if (S.bargeState === "probing") label = "正在确认";
   const el = $("phaseLine");
   if (el) el.textContent = label;
-  const b = $("btnRec");
-  if (b && S.autoMode) b.textContent = "暂停聆听";
+  // 按钮与圆点统一交给 render()：voice 状态下它不动这行文字，只点亮圆点。
+  render();
 }
 
 // 把攒着的帧合成一片发出去。seq 用"这批第一帧的序号"，
@@ -1952,9 +2023,8 @@ async function toggleRec() {
     S.phase = "idle";
     stopPlayback();
     await stopCapture();
-    $("btnRec").textContent = "恢复聆听";
     $("audioLine").textContent = "已暂停聆听（麦克风已关闭）";
-    setPhaseLine();
+    setUiState("paused");
     log("系统", "已暂停聆听。点「恢复聆听」继续；也可以直接在下面打字。");
     return;
   }
@@ -1963,7 +2033,7 @@ async function toggleRec() {
     await startCapture();
     S.autoMode = true;
     S.phase = "listening";
-    $("btnRec").textContent = "暂停聆听";
+    setUiState("voice");
     setPhaseLine();
     log("系统", "已恢复聆听，直接说话即可。");
   } catch (e) {
@@ -1976,7 +2046,7 @@ async function toggleRec() {
 async function sendTurn(payload, t0) {
   if (!S.sessionId || S.busy) return;
   S.busy = true;
-  $("btnSend").disabled = true;
+  render();
   // T0：用户"说完 / 点发送"的时刻。首字响应从这里算到第一帧声音。
   S.t0 = t0 || performance.now();
   try {
@@ -2024,7 +2094,7 @@ async function sendTurn(payload, t0) {
     if (S.autoMode) { S.phase = "listening"; setPhaseLine(); }
   } finally {
     S.busy = false;
-    if (S.sessionId) $("btnSend").disabled = false;
+    render();
     // 兜底：这一轮如果没能进入播报（出错、空回复），别让状态卡死在"思考中"，
     // 否则 VAD 再也不会推进，用户会觉得"它不理我了"。
     if (S.autoMode && S.phase === "thinking") {
@@ -2191,7 +2261,6 @@ async function endCall(opts) {
     await stopCapture();
     $("audioLine").textContent = "麦克风已关闭。";
   }
-  $("btnRec").textContent = "暂停聆听";
   if (!silent) {
     await fetch("/api/call/end", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -2200,17 +2269,15 @@ async function endCall(opts) {
   }
   log("系统", "通话已结束。");
   TIP.closed = true;
-  renderTip();
-  $("btnStart").disabled = false;
-  $("btnRandom").disabled = false;
-  $("btnText").disabled = false;
-  $("btnRec").disabled = true;
-  $("btnEnd").disabled = true;
-  $("textInput").disabled = true;
-  $("btnSend").disabled = true;
+  // 会话句柄清掉，但**事件链还能看**：提示条说「事件链标签里有完整记录」。
+  // refreshEvents 在下面调用时会话还活着，先拉一份快照存进 S.lastEvents；
+  // 挂断之后再点「刷新」，用的就是这份快照（服务端 end_call 会把会话删掉，
+  // 活着时不用快照、挂断后查不到，这是一条死路——11-11 评审抓到的）。
+  setUiState("closed");
+  refreshEvents();               // 挂断瞬间把最终事件链拉好，不用用户再点刷新
+  refreshMetrics();
   S.sessionId = null;
   S.token = null;
-  refreshMetrics();
 }
 
 async function refreshMetrics() {
@@ -2234,18 +2301,25 @@ async function refreshMetrics() {
 }
 
 async function refreshEvents() {
-  if (!S.sessionId) return;
+  // 挂断后：服务端已删会话（end_call 里 pop），再查只会 UNKNOWN_SESSION——
+  // 用挂断瞬间缓存的快照（endCall 会在会话还活着时先拉一次）。
+  if (!S.sessionId) {
+    if (S.lastEvents) $("events").textContent = S.lastEvents;
+    return;
+  }
   try {
     const url = "/api/events?session_id=" + encodeURIComponent(S.sessionId) +
                 "&token=" + encodeURIComponent(S.token);
     const r = await fetch(url);
     const d = await r.json();
     if (d.error) { $("events").textContent = "读取失败：" + d.error; return; }
-    $("events").textContent = (d.events || []).map(e =>
+    const text = (d.events || []).map(e =>
       "#" + String(e.id).padStart(3, "0") + "  turn " + e.turn_id + "  " +
       e.type.padEnd(14) + " " + (e.latency_ms ? e.latency_ms + "ms" : "") +
       "\n     " + JSON.stringify(e.payload)
     ).join("\n") || "还没有事件。";
+    $("events").textContent = text;
+    S.lastEvents = text;
   } catch (e) { /* 忽略 */ }
 }
 
@@ -2337,7 +2411,7 @@ function handleWsTurnResult(m) {
   // 半句字幕到此为止：整句已经落在下面的对话日志里，字幕再留着就是同一句
   // 出现两遍（这就是验收里说的"不重复"）。
   $("liveSubtitle").textContent = "";
-  $("btnSend").disabled = false;
+  render();
   log("用户", m.user_text || "（无应答）");
   log("客服", m.reply_text, m.next_stage);
   if (m.tool_result) {
@@ -2419,21 +2493,28 @@ function wsPlayNext() {
   }
 }
 
-$("btnStart").onclick = () => startCall();
-$("btnText").onclick = () => startCall({ textOnly: true });
-$("btnRandom").onclick = previewRandom;
-$("btnRec").onclick = toggleRec;
-$("btnEnd").onclick = endCall;
-$("btnEvents").onclick = refreshEvents;
-$("btnSend").onclick = () => {
+// 所有入口按钮统一走 addEventListener——之前一半 onclick、一半 addEventListener，
+// 同一个按钮两个 handler 都执行，顺序还依赖注册先后，改一处漏一处。
+$("btnStart").addEventListener("click", () => startCall());
+$("btnText").addEventListener("click", () => startCall({ textOnly: true }));
+$("btnRandom").addEventListener("click", previewRandom);
+$("btnRec").addEventListener("click", toggleRec);
+$("btnEnd").addEventListener("click", endCall);
+$("btnEvents").addEventListener("click", refreshEvents);
+$("btnSend").addEventListener("click", () => {
   const t = $("textInput").value.trim();
+  if (!t) return;                       // 空文本不发——「模拟不说话」有专门的按钮
   $("textInput").value = "";
-  // 允许空发送：等于模拟"用户没说话"，用来验证沉默处理（记 no_answer、不推进状态机）。
-  // 调试期很有用——真实电话里"没人应答"是常态，不能只在脚本里测。
   sendTurn({ text: t });
-};
-$("textInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btnSend").click(); });
+});
+// 模拟"用户没说话"是调试功能，不该绑在高频的发送/回车键上：误按一次就消耗
+// 一轮、还可能推进 no_answer 计数（11-11 评审）。单独一个按钮，意图写在字面上。
+$("btnSilence").addEventListener("click", () => sendTurn({ text: "" }));
+$("textInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && $("textInput").value.trim()) $("btnSend").click();
+});
 
+render();   // 首屏：按 idle 渲染一遍（暂停键隐藏、输入框禁用并写明原因）
 boot();
 refreshMetrics();
 
