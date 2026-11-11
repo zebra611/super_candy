@@ -3047,6 +3047,32 @@ def main():
           _dq_text == _ask_line and not _dq_applied,
           ["适配后=%r" % _dq_text])
 
+    # 11-11 线上（用户圈出来的那句）：「您这单没通过，是因为授权链路不完整，
+    # 缺了品牌方到一级经销商的逐级授权文件。您回一个字也行。」——词表（驳回/
+    # 材料/授权书）一个都没命中，模型说的是"没通过/授权文件"。判据从"句子
+    # 讲没讲事实"的词表，改成**后缀想干什么**：讨回应型讲完事实不许加，
+    # 推进型（kind=advance）讲完事实正是该问"怎么补"的地方。
+    _FACT_LINE = ("您这单没通过，是因为授权链路不完整，"
+                  "缺了品牌方到一级经销商的逐级授权文件。")
+    _pv = dialogue.new_session("verify-persona-advance")
+    _pv["persona_code"] = "quiet"
+    _adv, _adv_ok = _pm.adapt(_pv, _FACT_LINE, "OFFER")
+    check("话少的客户：讲完驳回原因，追问的是「怎么补」，不再是「回一个字也行」",
+          _adv.endswith("这一步您清楚怎么补吗？") and "回一个字" not in _adv,
+          ["适配后=%r" % _adv])
+    _pv2 = dialogue.new_session("verify-persona-advance-identity")
+    _pv2["persona_code"] = "quiet"
+    _adv2, _adv2_ok = _pm.adapt(_pv2, _FACT_LINE, "IDENTITY")
+    check("推进型后缀只在 NEED/OFFER/CONFIRM 挂（核身阶段不问「怎么补」）",
+          _adv2 == _FACT_LINE and not _adv2_ok,
+          ["适配后=%r" % _adv2])
+    _pv3 = dialogue.new_session("verify-persona-askkind-fact")
+    _pv3["persona_code"] = "impatient"
+    _adv3, _adv3_ok = _pm.adapt(_pv3, _FACT_LINE, "OFFER")
+    check("讨回应型后缀（急脾气）在讲事实的句子后面仍然不加（不回归）",
+          _adv3 == _FACT_LINE and not _adv3_ok,
+          ["适配后=%r" % _adv3])
+
     # ---- 真实通话挖掘出来的三处缺陷（11-09，证据来自 data/events.db） ----
     # 1) 核身前用户问「为什么驳回 / 要补什么材料」：不能答（会泄露别人申请信息），
     #    但必须说明为什么先核身份；旧实现拿「号码是预留联系方式」挡回去，
