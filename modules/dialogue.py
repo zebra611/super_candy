@@ -2943,10 +2943,12 @@ def _still_engaged(session, text, flags):
     # 旧词表把它当成质疑，转专员收线，整通电话一张工单都没有（L07 实测）。
     if flags.get("yes") or flags.get("no"):
         return ""
-    if flags.get("ask"):
-        return "talk"
-    if any(w in text for w in _ENGAGED_MARKS):
-        return "talk"
+    # 判据顺序：**先看是不是在报本单事实，再看是不是在提问**。
+    # 「澹台溪亭，记住了没？」带问号，旧顺序直接判成 talk，客服回
+    # 「这个我这边确认不到」——客户明明在报姓名（slot_history 里就有），
+    # 却被当成问了个答不上的知识题（11-11 线上 A15 第 7 轮）。
+    # 挪到后面不会放过真质疑：「你哪来的我号码」不含任何档案值，
+    # 走到下面仍是 talk。
     # 客户重申身份（"对，是我，你说"）：这是在推进核验，不是对确认问题的表态。
     # 旧判据把它计入含糊，隔着实质回合攒满两次就回写 unknown——客户明明
     # 还在积极配合（11-08 对抗集 A15 实测）。否定变体（"不是我"）必须先拦。
@@ -2965,6 +2967,10 @@ def _still_engaged(session, text, flags):
     # 含糊回写 unknown 工单——客户明明还在积极配合（11-08 A15 实测）。
     if re.search(r"\d{4}", text):
         return "fact"
+    if flags.get("ask"):
+        return "talk"
+    if any(w in text for w in _ENGAGED_MARKS):
+        return "talk"
     return ""
 
 
@@ -3049,10 +3055,20 @@ def _stage_confirm(session, text, flags):
     _yes_marks = [w for w in (cfg.get("confirm_yes_words") or []) if w and w in text]
 
     def _negated(mark):
-        # 只看确认词前面一小段：「没听明白」中间隔了字，旧的连续串匹配抓不到；
+        # 只查确认词**附近**：「没听明白」中间隔了字，旧的连续串匹配抓不到；
         # 但也不能扫全文，「不是，我清楚了」是先否认后肯定，扫全文会误伤。
         i = text.find(mark)
-        return i >= 0 and any(neg in text[max(0, i - 4):i] for neg in ("没", "不", "别"))
+        if i < 0:
+            return False
+        if any(neg in text[max(0, i - 4):i] for neg in ("没", "不", "别")):
+            return True
+        # 后置反问尾巴。11-11 线上 A15 第 7 轮：客户说
+        # 「澹台溪亭，记住了没？」是**让客服记住姓名**，而 pop 场景的
+        # confirm_yes_words 里有「记住了」，于是被当成"我清楚了"直接回写
+        # 同意并收线——客户一个字都没确认。只看前面 4 字抓不到后置否定，
+        # 这正是"没得到答案却说知道了"的镜像：客服没得到确认却当成确认。
+        tail = text[i + len(mark): i + len(mark) + 3]
+        return any(w in tail for w in ("没", "吗", "呢", "不", "？", "?"))
 
     if _yes_marks and not flags["no"] and not any(w in text for w in NO_CONTAINS) \
             and not any(_negated(w) for w in _yes_marks):

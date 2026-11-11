@@ -3249,8 +3249,8 @@ def main():
         [sys.executable, os.path.join(ROOT, "scripts", "test_train_replay.py")],
         cwd=ROOT, capture_output=True, text=True, timeout=300, env=_env_off)
     _last38 = ((_r38.stdout or "").strip().splitlines() or [""])[-1]
-    check("逐句复盘 13 条全过（单号/复读/障碍/打错人/含糊工单/半句/核身质疑）",
-          _r38.returncode == 0 and "13/13" in _last38,
+    check("逐句复盘 14 条全过（单号/复读/障碍/打错人/含糊工单/半句/核身质疑/反问确认）",
+          _r38.returncode == 0 and "14/14" in _last38,
           ["退出码 %d；末行：%s" % (_r38.returncode, _last38[:80])])
 
     print()

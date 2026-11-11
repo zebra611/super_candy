@@ -1,10 +1,10 @@
 {
- "active": "v29",
+ "active": "v30",
  "scene_file": "config/scenes/pop_reject.json",
  "sync_targets": [
   "config/scene.json"
  ],
- "baseline_json": "eval/reports/sim_baseline_v29.json",
+ "baseline_json": "eval/reports/sim_baseline_v30.json",
  "history": [
   {
    "version": "v1",
@@ -1496,6 +1496,30 @@
    "version": "v29",
    "parent": "v28",
    "created": "2026-11-11 14:39:28",
+   "status": "superseded",
+   "source": "rebase：线上场景内容变更，重定基线",
+   "candidate": null,
+   "metrics": {
+    "all_ok": 10,
+    "all_total": 10,
+    "train_ok": 7,
+    "train_total": 7,
+    "holdout_ok": 3,
+    "holdout_total": 3,
+    "agent_defect_sessions": 1,
+    "case_defect_sessions": 0,
+    "codes": {
+     "agent_no_progress": 1
+    },
+    "defect_total": 1
+   },
+   "scene_sha": "8a461312107e06fc",
+   "superseded_at": "2026-11-11 14:47:09"
+  },
+  {
+   "version": "v30",
+   "parent": "v29",
+   "created": "2026-11-11 14:47:09",
    "status": "active",
    "source": "rebase：线上场景内容变更，重定基线",
    "candidate": null,
