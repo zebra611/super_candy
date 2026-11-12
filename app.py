@@ -816,6 +816,11 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
     tc = agent_out.get("tool_call") or {}
     if tc.get("name") == "create_ticket" and not (tool_result or {}).get("ticket_id"):
         agent_out["reply_text"] = dialogue.fallback_text("reply_writeback")
+    # 清单没真发出去就别承诺"已经发到后台"，改成如实说明 + 热线兜底。
+    if tc.get("name") == "send_checklist" and (tool_result or {}).get("error"):
+        agent_out["reply_text"] = (
+            "清单这边暂时没同步成功，我记下来让专员回电时补发；"
+            "着急也可以拨打京东商家热线 4006180092。")
     # S3：模板层先行（零网络、默认路径逐字节不变）；只有显式开启
     # compliance_judge.provider=dashscope 且有密钥时，才会在模板层没拦住时
     # 多问一次模型，补「换个说法说同样的话」。任何异常都退回模板层结论。

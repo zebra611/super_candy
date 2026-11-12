@@ -93,6 +93,10 @@ def dispatch(tool_call):
             result.setdefault("truncated", notes)
         return result
 
+    if name == "send_checklist":
+        return ad.call("send_checklist", args.get("session_id", ""),
+                       args.get("application_id", ""), args.get("materials") or [])
+
     # 未知工具：不抛异常，返回结构化错误，让上层能兜底（赛题要求异常兜底）
     return {"error": ERROR_UNKNOWN_TOOL, "name": name, "_ms": 0.0}
 
@@ -291,6 +295,12 @@ def create_ticket(session_id, content, idempotency_key, version=1):
     if notes and isinstance(result, dict):
         result.setdefault("truncated", notes)
     return result
+
+
+def checklist_for_application(application_id):
+    """查某申请单的清单是否已发到后台（自检/看板用，返回 checklist_id 或空）。"""
+    ad = _adapter()
+    return (getattr(ad, "_checklist_by_app", {}) or {}).get(application_id)
 
 
 def ticket_for_session(session_id):

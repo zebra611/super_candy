@@ -3125,19 +3125,25 @@ def main():
           and not _n1.get("end_reason")
           and _np.get("no_name_call") is True,
           ["回复=%s" % _n1["reply_text"][:44]])
-    # ④ 语言不通：承认只能普通话（旧话术回「产品使用还是售后」，场景都错乱）
+    # ④ 语言互切（11-12 新需求，取代旧「只能讲普通话」口径）：
+    #    客户用英语提问 → 切英文问答；说 "i can't understand english" 或
+    #    改用中文 → 切回中文继续服务，不再把还在配合的人转专员收线。
+    #    旧断言守的是「别装听不清、别答产品使用还是售后」，这里继续守这两条。
     _lg = dialogue.new_session("verify-language-barrier")
     _lg["stage"] = "NEED"
     _l1 = dialogue.respond(_lg, "can you speak english?")
-    _l2 = dialogue.respond(_lg, "i can't understand CHinese")
-    check("客户说英文：承认只能普通话，不装听不清、不答「产品使用还是售后」",
-          _l1["intent"] == "language_barrier"
-          and "普通话" in _l1["reply_text"]
+    _l2 = dialogue.respond(_lg, "i can't understand english")
+    check("客户说英文：切英文问答，不装听不清、不答「产品使用还是售后」",
+          _l1["intent"] == "lang_en"
+          and "English" in _l1["reply_text"]
+          and "普通话" not in _l1["reply_text"]
           and "产品使用" not in _l1["reply_text"],
           ["一轮=%s" % _l1["reply_text"][:44]])
-    check("客户再说我听不懂中文：如实转专员收线（end=language_barrier）",
-          _l2.get("end_reason") == "language_barrier"
-          and "没办法用英文" in _l2["reply_text"],
+    check("客户说 i can't understand english：切回中文继续服务，不转专员收线",
+          _l2["intent"] == "lang_back"
+          and "改用中文" in _l2["reply_text"]
+          and _lg.get("lang") == "zh"
+          and not _l2.get("end_reason"),
           ["二轮=%s" % _l2["reply_text"][:44]])
     # ⑤ 英文报数整句换算；混着别的词不动（不误伤正常英文）
     from modules.agent_free import _strip_echo_open as _seo

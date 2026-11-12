@@ -150,6 +150,9 @@ class MockAdapter(BaseAdapter):
         # _TICKET_BY_SESSION 键 = 会话 ID，值 = 这通电话的工单号（改口更新同一张，不新开）
         self._tickets = {}
         self._ticket_by_session = {}
+        # 11-12：发到商家后台的材料清单，键 = (申请单号, 会话 ID)，幂等。
+        self._checklists = {}
+        self._checklist_by_app = {}
 
     # ---- 读 -----------------------------------------------------------------
     def query_customer(self, keyword):
@@ -340,6 +343,41 @@ class MockAdapter(BaseAdapter):
         return {"found": True, "items": rows, "count": len(rows), "_ms": _ms(t0)}
 
     # ---- 写 -----------------------------------------------------------------
+    def send_checklist(self, session_id, application_id, materials):
+        """把本单要补的材料清单写进商家后台（模拟）。
+
+        11-12 用户要求：不再问「要不要把清单发到后台」，直接发；客户后面
+        哪一步不清楚、或者忘了要补什么，直接翻后台清单，客服不整段复述。
+        幂等：同一申请单 + 同一通电话只发一次，重复调用 already_sent=True。
+        """
+        t0 = time.time()
+        aid = (application_id or "").strip()
+        sid = (session_id or "").strip()
+        if not aid or not sid:
+            from .base import ERROR_INVALID_ARG, ToolError
+            raise ToolError(ERROR_INVALID_ARG, "send_checklist 缺 application_id / session_id")
+        items = [str(x).strip() for x in (materials or []) if str(x).strip()]
+        if not items:
+            from .base import ERROR_INVALID_ARG, ToolError
+            raise ToolError(ERROR_INVALID_ARG, "send_checklist 缺 materials")
+        key = (aid, sid)
+        if key in self._checklists:
+            rec = self._checklists[key]
+            return {"ok": True, "found": True, "already_sent": True,
+                    "checklist_id": rec["checklist_id"], "application_id": aid,
+                    "materials": rec["materials"], "channel": rec["channel"],
+                    "_ms": _ms(t0)}
+        digest = hashlib.md5(("%s|%s" % (aid, sid)).encode("utf-8")).hexdigest()[:8].upper()
+        cid = "CL%s" % digest
+        rec = {"checklist_id": cid, "session_id": sid, "application_id": aid,
+               "materials": items, "channel": "merchant_backend",
+               "sent_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        self._checklists[key] = rec
+        self._checklist_by_app[aid] = cid
+        return {"ok": True, "found": True, "already_sent": False,
+                "checklist_id": cid, "application_id": aid, "materials": items,
+                "channel": rec["channel"], "sent_at": rec["sent_at"], "_ms": _ms(t0)}
+
     def create_ticket(self, session_id, content, idempotency_key, version=1):
         """登记工单 —— 这一步就是赛题要的"结构化结果回写"。
 
@@ -397,6 +435,8 @@ class MockAdapter(BaseAdapter):
 
     # ---- 测试钩子 -----------------------------------------------------------
     def reset(self):
-        """清空内存中的工单。仅自检脚本使用，业务代码不要调。"""
+        """清空内存中的工单与后台清单。仅自检脚本使用，业务代码不要调。"""
         self._tickets.clear()
         self._ticket_by_session.clear()
+        self._checklists.clear()
+        self._checklist_by_app.clear()

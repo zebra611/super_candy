@@ -25,7 +25,7 @@ import difflib
 import re
 
 import config_loader
-from modules import intent, kb, nlg, official_script, persona, policy, tools
+from modules import i18n, intent, kb, nlg, official_script, persona, policy, tools
 
 # ---------------------------------------------------------------------------
 # 意图关键词表
@@ -612,7 +612,8 @@ def _intent_name(flags):
 _FREEZE_INTENTS = frozenset((
     "help_steps", "help_escalate", "name_protest",
     "language_barrier", "hurry_short", "explain_detail", "hotline_close",
-    "scope_answer"))
+    "scope_answer", "checklist_sent", "materials_only", "what_auth",
+    "scam_reassure", "consent_checklist"))
 
 
 def _strip_user_echo(text, user_text):
@@ -1227,6 +1228,10 @@ def _do_writeback(session, consent, changed=False):
     content["need"] = session["slots"].get("need") or "未获取"
     content["consent"] = consent
     content["writeback_version"] = version
+    # 11-12：清单真发到后台了才写这两个字段（工具失败不写，绝不放假数据）。
+    if session["slots"].get("checklist_sent"):
+        content["checklist_sent"] = True
+        content["checklist_id"] = session["slots"].get("checklist_id") or ""
     # 商家理解度：CONFIRM 闭环成功（consent=True）时必须同步为 true——
     # 以前只有 consent 一个字段，赛题回写要求的 merchant_understood
     # 永远停在默认 unknown，业务侧拿到的"商家是否清楚整改要求"全是猜的。
@@ -1286,7 +1291,10 @@ def _do_writeback(session, consent, changed=False):
         intent = "changed"
     elif consent is True:
         key = "reply"
-        intent = "consent"
+        # 清单已发后台的收线句必须逐字播出：走 nlg 会被压成"后台能查到"，
+        # "忘了直接翻后台清单"这句就不见了（11-12 复现实测）。
+        intent = ("consent_checklist" if session["slots"].get("checklist_sent")
+                  else "consent")
     elif consent is False:
         key = "reply_declined"
         intent = "declined"
@@ -1295,6 +1303,8 @@ def _do_writeback(session, consent, changed=False):
         intent = "ambiguous_writeback"
 
     text = cfg.get(key) or cfg.get("reply", "已为您登记。")
+    if consent is True and not changed and session["slots"].get("checklist_sent"):
+        text = cfg.get("reply_checklist_done") or text
     return _reply(session, text, next_stage="DONE", tool_call=tool_call,
                   intent=intent, stage_label="WRITEBACK")
 
@@ -1342,6 +1352,10 @@ def _clarify(session, stage):
 
     pairs = CLARIFY_TEXTS.get(stage) or CLARIFY_TEXTS["NEED"]
     key, default = pairs[min(session["clarify_asks"], len(pairs)) - 1]
+    # 11-12 19:42：OFFER 里客户说「知道了 / 嗯」，不该再问"要不要把清单发到
+    # 后台"——直接发，并告诉他以后不清楚/忘了直接翻后台清单。
+    if stage == "OFFER" and session["slots"].get("application"):
+        return _checklist_reply(session, stage, session.get("last_flags") or {})
     return _reply(session, config_loader.fallback_text(key, default), intent="unclear")
 
 
@@ -1654,6 +1668,178 @@ def _scope_reply(session, stage, flags, kind="scope"):
     # 冻结：只要进改写层，材料清单 + 三步会被压成一句"您清楚了吗"，又变答非所问。
     return _reply(session, _fill_application(_soothe(tpl, flags), app),
                   intent="scope_answer")
+
+
+# ---------------------------------------------------------------------------
+# 11-12 19:42 / 19:46 两张长链：清单直接发后台 + 客户说清楚了就收线
+#
+# 实录：客户问「什么授权」「啥意思」，客服套「您想先问哪一步」；客户连说
+# 「清楚了清楚了」「知道了！！！」「没有了！」「清楚了！」，客服还在复述
+# 驳回原因、还在问「还有不明白的吗」，一通电话里同一段话念了四遍。
+# 根因：这些明确表态只在 CONFIRM 被当闭环，NEED/OFFER 里全被算成含糊；
+# 「清楚了」也从不触发"把清单落到后台"这个真实动作。
+# ---------------------------------------------------------------------------
+_DONE_ACK_MARKS = ("清楚了", "知道了", "明白了", "没有了", "不用了",
+                   "不用再", "别说了", "别吵", "就这样", "行了", "足够了")
+_DONE_ACK_NEG = ("不清楚", "没清楚", "不知道", "没明白", "不明白", "没懂", "还有")
+_SCAM_MARKS = ("诈骗", "骗子", "骗人", "真假", "真的假的", "是不是官方", "是不是京东")
+_WHAT_AUTH_MARKS = ("什么授权", "啥授权", "授权是什么", "什么叫授权", "授权指的")
+_CHECKLIST_SENT_FALLBACK = ("好，清单我已经发到您商家后台了：{materials}。"
+                            "后面哪一步不清楚、或者忘了要补什么，直接翻后台清单就行。")
+_SCAM_FALLBACK = ("理解您谨慎。我们是京东官方资质审核，不会要您转账或报密码，"
+                  "可以打京东商家热线 4006180092 核实。")
+_AUTH_FALLBACK = ("这里说的授权，是品牌方到经销商、再到您这边的逐级授权文件。"
+                  "您这单的问题是{reason}，要补{materials}。清单已经发到您后台了。")
+_MATS_FALLBACK = ("您这单要补的就是{materials}，在商家后台资质审核页重新提交。"
+                  "清单已经发到后台了，忘了随时翻。")
+
+
+def _facts_told(session):
+    return bool(session.get("facts_spoken") or session.get("official_line_spoken"))
+
+
+def _is_done_ack(session, text, flags):
+    """客户**不耐烦地/明确地**说完了（清楚了清楚了 / 知道了！！！ / 没有了！）。
+
+    平静的「好的，清楚了」「行，清楚了」不在这里收线：赛题四段式④要靠它们
+    从 NEED 推进 OFFER、再进 CONFIRM 才算商家理解确认。逐句复盘里两条用例
+    正是这个形状，第一版全收走会直接把闭环链打断（11-12 实测 29/29 → 27/29）。
+    """
+    if not _facts_told(session) or not session["slots"].get("application"):
+        return False
+    raw = text or ""
+    t = re.sub(r"[\s，,。.!！?？、…～~0-9]", "", raw)
+    if not t or len(t) > 12 or any(w in t for w in _DONE_ACK_NEG):
+        return False
+    if not any(w in t for w in _DONE_ACK_MARKS):
+        return False
+    _terminal = ("没有了", "不用了", "不用再", "别说了", "别吵", "就这样", "足够了")
+    if any(w in t for w in _terminal):
+        return True
+    if "！" in raw or "!" in raw:
+        return True
+    return any(t.count(w) >= 2 for w in _DONE_ACK_MARKS)
+
+
+def _is_scam_worry(text):
+    return any(w in (text or "") for w in _SCAM_MARKS)
+
+
+def _is_what_auth(text):
+    t = re.sub(r"[\s，,。.!！?？、…～~]", "", text or "")
+    return bool(t) and len(t) <= 16 and any(w in t for w in _WHAT_AUTH_MARKS)
+
+
+def _is_material_choice(text):
+    t = re.sub(r"[\s，,。.!！?？、…～~]", "", text or "")
+    return bool(t) and len(t) <= 8 and "材料" in t and not any(
+        w in t for w in ("什么", "哪些", "怎么", "为啥", "原因", "多少", "费用"))
+
+
+def _wants_checklist(session, text, flags):
+    """上一轮刚问过「要不要把清单发到后台」，这一轮客户说「需要 / 要」。"""
+    prev = session.get("last_reply_text") or ""
+    if not any(w in prev for w in ("清单发到后台", "需要我把清单", "把清单发到")):
+        return False
+    t = re.sub(r"[\s，,。.!！?？、…～~]", "", text or "")
+    if (not t or len(t) > 10 or "不需要" in t or "不用" in t
+            or flags.get("no") or flags.get("hangup")):
+        return False
+    return any(w in t for w in ("需要", "要", "发吧", "好", "行", "嗯", "对"))
+
+
+def _checklist_tc(session):
+    app = session["slots"].get("application") or {}
+    return {"name": "send_checklist", "args": {
+        "session_id": session.get("session_id") or "",
+        "application_id": str(app.get("application_id") or ""),
+        "materials": [str(x) for x in (app.get("required_materials") or [])],
+    }}
+
+
+def _ensure_checklist(session):
+    """真的把清单写进后台（收线轮没有独立的工具事件，这里直接执行）。
+
+    幂等：重复调用返回 already_sent=True，不会在后台留下两条清单。
+    只按工具的真实结果记账，工具失败绝不置 checklist_sent=True。
+    """
+    if session["slots"].get("checklist_sent"):
+        return
+    res = tools.dispatch(_checklist_tc(session)) or {}
+    session["slots"]["checklist_sent"] = bool(res.get("ok"))
+    session["slots"]["checklist_id"] = res.get("checklist_id") or ""
+    session["slots"]["checklist_error"] = res.get("error") or ""
+
+
+def _checklist_reply(session, stage, flags):
+    _ensure_checklist(session)
+    cfg = config_loader.stage_config(stage)
+    tpl = cfg.get("reply_checklist_sent") or _CHECKLIST_SENT_FALLBACK
+    app = session["slots"].get("application") or {}
+    # tool_call 仍交给 app.py 统一写事件（幂等，第二次返回 already_sent=True）；
+    # 话术依据是 _ensure_checklist 的真实执行结果，不是"宣称已发"。
+    return _reply(session, _fill_application(_soothe(tpl, flags), app),
+                  intent="checklist_sent", tool_call=_checklist_tc(session))
+
+
+def _short_affirm(text):
+    t = re.sub(r"[\s，,。.!！?？、…～~]", "", text or "")
+    return bool(t) and len(t) <= 8 and any(
+        w in t for w in ("需要", "要", "好", "行", "嗯", "对",
+                        "知道了", "清楚了", "明白")) and not any(
+        w in t for w in ("不", "没", "别"))
+
+
+def _checklist_again_reply(session, stage, flags):
+    n = int(session.get("checklist_ack_n", 0)) + 1
+    session["checklist_ack_n"] = n
+    if n == 1:
+        tpl = (config_loader.stage_config(stage).get("reply_checklist_again")
+               or "清单刚才已经发到您商家后台了，直接翻后台清单就行，不用再等我复述。")
+    else:
+        # 客户连着两轮只回「需要 / 知道了」，不把同一句短确认念第二遍。
+        tpl = "嗯，清单就在您后台，忘了随时翻；哪一步卡住直接说，我单讲这一步。"
+    return _reply(session, _fill_application(tpl, session["slots"].get("application")),
+                  intent="checklist_sent")
+
+
+def _early_answer(session, text, flags):
+    """所有阶段分支之前的统一早段入口。返回回复或 None（交回原阶段逻辑）。"""
+    stage = session["stage"]
+    if stage not in ("NEED", "OFFER", "CONFIRM"):
+        return None
+    app = session["slots"].get("application")
+    if not app:
+        return None
+    cfg = config_loader.stage_config(stage)
+
+    def say(key, fallback, intent):
+        return _reply(session, _fill_application(cfg.get(key) or fallback, app),
+                      intent=intent)
+
+    if _is_scam_worry(text):
+        return say("reply_scam_reassure", _SCAM_FALLBACK, "scam_reassure")
+    if _is_what_auth(text):
+        _ensure_checklist(session)
+        return say("reply_what_auth", _AUTH_FALLBACK, "what_auth")
+    if _is_material_choice(text):
+        _ensure_checklist(session)
+        return say("reply_materials_only", _MATS_FALLBACK, "materials_only")
+    if _is_done_ack(session, text, flags):
+        _ensure_checklist(session)
+        return _do_writeback(session, True)
+    # 清单已经发过，客户又回「知道了 / 需要 / 好」：给一句短确认，
+    # 不复述驳回原因、不再问要不要发（11-12 19:42/19:46 两张截图）。
+    # 前提是本通清单真发过：没发过的会话仍按原有阶段推进，不抢四段式④。
+    if session["slots"].get("checklist_sent") and _short_affirm(text):
+        return _checklist_again_reply(session, stage, flags)
+    if _wants_checklist(session, text, flags):
+        return _checklist_reply(session, stage, flags)
+    _scope = _is_scope_question(session, text, flags)
+    if _scope and (_scope == "doubt" or session.get("official_line_spoken")):
+        _reset_ambiguity(session, True)
+        return _scope_reply(session, stage, flags, _scope)
+    return None
 
 
 def _re_explain(session, stage, text, flags):
@@ -4357,6 +4543,26 @@ def opening_line(target=None):
     return _fill_outbound(raw, target)
 
 
+def _localize(session, out):
+    """英文模式下把状态机算出的中文回复换成英文话术。
+
+    只换**播出文本**，不动 stage / intent / tool_call：业务流程、回写字段、
+    事件统计全部照旧，英文客户走的是同一套合规流程。
+    """
+    if session.get("lang") != "en" or not isinstance(out, dict):
+        return out
+    tpl = (i18n.EN_REPLIES.get(out.get("intent") or "")
+           or i18n.EN_BY_STAGE.get(out.get("stage") or "")
+           or i18n.EN_FALLBACK)
+    text = _fill_outbound(tpl, session.get("outbound_target"))
+    text = _fill_application(text, session["slots"].get("application"))
+    if "{" in text:                      # 占位没填干净就别播出花括号
+        text = i18n.EN_FALLBACK
+    out["reply_text"] = text
+    out["lang"] = "en"
+    return out
+
+
 def respond(session, user_text):
     """核心入口：吃一句用户话，吐一句回复（可能附带一次工具调用）。
 
@@ -4375,6 +4581,30 @@ def respond(session, user_text):
     # 英文报数先换算（"four four two seven" → "4427"），再进意图识别与核身
     # 匹配——数字守卫看见的就已经是数字了。
     text = _normalize_spoken_digits(text)
+
+    # ── 会话语言（11-12：客户说 yes / ok 不该毫无反应） ──────────────
+    # 英文短句先归一成中文等价句喂给状态机，最后 _localize 再换成英文播出；
+    # 这样意图、阶段、回写全走同一套中文逻辑，不需要第二套状态机。
+    _prev_lang = session.get("lang") or "zh"
+    _lang = i18n.detect(text, _prev_lang)
+    session["lang"] = _lang
+    # 不管当前是哪种语言，明确说 "i can't understand english" 一律切回中文；
+    # 只判 _prev_lang == "en" 会让中文模式下说这句的人反而撞上"只能讲普通话"。
+    if i18n.wants_chinese(text):
+        _out = _reply(session, i18n.ZH_BACK, intent="lang_back")
+        _remember(session, text, _out)
+        return _out
+    if i18n.asks_english(text):
+        _out = _reply(session, _fill_outbound(i18n.EN_REPLIES["lang_en"],
+                                              session.get("outbound_target")),
+                      intent="lang_en")
+        _remember(session, text, _localize(session, _out))
+        return _localize(session, _out)
+    if _lang == "en":
+        _zh = i18n.to_zh(text)
+        if _zh:
+            text = _zh
+
     session["turn"] += 1
     session["slots"]["last_user_text"] = text
     # 轮内标志先清：上一轮「客户刚给过信息」的状态不能带进这一轮。
@@ -4390,8 +4620,8 @@ def respond(session, user_text):
         # 事件里出现"用户没说话但 conf=0.95"这种没法解释的数。
         session["last_intent_conf"] = 0.0
         out = _handle_empty(session)
-        _remember(session, "", out)
-        return out
+        _remember(session, "", _localize(session, out))
+        return _localize(session, out)
     session["empty_count"] = 0
 
     # 意图识别走 modules.intent（T5）：默认 provider=template，直接返回这里的
@@ -4423,7 +4653,7 @@ def respond(session, user_text):
     #     客户抗议的是称呼方式，不是业务，挂断等于把还在配合的人赶走。
     # 两者都只在通话中的阶段生效（WRITEBACK/DONE 已经在收尾了，不再横生枝节）。
     _live_stage = session["stage"] not in ("WRITEBACK", "DONE")
-    if _live_stage and _is_foreign_lang(text):
+    if _live_stage and session.get("lang") != "en" and _is_foreign_lang(text):
         out = _language_reply(session, session["stage"])
     elif _live_stage and _is_name_protest(text):
         out = _name_protest_reply(session, session["stage"])
@@ -4446,20 +4676,16 @@ def respond(session, user_text):
         # 记忆回溯放在挂断之后、阶段处理之前：它是"回答问题"，
         # 不该改变流程；也不该被某个阶段的处理器截走当成新诉求。
         out = _recall(session, text) if _is_recall_question(text) else None
-        if out is None and session["stage"] in ("NEED", "OFFER", "CONFIRM"):
-            # 11-12 线上实录：客户问「补齐到哪」被跳去讨回应，「还有疑问」
-            # 「你到底啥意思」一路被算含糊，「同意不需要啥」更被 NEED 的
-            # flags["no"] 早段直接记成 declined 收线——全程没一句在回答他。
-            # 所以这道拦截必须放在**所有阶段分支之前**：追问范围 / 表达没听懂
-            # 不是没表态，先正面答本单事实，不讨回应、不推进、不记结论。
-            _scope = _is_scope_question(session, text, flags)
-            if _scope and (_scope == "doubt" or session.get("official_line_spoken")):
-                _reset_ambiguity(session, True)
-                out = _scope_reply(session, session["stage"], flags, _scope)
+        # 11-12：追问范围 / 质疑 / 明确说清楚了 / 要清单，都必须在**所有阶段
+        # 分支之前**处理。NEED 最前面的 flags["no"] 会先把质疑收成 declined，
+        # CONFIRM 的含糊梯子会把「清楚了」再问一遍——放阶段里都拦不住。
+        if out is None:
+            out = _early_answer(session, text, flags)
         if out is None:
             handler = _HANDLERS.get(session["stage"], _stage_done)
             out = handler(session, text, flags)
 
+    out = _localize(session, out)
     _remember(session, text, out)
     return out
 

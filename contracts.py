@@ -116,6 +116,14 @@ TOOL_SCHEMAS = {
         "returns": {"found": "bool", "application": "dict|null"},
         "idempotent": True,
     },
+    "send_checklist": {
+        "desc": "把本单要补的材料清单直接发到商家后台",
+        "params": {"session_id": "str", "application_id": "str", "materials": "list"},
+        "returns": {"ok": "bool", "checklist_id": "str", "already_sent": "bool",
+                    "materials": "list", "channel": "str"},
+        # 同一申请单 + 同一通电话只发一次；重复调用返回 already_sent=True。
+        "idempotent": True,
+    },
     "create_ticket": {
         "desc": "登记工单，完成结构化回写",
         "params": {

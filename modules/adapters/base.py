@@ -44,6 +44,7 @@ TOOL_METHODS = {
     "query_order": "query_order",
     "query_application": "query_application",  # C5：POP 资质申请单定位
     "create_ticket": "create_ticket",
+    "send_checklist": "send_checklist",   # 11-12：清单直接发商家后台，不再问要不要
 }
 
 #: 只读方法：出错/超时时也要返回 `found=False`，让编排层走"查不到"分支，
