@@ -1459,13 +1459,33 @@ async function startCall(opts) {
 
   // 服务没起来时这里会抛——不接住的话，点「开始通话」页面毫无反应，
   // 只有控制台红字（11-11 评审发现）。
-  let d;
-  try {
-    const r = await fetch("/api/call/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    d = await r.json();
-  } catch (e) {
+  // 读响应体再自己 parse：网关出错时返回的是纯文本（"socket hang up"）或 HTML，
+  // 直接 r.json() 会抛 `Unexpected token 's'`，把真正的问题盖掉。
+  // 11-12 线上就是被这句话挡住的：真实原因是服务端事件库损坏返回 500。
+  let d = null;
+  for (let attempt = 0; attempt < 2 && !d; attempt++) {
+    try {
+      const r = await fetch("/api/call/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const raw = await r.text();
+      try { d = JSON.parse(raw); }
+      catch (e) {
+        setUiState("idle");
+        log("系统", "服务返回的不是 JSON（HTTP " + r.status + "）：" + String(raw || "").slice(0, 120));
+        return;
+      }
+      if (!r.ok && !d.error) { d = { error: "HTTP_" + r.status, detail: JSON.stringify(d).slice(0, 120) }; }
+    } catch (e) {
+      if (attempt === 1) {
+        setUiState("idle");
+        log("系统", "服务没连上（" + (e && e.message ? e.message : e) + "）。确认后端已启动再点一次。");
+        return;
+      }
+      await new Promise(function (res) { setTimeout(res, 400); });
+    }
+  }
+  if (d && d.error) {
     setUiState("idle");
-    log("系统", "服务没连上（" + (e && e.message ? e.message : e) + "）。确认后端已启动再点一次。");
+    log("系统", "开单失败：" + d.error + (d.detail ? "（" + d.detail + "）" : ""));
     return;
   }
   S.sessionId = d.session_id;

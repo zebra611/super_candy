@@ -33,6 +33,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1331,6 +1332,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        # 服务端自报耗时：和 curl 的总时间一对比，就能区分"慢在我们这儿"
+        # 还是"慢在网关/网络"。11-12 线上排查 45 秒开单就是靠这个分的。
+        try:
+            self.send_header("X-Server-Ms",
+                             str(int((time.perf_counter() - self._t0) * 1000)))
+        except Exception:
+            pass
         self.end_headers()
         self.wfile.write(body)
 
@@ -1473,6 +1481,32 @@ class Handler(BaseHTTPRequestHandler):
     # ---- 路由 ----
 
     def do_GET(self):
+        self._guard(self._do_GET)
+
+    def do_POST(self):
+        self._guard(self._do_POST)
+
+    def _guard(self, fn):
+        """任何未捕获异常都要变成一条 JSON 错误，绝不把连接掐断。
+
+        11-12 线上事故：事件库损坏 → `/api/call/start` 抛 sqlite3.DatabaseError
+        → 连接被直接关闭 → 网关只回一句纯文本 "socket hang up"
+        → 前端 `r.json()` 报 `Unexpected token 's'`，用户看到"服务没连上"。
+        真正的异常名和原因一个字都没传出来，只能靠线上加临时接口才查到。
+        所以这一层必须有：出错可以，但必须"说清楚是什么错"。
+        """
+        try:
+            fn()
+        except Exception as exc:
+            traceback.print_exc()
+            try:
+                self._send_json({"error": "SERVER_ERROR",
+                                 "detail": "%s: %s" % (type(exc).__name__,
+                                                       str(exc)[:200])}, 500)
+            except Exception:
+                pass
+
+    def _do_GET(self):
         self._t0 = time.perf_counter()
         parsed = urlparse(self.path)
         path = parsed.path
@@ -1640,7 +1674,7 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send_json({"error": "NOT_FOUND", "path": path}, 404)
 
-    def do_POST(self):
+    def _do_POST(self):
         self._t0 = time.perf_counter()
         path = urlparse(self.path).path
 

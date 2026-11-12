@@ -31,6 +31,7 @@
 import json
 import os
 import sqlite3
+import sys
 import threading
 import time
 
@@ -71,6 +72,97 @@ CREATE INDEX IF NOT EXISTS idx_events_session_turn ON events(session_id, turn_id
 # 线程局部连接表：thread_id -> {db_path: sqlite3.Connection}
 _local = threading.local()
 
+#: 损坏库的隔离次数，只用于日志（同一进程不重复搬同一个文件）
+_QUARANTINED = set()
+#: 已经警告过的库路径，避免每次写入都刷屏
+_WARNED = set()
+
+_MALFORMED_MARKS = ("malformed", "not a database", "encrypted", "file is not a database")
+
+#: 熔断窗口（秒）：写失败后这段时间内直接跳过事件写入。
+#: 库被别的连接长时间占着时，每个请求都去试一次等于每个请求都慢 0.3 秒；
+#: 事件可以晚点补，通话不能等。
+_DEGRADE_SEC = 30.0
+_degraded_until = 0.0
+
+
+def _is_malformed(exc):
+    why = str(exc).lower()
+    return any(m in why for m in _MALFORMED_MARKS)
+
+
+def _quarantine(path):
+    """把损坏的库挪到一边（带时间戳），别让一个坏文件堵死整个通话。
+
+    11-12 线上事故：容器被硬杀在写事务中间，`data/events.db` 变成
+    `database disk image is malformed`。开单第一件事就是写 call_started 事件，
+    写不进去直接抛异常，连接被掐断，网关只回一句 "socket hang up"——
+    用户看到"服务没连上"，我们这边一行有用信息都没有。
+
+    不直接删：库里是通话事件，出问题时要能拿回来分析；磁盘紧张不是删证据的理由。
+    挪不动（只读介质）就尝试删除，实在不行也返回空串，让上层继续往下走。
+    """
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    moved = []
+    for suffix in ("", "-wal", "-shm"):
+        src = path + suffix
+        if not os.path.exists(src):
+            continue
+        dst = "%s.corrupt-%s%s" % (path, stamp, suffix)
+        try:
+            os.replace(src, dst)
+            moved.append(os.path.basename(dst))
+            continue
+        except OSError:
+            pass
+        try:
+            os.remove(src)
+            moved.append("removed:" + os.path.basename(src))
+        except OSError:
+            pass
+    return ", ".join(moved)
+
+
+def _warn(msg):
+    key = msg[:120]
+    if key in _WARNED:
+        return
+    _WARNED.add(key)
+    try:
+        sys.stderr.write("[events] %s\n" % msg)
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def _open(path):
+    """建连接并做一次真查询自检。
+
+    为什么要在 connect 之后特意跑一句 `SELECT count(*) FROM sqlite_master`：
+    sqlite3.connect() 是惰性的，文件损坏时它照样返回连接对象，
+    直到第一次真正读页才抛 `database disk image is malformed`。
+    不自检的话，坏库会以"连接正常"的姿态被缓存下来，每个请求轮流炸一次。
+    """
+    # 11-12 线上第二起事故：每个 HTTP 请求一个新线程 → 每次都要新开连接，
+    # 而旧代码每条新连接都跑一次 `PRAGMA journal_mode=WAL`（切日志模式要拿
+    # 排他锁），遇到另一个连接还在写就按 15 秒 busy 上限干等。开单里 3 次
+    # 事件写入 = 3 × 15 秒 = **45 秒**，请求超时被网关掐断。
+    # 现在：WAL 只在 init_db 里设一次（幂等、进程启动时没人抢锁），
+    # 每请求连接只做毫秒级等待——事件是遥测，绝不许拖住通话。
+    conn = sqlite3.connect(path, timeout=0.3)
+    try:
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=300")
+        conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+    except sqlite3.DatabaseError:
+        # PRAGMA 在老库/只读介质上可能失败，那不是损坏，不能因为这句把连接关了
+        try:
+            conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        except sqlite3.DatabaseError:
+            conn.close()
+            raise
+    return conn
+
 
 def _connect():
     """取当前线程的库连接，没有就建一个并缓存。
@@ -95,18 +187,19 @@ def _connect():
     path = DB_PATH
     conn = conns.get(path)
     if conn is None:
-        # timeout 是等锁的上限：WAL 下写写仍会短暂互斥，等一会儿比直接报
-        # "database is locked" 友好；15 秒足够撑过看板的一次聚合查询。
-        conn = sqlite3.connect(path, timeout=15.0)
         try:
-            # WAL：读写不互斥（看板读的时候通话照常写）
-            conn.execute("PRAGMA journal_mode=WAL")
-            # NORMAL：崩溃最多丢最后一个事务，换掉每次提交的 fsync
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=15000")
-        except sqlite3.DatabaseError:
-            # 老库/只读介质上设置 PRAGMA 可能失败，不该因此让写入挂掉
-            pass
+            conn = _open(path)
+        except sqlite3.DatabaseError as exc:
+            if not _is_malformed(exc):
+                raise
+            # 坏库：隔离 + 重建，然后重新连接。只在第一次付出这个代价。
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            moved = _quarantine(path)
+            _warn("事件库损坏已隔离（%s）：%s；已重建空库"
+                  % (moved or "未搬动", str(exc)[:120]))
+            conn = _open(path)
+            conn.executescript(_SCHEMA)
+            conn.commit()
         conns[path] = conn
     return conn
 
@@ -129,11 +222,23 @@ def close_connections():
 
 
 def init_db():
-    """建目录、建表。进程启动时调用一次，重复调用无副作用。"""
+    """建目录、建表。进程启动时调用一次，重复调用无副作用。
+
+    事件库只是遥测，**不允许**因为它坏掉就让进程起不来：
+    起不来的话连页面都打不开，比丢几条事件严重得多。
+    """
     os.makedirs(DATA_DIR, exist_ok=True)
-    conn = _connect()
-    conn.executescript(_SCHEMA)
-    conn.commit()
+    try:
+        conn = _connect()
+        # 只在这里切 WAL：进程启动时没有并发写者，拿锁不排队。
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.DatabaseError:
+            pass
+        conn.executescript(_SCHEMA)
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        _warn("事件库初始化失败，本次进程内禁用事件写入：%s" % (str(exc)[:160],))
 
 
 
@@ -168,22 +273,84 @@ def write_event(session_id, event_type, payload=None, turn_id=0, latency_ms=0.0)
             "要新增事件请先改契约，不要在调用处临时造名字。"
             % (event_type, len(EVENT_TYPES)))
 
-    conn = _connect()
-    cur = conn.execute(
-        "INSERT INTO events (session_id, turn_id, ts, type, payload, latency_ms, version)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (
-            session_id,
-            turn_id,
-            now_ms(),
-            event_type,
-            json.dumps(payload or {}, ensure_ascii=False),
-            float(latency_ms),
-            EVENT_VERSION,
-        ),
+    if _degraded():
+        return 0
+    try:
+        return _insert_event(session_id, event_type, payload, turn_id, latency_ms)
+    except sqlite3.DatabaseError as exc:
+        _trip_writer()
+        # 坏库已经隔离过一次还写不进去，就彻底放弃这段遥测：
+        # 事件链缺一条可以重建，电话打不出去才是事故。
+        _warn("事件写入失败（%s），本条已丢弃：%s" % (type(exc).__name__, str(exc)[:120]))
+        return 0
+
+
+def _ensure_schema(conn):
+    try:
+        conn.executescript(_SCHEMA)
+        conn.commit()
+    except sqlite3.DatabaseError:
+        pass
+
+
+def _degraded():
+    return time.time() < _degraded_until
+
+
+def _trip_writer():
+    global _degraded_until
+    _degraded_until = time.time() + _DEGRADE_SEC
+
+
+def reset_degrade():
+    """清掉熔断窗口（测试用；正常运行不用管它）。"""
+    global _degraded_until
+    _degraded_until = 0.0
+
+
+def write_event_now(session_id, event_type, payload=None, turn_id=0, latency_ms=0.0):
+    """同步写入（脚本/测试用）：失败就抛，不吞异常。
+
+    线上请求路径用 `write_event`（带熔断、吞异常）；这里给需要"真写进去了
+    才算过"的地方用，比如回归测试与离线补录。
+    """
+    if event_type not in EVENT_TYPES:
+        raise ValueError("未登记的事件类型：%r" % (event_type,))
+    return _insert_event(session_id, event_type, payload, turn_id, latency_ms)
+
+
+def _insert_event(session_id, event_type, payload, turn_id, latency_ms):
+    values = (
+        session_id,
+        turn_id,
+        now_ms(),
+        event_type,
+        json.dumps(payload or {}, ensure_ascii=False),
+        float(latency_ms),
+        EVENT_VERSION,
     )
-    conn.commit()
-    return cur.lastrowid
+    stmt = ("INSERT INTO events (session_id, turn_id, ts, type, payload, latency_ms, version)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)")
+    try:
+        conn = _connect()
+        cur = conn.execute(stmt, values)
+        conn.commit()
+        return cur.lastrowid
+    except sqlite3.DatabaseError as exc:
+        if not _is_malformed(exc):
+            raise
+        # 走到这里说明库是在运行中坏掉的（启动探针只读第一页，probe 不一定抓得住）：
+        # 关掉缓存连接 → 隔离坏文件 → 新建空库 → 重试一次。
+        # 11-12 线上第二起就是这样：probe 通过了，INSERT 才炸，结果一直没触发隔离。
+        close_connections()
+        moved = _quarantine(DB_PATH)
+        _warn("运行中事件库损坏（%s），已隔离重建后重试：%s"
+              % (moved or "未搬动", str(exc)[:120]))
+        conn = _connect()
+        _ensure_schema(conn)
+        cur = conn.execute(stmt, values)
+        conn.commit()
+        return cur.lastrowid
 
 
 def list_events(session_id):

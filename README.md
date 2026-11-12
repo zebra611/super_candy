@@ -103,6 +103,27 @@ L2 基线 v40 → **v41**（10 通结果逐字未变，只对齐哈希）。
 本地复跑还看到一个别的问题——客户问"要补什么材料"，骨架只回"请补齐后重新提交"，
 三样材料的名字一个没念。
 
+**2026-11-12（21:32）· 线上「服务没连上」事故：坏掉的事件库 + 45 秒锁等待**：
+
+点「文字对话」提示 `服务没连上（Unexpected token 's', "socket hang up" ...）`。
+真因两层：**部署包把运行时 `data/events.db` 一起传上去**（半写状态）→ 容器里库
+`database disk image is malformed` → 开单第一条事件写不进去、连接被掐断；
+库坏了之后每请求连接仍跑 `PRAGMA journal_mode=WAL` 抢锁，3 次写入 × 15 秒
+＝ **45 秒**，网关等不及就断，前端只拿到一句纯文本。
+
+- 新增 `scripts/prep_deploy.py`：部署前 checkpoint 并把 `data/events.db*` 移进
+  `data/archive/`，运行时库不再进部署包（根因）
+- 事件库自愈：真查询探测 + malformed 隔离成 `*.corrupt-<时间戳>` 并重建，
+  运行中损坏同样处理；写入永不抛异常（另给 `write_event_now` 供测试）
+- 每请求连接 `timeout=0.3` / `busy_timeout=300`，WAL 只在启动设一次；
+  写失败后 30 秒熔断——遥测不许挡业务
+- `Handler._guard()` 兜住 `do_GET/do_POST`：未捕获异常回 JSON 500 带异常名，
+  不再只是掐断连接；所有 JSON 响应带 `X-Server-Ms` 便于分清服务端/网关
+- 前端先 `r.text()` 再 parse，非 JSON 显示 `HTTP xxx` + 原文，网络错误重试一次
+- 线上实测：开单 45.5s → **0.47–0.56s**；事件写入 27ms
+- 新增 `scripts/test_events_recovery.py` 5 条；`verify` **269/269**
+详见 [docs/53](docs/53_线上socket-hang-up事故复盘.md)。
+
 **2026-11-12（深夜）· 英文只留品牌名 / 收线必给热线 / 纯文字首字延时**：
 
 截图那句「Your 荃汀品牌、运动户外类目 application was not approved because 授权方联系不上…」
