@@ -392,32 +392,28 @@ def _extract_text(payload):
     return ""
 
 
-def _split_for_tts(text, single_max=16, head_max=12, seg_max=48):
+def _split_for_tts(text, single_max=16, head_max=12, seg_max=48, max_segs=12):
     """把回复切段，让第一段尽量短、且**每一段都在云端超时预算内**。
 
     为什么要切（实测数据）：
         合成耗时随字数近似线性——3 字 344ms、14 字 694ms、24 字 1056ms、
-        30 字 1684ms。用户抱怨"最后一句特别慢"，那句恰好是 30 字。
-        整句合成意味着"第一个字要等最后一个字念完"。
-
-        切开之后第一段只有 3–5 字，约 300–400ms 就能出声，
-        用户不再需要等整句话念完才听到第一个字。
+        30 字 1684ms。整句合成意味着"第一个字要等最后一个字念完"。
 
     切在哪：
-        优先在逗号/句号后切，且第一段不少于 3 字（"好，"这种一字段没意义，
-        切出来反而把一句话拆得更碎）。真实客服说话本来就在这些地方停顿，
-        所以分段后的节奏不会显得生硬。
+        优先在逗号/句号后切；**英文按词边界（空格）切**，不能把 "application"
+        切成 "applica|tion"——中文没有空格，标点就是唯一可切点，英文则必须
+        先找空格。第一段不少于 3 字（"好，"这种一字段没意义）。
 
-    段数：短话术仍只切一刀，超长话术才继续切
-        售后演示话术 ≤30 字时只切两段，因为接口按请求数限流（QPS）：
-        切 3 段一轮要 3 个请求，并发直接 429；就算串行，前端播完首段
-        还得干等后续合成，中间有空档。
-        但 C7 官方话术实测把这个前提打破了——kb_pop 里最长 160 字
-        （KB-POP-Q10），一刀切完尾段仍有 150 字，云端 `timeout_sec=4`
-        两次重试全部超时，整句回落成浏览器机械音（11-06 实测 8.8s）。
-        所以尾段超过 `seg_max` 时按标点继续切：请求数变多，但每段都在
-        超时预算内，且 app 层用 `wait_first_only=True` 只等首段，
-        首字延迟不受影响。回落成机械音比多两个串行请求难看得多。
+    段数与上限（11-12 20:37 实测后改）：
+        英文长句 415 字被切成 `[229, 48, 4, 48, 44, 42]`——**首段 229 字**，
+        因为前 229 字里一个标点都没有（英文逗号在 229 字之后），而旧逻辑
+        "找不到符合 head_max 的标点就取第一个标点"直接把它当首段：
+        首字 3507ms，整轮 8.5 秒。两个毛病一起修：
+          ① 首段找不到近处的标点时，拉丁文回退到最近空格，仍找不到才硬切；
+          ② 尾段留下 `<4` 字的碎段（实测出现过一个只有 4 字的请求）
+             合并回上一段，白扔一次请求；
+          ③ 段数上限 `max_segs`：切太碎会被接口按请求数限流（429），
+             超限时把最短的相邻两段合并到均衡，而不是任由它切出十几段。
 
     拼接无损：`"".join(parts) == text`，verify.py 有断言盯着这一条。
     """
@@ -426,38 +422,50 @@ def _split_for_tts(text, single_max=16, head_max=12, seg_max=48):
         return [text]
 
     punct = "，。！？；,.!?;"
-    cuts = [i for i, ch in enumerate(text) if ch in punct]
-    if not cuts:
-        mid = len(text) // 2          # 没有任何标点，只能硬切
-        return [text[:mid], text[mid:]]
+    is_latin = sum(1 for ch in text if ord(ch) < 128) > len(text) * 0.5
 
-    head_end = None
-    for c in cuts:
-        if 3 <= c + 1 <= head_max:
-            head_end = c + 1
+    def _cut_at(seg, limit, floor):
+        """在 seg[:limit] 里找一个 >=floor 的切点（返回切后长度，找不到返回 0）。"""
+        best = 0
+        for i, ch in enumerate(seg[:limit], 1):
+            if ch in punct or (is_latin and ch == " "):
+                if i >= floor:
+                    best = i
+        return best
+
+    head_end = 0
+    for i, ch in enumerate(text[:head_max], 1):
+        if (ch in punct or (is_latin and ch == " ")) and 3 <= i <= head_max:
+            head_end = i
             break
-    if head_end is None:
-        head_end = cuts[0] + 1
+    if not head_end:
+        # 前面 head_max 字里没有任何可切点：拉丁文先在更宽一点的范围找空格
+        head_end = _cut_at(text, head_max, 3) or head_max
 
     head, tail = text[:head_end], text[head_end:]
     if not tail:
         return [head]
 
-    # C7：售后短话术（尾段 ≤ seg_max）保持原来的"只切一刀"，
-    # 不增加请求数。官方超长话术才把尾段继续切到安全长度——
-    # 每段尽量停在标点上，找不到就按字数硬切；拼接必须无损。
     parts = [head]
     while len(tail) > seg_max:
-        cut = 0
-        for i, ch in enumerate(tail[:seg_max], 1):
-            if ch in punct:
-                cut = i
-        if cut < 3:                       # 没标点，或标点太靠前，硬切
-            cut = seg_max
+        cut = _cut_at(tail, seg_max, seg_max // 2) or seg_max
         parts.append(tail[:cut])
         tail = tail[cut:]
     if tail:
-        parts.append(tail)
+        # 碎段合并：只剩十来个字（"resubmit it."）时别单独发一次请求——
+        # 一个请求 0.5 秒起，为 8 个字开一次接口不划算，也更容易撞限流。
+        if parts and len(tail) <= 10 and len(parts) > 1:
+            parts[-1] = parts[-1] + tail
+        else:
+            parts.append(tail)
+
+    # 段数上限：请求数是限流口径，切太碎会 429。超限就把最短的相邻两段合并。
+    # **绝不合并首段**：首段就是首字延迟本身，第一版没排除它，实测把
+    # 5 字的 "Your " 和后面 41 字并成了 46 字，首字又回到 900ms+。
+    while len(parts) > max_segs and len(parts) > 2:
+        i = min(range(1, len(parts) - 1),
+                key=lambda k: len(parts[k]) + len(parts[k + 1]))
+        parts[i:i + 2] = [parts[i] + parts[i + 1]]
     return parts
 
 
