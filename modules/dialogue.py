@@ -611,7 +611,25 @@ def _intent_name(flags):
 #: 不再称呼），模型换个说法把承诺改丢，比说错话更糟。
 _FREEZE_INTENTS = frozenset((
     "help_steps", "help_escalate", "name_protest",
-    "language_barrier", "hurry_short", "explain_detail", "hotline_close"))
+    "language_barrier", "hurry_short", "explain_detail", "hotline_close",
+    "scope_answer"))
+
+
+def _strip_user_echo(text, user_text):
+    """别鹦鹉学舌：不许拿客户本轮原话当自己的开场白。
+
+    11-12 截图：客户问「怎么了」，回复「怎么了，得先确认下您是XX吗」——
+    电话里听起来像反问挑衅。agent_free 早有这道闸（_strip_echo_open），
+    但规则状态机 / 措辞层 / 性格层都不走它，所以统一在 _reply 出口再剥一次。
+    只剥句首，句中提及客户原话不动。
+    """
+    if not text or not user_text:
+        return text
+    head = user_text.strip().rstrip("？！?!.。，,！？ ")
+    if len(head) < 2 or not text.startswith(head):
+        return text
+    rest = text[len(head):].lstrip("，,、 ")
+    return rest if len(rest) >= 4 else text
 
 
 def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
@@ -720,6 +738,7 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
                        or _freeze_official or str(next_stage or "") == "DONE")
     text, _persona_applied = persona.adapt(
         session, text, stage_now, freeze=_persona_freeze)
+    text = _strip_user_echo(text, session.get("last_user_text") or "")
     # 骨架复读：同一句话连着说两遍，客户听到的就是"它根本没在听"。
     # 11-11 截图那通：客户「你不是知道吗？」「到底要补啥」两轮，客服逐字
     # 回了两遍「您可以简单回我一句清楚了或者还有疑问就行」。
@@ -1385,8 +1404,8 @@ def _help_reply(session, stage):
         return _reply(session, cfg.get("reply_help_steps")
                       or "那我一步一步说：第一步，把{materials}都准备好；"
                          "第二步，登录商家后台，找到资质审核入口，把这些材料逐张上传；"
-                         "第三步，重新提交，{deadline}前完成就行。"
-                         "您想先弄哪一样，我再细说。",
+                         "第三步，重新提交，建议一周内完成就行。"
+                         "您对哪一步还不清楚？我再细说这一步。",
                       intent="help_steps")
     # 第二次还不会：升级。写进 slots，闭环回写时这两项会带进工单。
     session["slots"]["callback_needed"] = True
@@ -1550,7 +1569,7 @@ def _re_explain_defer(text):
 _APP_DETAIL_RICH = ("我把这单从头说清楚，您别急。您这笔申请是{application_desc}，没有通过审核，"
                     "驳回原因是{reason}。要补的材料一共是这几样：{materials}，一样都不能少。"
                     "操作上分三步：先把材料备齐，再登录商家后台找到资质审核入口逐张上传，"
-                    "最后重新提交，{deadline}前完成就行。材料传上去以后，我们会等资料齐了做完整审核，"
+                    "最后重新提交，建议一周内完成就行。材料传上去以后，我们会等资料齐了做完整审核，"
                     "能不能通过要看审核结果，有问题会再跟您联系。要是哪一步想让人带着弄，"
                     "可以拨打京东商家热线 4006180092。您看是材料准备这块不清楚，还是后台上传这块不清楚？")
 # 第二遍：换角度，只讲"接下来怎么办"，不再复述原因和材料清单。
@@ -1559,12 +1578,82 @@ _APP_DETAIL_RICH = ("我把这单从头说清楚，您别急。您这笔申请�
 #    才可以确定，如果有问题也会再次联系您的」）；③ 统一热线兜底 4006180092。
 _APP_DETAIL_RICH_2 = ("那我换个讲法，只说接下来怎么办：材料备齐后登录商家后台，"
                       "找到这笔申请的资质审核入口，逐张上传，然后重新提交，"
-                      "{deadline}前完成。材料传上去以后我们会做完整审核，"
+                      "建议一周内完成。材料传上去以后我们会做完整审核，"
                       "能不能通过要看审核结果，有问题会再跟您联系。"
                       "您要是想让人带着弄，随时拨打京东商家热线 4006180092，"
                       "专员会一步步教您。现在先卡在哪一步了，您说一句，我单讲这一步。")
 _APP_DETAIL_SHORT = ("好，不重复了：补{materials}，在商家后台重新提交。"
                      "有疑问随时拨 4006180092 找专员。您想单独问哪一样，我单说。")
+
+
+# ---------------------------------------------------------------------------
+# 「补齐到哪 / 这几步都要弄吗 / 还有疑问 / 你到底啥意思」不是没表态
+#
+# 11-12 线上实录：客户问「补齐到哪」，question_class 没有这一类，骨架直接
+# 跳 CONFIRM 播「您看这样解释清楚了吗」；客户答「还有疑问」被算含糊，
+# 「你到底啥意思」又撞上营销场景的「同意 / 不需要」词表，最后
+# 「同意不需要啥」被判 declined 收线——全程没有一句在回答他的问题。
+#
+# 这类话的共性是：客户在**追问范围或表示没听懂**，不是含糊、不是拒绝。
+# 正确动作是用本单事实正面回答（材料清单 + 三步 + 相对时限），
+# 留在本阶段，不讨回应、不推进 CONFIRM、不记含糊、不收线。
+# ---------------------------------------------------------------------------
+_SCOPE_MARKS = ("补齐到哪", "补到哪", "补齐到什么", "补到什么", "都要弄吗",
+                "都得弄吗", "都要做吗", "都得走完吗", "哪几步", "哪些步骤",
+                "这几步都要", "具体要补哪", "补哪些")
+# 只收「质疑 / 明确说还有问题」。**绝不收"说啥 / 没懂 / 听不懂"**：
+# 那是信号不好没听清，走复述梯子；性格跑批 T05「听不清要重说的老师傅」
+# 台词反复「啊？你说啥」，第一版收进来后 5 轮闭环被拖成 14 轮不闭环。
+_DOUBT_MARKS = ("还有疑问", "有疑问", "啥意思", "什么意思", "到底啥",
+                "到底什么")
+_SCOPE_FALLBACK = ("这三样材料都要备齐，三步也都得走完：先把{materials}准备好，"
+                   "再登录商家后台找到资质审核入口逐张上传，最后重新提交，"
+                   "建议一周内完成。您对哪一步还不清楚？")
+
+
+def _is_scope_question(session, text, flags):
+    """客户在追问补齐范围 / 表示没听懂？返回 "scope"/"doubt"/None。
+
+    场景闸：只在有申请单档案时生效（售后场景没有材料清单可讲）。
+    表态闸：明确 yes/no/hangup/deny 不拦；但**质疑优先于 no**——
+    「同意不需要啥」里带"不需要"，客户其实是在问"你说的啥"，不是拒绝。
+    """
+    if not session["slots"].get("application"):
+        return None
+    t = re.sub(r"[\s，,。.!！?？、…～~]", "", text or "")
+    if not t or len(t) > 30:
+        return None
+    if any(w in t for w in _DOUBT_MARKS):
+        return "doubt"
+    # 「同意不需要啥」这种以"啥"收尾的短质疑句才收；「你说啥」不是质疑。
+    if t.endswith("啥") and len(t) <= 8 and any(
+            w in t for w in ("不需要", "同意", "到底")):
+        return "doubt"
+    if any(flags.get(k) for k in ("yes", "no", "hangup", "deny")):
+        return None
+    if any(w in t for w in _SCOPE_MARKS):
+        return "scope"
+    return None
+
+
+def _scope_reply(session, stage, flags, kind="scope"):
+    cfg = config_loader.stage_config(stage)
+    # scope 与 doubt 分开计数：客户先问范围、再说"还有疑问"，是两件不同的事，
+    # 共用一个计数器会让第二句直接跳到升级版本，答得像没听见第一句。
+    nk = "scope_answer_n" if kind == "scope" else "doubt_answer_n"
+    n = int(session.get(nk, 0)) + 1
+    session[nk] = n
+    key = "reply_scope" if kind == "scope" else "reply_doubt"
+    # 连着追问不能整段复读：第二遍换角度只讲"卡在哪一步"，第三遍升级到专员。
+    if n == 2:
+        key += "_2"
+    elif n >= 3:
+        key += "_3"
+    tpl = cfg.get(key) or _SCOPE_FALLBACK
+    app = session["slots"].get("application")
+    # 冻结：只要进改写层，材料清单 + 三步会被压成一句"您清楚了吗"，又变答非所问。
+    return _reply(session, _fill_application(_soothe(tpl, flags), app),
+                  intent="scope_answer")
 
 
 def _re_explain(session, stage, text, flags):
@@ -1856,10 +1945,13 @@ def _fill_application(text, app):
         "{reason}": str(app.get("reject_reason") or "材料问题"),
         "{materials}": "、".join(app.get("required_materials") or []) or "对应材料",
         "{code}": str(app.get("reject_code") or ""),
-        # 求助步骤/短版话术用：截止日期；语言不通/抗议称呼时重新发问需要
-        # 公司名与岗位真值（GREETING 的话术另外由 _fill_outbound 先填过，
-        # 这里再兜一层：直接调 respond 的测试路径没有走开场白填充）。
-        "{deadline}": str(app.get("recheck_deadline") or "审核时限内"),
+        # 档案里的 recheck_deadline 是建库时写死的绝对日期（2026-09/10），
+        # 到 11 月早已过期；官方 56 条话术也没给具体时限。11-12 用户明确
+        # 要求只说相对口径：这里不再取档案日期，任何残留占位符都只得到
+        # 「一周内」，绝不把一个过去的日子念给商家听。
+        # 公司名与岗位真值：语言不通/抗议称呼时重新发问需要（GREETING 的
+        # 话术另外由 _fill_outbound 先填过，这里兜直接调 respond 的路径）。
+        "{deadline}": "一周内",
         "{company_name}": str(app.get("company_name") or "贵公司"),
         "{contact_role}": str(app.get("contact_role") or "负责人"),
     }
@@ -2952,7 +3044,7 @@ def _stage_need(session, text, flags):
         cfg_h = cfg
         return _reply(session, cfg_h.get("reply_hurry")
                       or "好，长话短说：补{materials}，在商家后台重新提交，"
-                         "{deadline}前完成就行。",
+                         "建议一周内完成就行。",
                       intent="hurry_short")
 
     # 含糊/敷衍 → 追问，不把"说了等于没说"记成诉求
@@ -3030,12 +3122,21 @@ def _stage_need(session, text, flags):
                         return _reply(session,
                                       _fill_application(_soothe(_tpl, flags), app),
                                       intent="ask")
+                    # 追问「补齐到哪」这一类已由 respond 层的 _scope 拦截正面答过，
+                    # 能走到这里的都是本单事实也答不上的问题，仍按原路径回到确认；
+                    # 性格跑批 T05（听不清的老师傅）的复述→闭环链依赖这一支。
                     _cc = config_loader.stage_config("CONFIRM")
                     _after = _cc.get("reply_after_ask") or "您看这样解释清楚了吗？"
                     return _reply(session, _soothe(_after, flags),
                                   next_stage="CONFIRM", intent="confirm_after_ask")
                 session["official_line_spoken"] = True
-                return _reply(session, _soothe(_off, flags), intent="official_script")
+                _line = _soothe(_off, flags)
+                # 客户问「这几步都要弄吗」时，官方原话只说到"补齐后重新提交"，
+                # 没正面回答"是不是都要做"。原话逐字保留，后面补一句本单事实，
+                # 别让客户以为可以挑一步做（11-12 截图第 4 张）。
+                if _is_scope_question(session, text, flags) == "scope":
+                    _line += "。这几步都要走完，材料一样都不能少。"
+                return _reply(session, _line, intent="official_script")
             # 客户第二次追问同一件事时换一条说法，不要一字不差再念一遍清单。
             # 11-11 双端自对练实测：客户连问两轮"具体要哪几样 / 找哪家机构"，
             # 客服两轮逐字相同地把"您这笔申请是…需要补充…"念了一遍，判 2 次复读。
@@ -3135,7 +3236,7 @@ def _stage_offer(session, text, flags):
     if session.get("facts_spoken") and any(w in text for w in _HURRY_MARKS):
         return _reply(session, cfg.get("reply_hurry")
                       or "好，长话短说：补{materials}，在商家后台重新提交，"
-                         "{deadline}前完成就行。",
+                         "建议一周内完成就行。",
                       intent="hurry_short")
 
     # 含糊/敷衍先判。这里尤其危险：用户"嗯……"一声就被推进 CONFIRM，
@@ -3928,7 +4029,8 @@ def _stage_confirm(session, text, flags):
             session,
             _soothe(cfg.get("reply_ambiguous_hold")
                     or "没关系，您再想想。我这边先不记任何结论，"
-                       "您什么时候想好了，回我一句同意或者不需要都行。", flags),
+                       "您别急，我不催您表态。您具体想问哪一步，我直接说给您听，"
+                       "不用先回一句清楚了。", flags),
             next_stage="CONFIRM", intent="ambiguous")
 
     # 连续三次含糊：交给人，全程一张工单都不写。
@@ -4344,6 +4446,16 @@ def respond(session, user_text):
         # 记忆回溯放在挂断之后、阶段处理之前：它是"回答问题"，
         # 不该改变流程；也不该被某个阶段的处理器截走当成新诉求。
         out = _recall(session, text) if _is_recall_question(text) else None
+        if out is None and session["stage"] in ("NEED", "OFFER", "CONFIRM"):
+            # 11-12 线上实录：客户问「补齐到哪」被跳去讨回应，「还有疑问」
+            # 「你到底啥意思」一路被算含糊，「同意不需要啥」更被 NEED 的
+            # flags["no"] 早段直接记成 declined 收线——全程没一句在回答他。
+            # 所以这道拦截必须放在**所有阶段分支之前**：追问范围 / 表达没听懂
+            # 不是没表态，先正面答本单事实，不讨回应、不推进、不记结论。
+            _scope = _is_scope_question(session, text, flags)
+            if _scope and (_scope == "doubt" or session.get("official_line_spoken")):
+                _reset_ambiguity(session, True)
+                out = _scope_reply(session, session["stage"], flags, _scope)
         if out is None:
             handler = _HANDLERS.get(session["stage"], _stage_done)
             out = handler(session, text, flags)
