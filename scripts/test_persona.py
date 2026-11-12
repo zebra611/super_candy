@@ -175,6 +175,70 @@ class TestGuard(unittest.TestCase):
         self.assertIn("我再说一遍重点", out2)
 
 
+class TestRepeatAcrossSuffix(unittest.TestCase):
+    """重复判定必须跨过"上一轮已经加上的后缀"。
+
+    改动前的写法是拿本轮的**原句**去比上一轮**播出的整句**（带 suffix）。
+    只要上一轮挂过后缀，两个串永远不相等，repeated 恒为 False，
+    规则表里的 avoid_repeat 轮换一辈子不执行——11-12 用真实规则表实测：
+    同一 base 连投三轮，轮 1/2 逐字相同，persona_repeat_n 一直是 None。
+
+    这个用例专门盯两个假绿：
+      a) 只断"第二轮句子不同"——后缀被 _used 砍掉也能让句子不同，
+         必须同时断 persona_repeat_n 递增；
+      b) 只断"含轮换句"——两个尾巴叠加时也含，必须断固定后缀不出现。
+    """
+
+    SUFFIX = "您也可以对照申请单编号核实。"
+    ALT = "刚才这段是官方口径，您可以再核一遍。"
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8")
+        # 复刻真实规则表的形状：avoid_repeat[0] 与 suffix 逐字相同
+        json.dump({"enabled": True, "rules": {"skeptical": {"*": {
+            "suffix": self.SUFFIX,
+            "avoid_repeat": [self.SUFFIX, self.ALT]}}}},
+            self.tmp, ensure_ascii=False)
+        self.tmp.close()
+        self.old = os.environ.get(persona.ENV_RULES)
+        os.environ[persona.ENV_RULES] = self.tmp.name
+        persona._CACHE.clear()
+
+    def tearDown(self):
+        if self.old is None:
+            os.environ.pop(persona.ENV_RULES, None)
+        else:
+            os.environ[persona.ENV_RULES] = self.old
+        persona._CACHE.clear()
+        os.unlink(self.tmp.name)
+
+    def _turn(self, s, base):
+        out, _ = persona.adapt(s, base, "NEED")
+        s["last_reply_text"] = out      # 模拟 dialogue._reply 出口的记录
+        return out
+
+    def test_same_sentence_twice_changes_wording(self):
+        s = {"persona_code": "skeptical", "last_reply_text": ""}
+        base = "我已经把您的情况记下来了。"
+        first = self._turn(s, base)
+        second = self._turn(s, base)
+        self.assertIn(self.SUFFIX, first, "第一轮该挂固定后缀")
+        self.assertNotEqual(second, first, "第二轮逐字复读＝判重复失效")
+        self.assertIn(self.ALT, second)
+        self.assertEqual(s.get("persona_repeat_n"), 1,
+                         "repeat_n 不递增说明 avoid_repeat 分支没执行")
+        self.assertNotIn(self.SUFFIX, second, "换过说法就不该再叠加固定后缀")
+
+    def test_different_sentence_is_not_repeat(self):
+        """负向：换了一句原话不许被判成重复（否则每轮都换尾巴，成了新复读）。"""
+        s = {"persona_code": "skeptical", "last_reply_text": ""}
+        self._turn(s, "我已经把您的情况记下来了。")
+        out = self._turn(s, "那我再核对一下您的店铺名称。")
+        self.assertNotIn(self.ALT, out)
+        self.assertIsNone(s.get("persona_repeat_n"))
+
+
 class TestGateStatic(unittest.TestCase):
     """静态校验的变异：坏候选必须全部报红。"""
 

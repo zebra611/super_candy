@@ -3043,8 +3043,15 @@ def main():
     _base = "收到，我这边都记下来了。"
     _pf["fact_ack_turn"] = True
     _g1, _a1 = _pm.adapt(_pf, _base, "CONFIRM")
-    _pf.pop("fact_ack_turn")
-    _g2, _a2 = _pm.adapt(_pf, _base, "CONFIRM")
+    # 反向对照必须是**独立的一通**（11-12 修）。
+    # 原来是在同一个 session 上 pop 掉 fact_ack_turn 再 adapt 一次，等于在
+    # 同一通电话里把同一句原话连说两遍——那本来就该判重复、该换说法
+    # （persona 现在用 last_base_text 判跨轮重复，见 _repeat 那段注释）。
+    # 拿"第二遍"当"平时"的对照，测的就不是 fact_ack_turn 这个变量了：
+    # 断言会红，但红的原因是"它确实是重复"，不是"后缀没挂"。
+    _pf2 = dialogue.new_session("verify-persona-factack-ctl")
+    _pf2["persona_code"] = "skeptical"
+    _g2, _a2 = _pm.adapt(_pf2, _base, "CONFIRM")
     check("适配层：客户刚给信息时不追加要信息型后缀（反向：平时照常追加）",
           "对照申请单编号核实" not in _g1 and "对照申请单编号核实" in _g2,
           ["拦后=%r 放后=%r" % (_g1[-16:], _g2[-16:])])

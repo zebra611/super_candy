@@ -30,8 +30,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config_loader                                              # noqa: E402
 from modules import adapters, tools                               # noqa: E402
 from modules.adapters import base as abase                        # noqa: E402
-from modules.adapters.base import (ERROR_TIMEOUT, ERROR_UPSTREAM,  # noqa: E402
-                                   BaseAdapter)
+from modules.adapters.base import (ERROR_TIMEOUT, ERROR_UNKNOWN_TOOL,  # noqa: E402
+                                   ERROR_UPSTREAM, BaseAdapter)
 from modules.adapters.mock import MockAdapter                     # noqa: E402
 from modules.adapters.real import RealAdapter                     # noqa: E402
 
@@ -221,6 +221,30 @@ class RealAdapterErrors(unittest.TestCase):
                           "timeout_ms": 300})
         res = ad.call("query_customer", "")
         self.assertEqual(res["error"], "INVALID_ARG")
+
+    def test_unimplemented_tool_returns_error_instead_of_raising(self):
+        """契约里有、适配器没实现的工具必须返回错误码，不许抛异常。
+
+        11-12 实测：`send_checklist` 只做在 MockAdapter 上，切到 real 调它
+        直接抛 AttributeError。base.call 里的 getattr 原来在 try 外面，
+        兜底接不住，异常冒到编排层——正好破了 dispatch 承诺的"失败不抛异常"。
+        这条既是回归，也是给以后新增工具留的门：漏实现不会炸整通电话。
+        """
+        class _Incomplete(BaseAdapter):
+            """故意什么都不实现：模拟"契约加了工具、适配器还没跟上"。"""
+            name = "incomplete"
+
+        ad = _Incomplete({"timeout_ms": 100})
+        # 写类：没有 found 语义，只要求给错误码
+        res = ad.call("send_checklist", "s1", "QZ202611060001", ["材料A"])
+        self.assertEqual(res.get("error"), ERROR_UNKNOWN_TOOL, res)
+        self.assertIn("_ms", res)
+        self.assertIn("incomplete", res.get("message", ""), "报错要能看出是哪个适配器")
+        # 读类（READ_METHODS 里的）：额外补 found=False，
+        # 否则编排层拿不到"查不到"这个分支，一次未实现会变成整通电话断。
+        res2 = ad.call("query_application", "QZ202611060001")
+        self.assertEqual(res2.get("error"), ERROR_UNKNOWN_TOOL, res2)
+        self.assertFalse(res2.get("found", True), res2)
 
 
 class FunctionCalling(unittest.TestCase):

@@ -1,7 +1,7 @@
-"""Mock 业务系统（M5/M8 交付物）—— 三个接口的独立模拟服务。
+"""Mock 业务系统（M5/M8 交付物）—— 四个接口的独立模拟服务。
 
 为什么要独立成一个服务，而不是塞进 app.py：
-    1. 真的企业对接里，这三个接口在业务方机房里，不在通话服务进程里。
+    1. 真的企业对接里，这些接口在业务方机房里，不在通话服务进程里。
        分开做，联调时才能换地址、换鉴权、演超时——塞进进程内就永远测不到这些。
     2. 2B（潘柏亦）的 modules/tools.py 要接真实接口，需要先有一个"长得像真的"
        的对端。这个服务就是那个对端，且不占用他的文件。
@@ -12,6 +12,7 @@
     GET  /mock/health                      健康检查
     GET  /mock/customer?keyword=xxx        按姓名或手机号后四位查客户
     GET  /mock/order?customer_id=C001      按客户查订单（也可用 keyword）
+    GET  /mock/application?keyword=xxx     按申请单号/公司名/姓名/后四位查资质驳回申请单
     POST /mock/ticket                      建工单（幂等，按 idempotency_key）
     GET  /mock/tickets                     列已建工单（运维/演示用）
     GET  /mock/stats                       调用计数与错误数（做看板联动用）
@@ -288,9 +289,9 @@ def main():
     server = ThreadingHTTPServer((host, port), Handler)
     print("Mock 业务系统已启动")
     print("  监听：%s:%d" % (host, port))
-    print("  数据：%d 个客户 / %d 笔订单 / %d 张历史工单"
-          % (len(_CUSTOMERS), len(_ORDERS), len(_TICKETS)))
-    print("  接口：/mock/health /mock/customer /mock/order /mock/ticket /mock/tickets")
+    print("  数据：%d 个客户 / %d 笔订单 / %d 份资质申请单 / %d 张历史工单"
+          % (len(_CUSTOMERS), len(_ORDERS), len(_APPLICATIONS), len(_TICKETS)))
+    print("  接口：/mock/health /mock/customer /mock/order /mock/application /mock/ticket /mock/tickets")
     print("  停止：Ctrl+C")
     try:
         server.serve_forever()

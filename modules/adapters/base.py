@@ -134,7 +134,17 @@ class BaseAdapter:
     def call(self, method, *args, **kwargs):
         """带超时与错误码的调用。返回 dict 必带 `_ms`。"""
         t0 = time.time()
-        fn = getattr(self, method)
+        try:
+            fn = getattr(self, method)
+        except AttributeError:
+            # 契约里有、这个适配器没实现。11-12 实测：send_checklist 只在
+            # MockAdapter 上实现，切 provider=real 调它直接抛
+            # AttributeError——getattr 原来写在 try 外面，兜底接不住，
+            # 异常一路冒到编排层，正好破了 dispatch 承诺的"失败不抛异常"。
+            # 换成错误码返回，编排走原有兜底话术，事件里还能看出是"没实现"。
+            return self._fail(ERROR_UNKNOWN_TOOL,
+                              "适配器 %s 未实现 %s" % (getattr(self, "name", "?"), method),
+                              t0, read_op=method in READ_METHODS)
         try:
             out = run_bounded(fn, self.timeout_ms, *args, **kwargs)
         except ToolError as exc:

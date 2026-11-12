@@ -254,11 +254,19 @@ def _apply_actions(base, rule, freeze=False, repeated=False, repeat_n=0):
     # 「…缺了品牌方到一级经销商的逐级授权文件。您回一个字也行。」
     _kind = str(rule.get("kind") or "")
     _quiet_tail = _skip_tail(out, _kind)
+    _avoided = ""
     if repeated and not _quiet_tail:
         opts = rule.get("avoid_repeat") or []
-        if opts:
-            tail = opts[repeat_n % len(opts)]
-            out = _append(out, tail)
+        # 重复时"换个说法"，与固定后缀逐字相同的项要筛掉——不然等于没换。
+        # 规则表里有三条的 avoid_repeat[0] 就是 suffix 本身（skeptical /
+        # talkative / cooperative），_append 见到已在句中的尾巴会直接返回，
+        # 于是"第一次重复"永远念出同一句。这里筛掉，不改数据也能轮换。
+        _sfx_now = (rule.get("suffix") or "").strip()
+        pool = [t.strip() for t in opts
+                if isinstance(t, str) and t.strip() and t.strip() != _sfx_now]
+        if pool:
+            _avoided = pool[repeat_n % len(pool)]
+            out = _append(out, _avoided)
     if freeze:
         return out
     for lead in (rule.get("strip_lead") or []):
@@ -279,7 +287,10 @@ def _apply_actions(base, rule, freeze=False, repeated=False, repeat_n=0):
     # 再挂一句"回一个字也行"，等于不让挂。这类"已经在要信息/已经在收尾"
     # 判据收在 _NO_TAIL_MARKS 里。
     tail = rule.get("suffix") or ""
-    if _quiet_tail:
+    if _quiet_tail or _avoided:
+        # 已经用轮换句换过说法了，再挂固定后缀就是一句话两个尾巴：
+        # 「…记下来了。刚才这段是官方口径，您可以再核一遍。您也可以对照申请单编号核实。」
+        # 重复轮只留一个尾巴，而且必须是新的那个，否则重复本身没被消掉。
         tail = ""
     return _append(out, tail)
 
@@ -293,6 +304,27 @@ def adapt(session, text, stage="", freeze=False):
     """
     if not text:
         return text, False
+    # 判重复要拿**上一轮没加后缀的原句**比，不能拿上一轮播出的整句比。
+    #
+    # dialogue._reply 记的 last_reply_text 是加完 suffix（还过了回声清洗、
+    # 热线句）之后的最终文本，而这里的 text 还是原始句。只要上一轮挂过后缀，
+    # "X" 与 "X您慢慢看。" 就永远不相等，repeated 恒为 False——规则表里的
+    # avoid_repeat 轮换等于一段死代码。11-12 实测（真实规则表 skeptical）：
+    # 同一个 base 连投三轮，轮 1/2 播出**逐字相同**，
+    # persona_repeat_n 从头到尾是 None，就是这条分支从未执行过的证据。
+    #
+    # 单独存一个 last_base_text，不动 last_reply_text：后者还被
+    # dialogue 的骨架复读兜底与 agent_free 的跨轮去重读着，口径是"实际播出的
+    # 那句话"，改它的含义会把那两处判据一起弄错。
+    _last_base = session.get("last_base_text")
+    if _last_base is None:
+        # 老调用点（跑批脚本、旧测试）只塞了 last_reply_text：退化用它，
+        # 行为与改动前一致，不会因为少一个键就静默变成"永不重复"。
+        _last_base = session.get("last_reply_text") or ""
+    repeated = (text == _last_base)
+    # 早退分支（neutral / 无规则）也要更新：那几轮的播出句就是 base 本身，
+    # 不记的话下一轮会拿上一轮的老句去比，重复照样判不出来。
+    session["last_base_text"] = text
     rules = load_rules()
     if not rules.get("enabled", True):
         return text, False
@@ -303,8 +335,6 @@ def adapt(session, text, stage="", freeze=False):
     rule = (table.get(code) or {}).get(stage) or (table.get(code) or {}).get("*")
     if not isinstance(rule, dict) or not rule:
         return text, False
-    last = session.get("last_reply_text") or ""
-    repeated = (text == last)
     n = int(session.get("persona_repeat_n") or 0)
     # 同一个后缀在一通电话里最多挂 2 次。
     #
