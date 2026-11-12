@@ -611,7 +611,7 @@ def _intent_name(flags):
 #: 不再称呼），模型换个说法把承诺改丢，比说错话更糟。
 _FREEZE_INTENTS = frozenset((
     "help_steps", "help_escalate", "name_protest",
-    "language_barrier", "hurry_short"))
+    "language_barrier", "hurry_short", "explain_detail", "hotline_close"))
 
 
 def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
@@ -1513,6 +1513,104 @@ def _normalize_spoken_digits(text):
 # 不再把驳回原因整段念第二遍。
 _HURRY_MARKS = ("时间有点急", "有点急", "赶时间", "长话短说", "简单说",
                 "直接说重点", "说重点", "快点", "别啰嗦", "别绕弯子")
+
+# 客户说"没听清 / 再说一遍 / 听不懂"：这不是新问题，是上一句没接住。
+# 正确动作是**把同一件事讲得更细**（rich），而不是把那句驳回原因原样再念一遍——
+# 念一样的他还是听不清（11-11 截图那通：客户连说"我根本没听清"，客服把同一段
+# 又念了三遍，客户只好说"你别再重复了"）。
+# 客户说"简洁 / 直说 / 别重复"：给**短版**并认账，不再整段重念。
+_HEARING_GAP_MARKS = ("没听清", "没听清楚", "听不清", "听不到", "再说一遍", "再讲一遍",
+                      "没听懂", "没太懂", "没太听懂", "搞不懂", "没明白", "听不明白",
+                      "根本没听清", "没听进去", "听不进去", "没接住")
+_CONCISE_MARKS = ("简洁", "直了", "直说", "简单点", "别重复", "别再重复", "不要重复",
+                 "别念了", "别啰嗦", "挑重点", "说重点", "精炼", "别绕了")
+
+
+def _hearing_gap(text):
+    return any(w in (text or "") for w in _HEARING_GAP_MARKS)
+
+
+def _concise_request(text):
+    return any(w in (text or "") for w in _CONCISE_MARKS)
+
+
+def _re_explain_defer(text):
+    """带"没听清/别重复"但同时是在问一个**有专门答案**的具体问题
+    （费用 / 有效期 / 怎么提交 / 入口）。这种不能抢成"重述驳回原因"，否则答非所问。
+    返回 True 表示交给上层正常分支处理。"""
+    if _asks_how_to_submit(text):
+        return True
+    _cls = policy.question_class(text)
+    if _cls in ("provenance", "fee", "validity"):
+        return True
+    return False
+
+
+# rich / short 的兜底（配置里没有时用，保证这个函数永远有话可回）。
+_APP_DETAIL_RICH = ("我把这单从头说清楚，您别急。您这笔申请是{application_desc}，没有通过审核，"
+                    "驳回原因是{reason}。要补的材料一共是这几样：{materials}，一样都不能少。"
+                    "操作上分三步：先把材料备齐，再登录商家后台找到资质审核入口逐张上传，"
+                    "最后重新提交，{deadline}前完成就行。材料传上去以后，我们会等资料齐了做完整审核，"
+                    "能不能通过要看审核结果，有问题会再跟您联系。要是哪一步想让人带着弄，"
+                    "可以拨打京东商家热线 4006180092。您看是材料准备这块不清楚，还是后台上传这块不清楚？")
+# 第二遍：换角度，只讲"接下来怎么办"，不再复述原因和材料清单。
+# 依据官方资料：① 操作步骤口径（京麦后台-咨询单/资质审核入口-上传-重新提交）；
+# ② 结果口径（高频QA「材料上传后，具体是否通过，我们会在审核您完整的材料后
+#    才可以确定，如果有问题也会再次联系您的」）；③ 统一热线兜底 4006180092。
+_APP_DETAIL_RICH_2 = ("那我换个讲法，只说接下来怎么办：材料备齐后登录商家后台，"
+                      "找到这笔申请的资质审核入口，逐张上传，然后重新提交，"
+                      "{deadline}前完成。材料传上去以后我们会做完整审核，"
+                      "能不能通过要看审核结果，有问题会再跟您联系。"
+                      "您要是想让人带着弄，随时拨打京东商家热线 4006180092，"
+                      "专员会一步步教您。现在先卡在哪一步了，您说一句，我单讲这一步。")
+_APP_DETAIL_SHORT = ("好，不重复了：补{materials}，在商家后台重新提交。"
+                     "有疑问随时拨 4006180092 找专员。您想单独问哪一样，我单说。")
+
+
+def _re_explain(session, stage, text, flags):
+    """客户又把驳回原因 / 要补材料拎出来说（没听清 or 让别重复）：决定给哪种版本。
+    返回 _reply 结果；若不应由这里接（事实还没讲过 / 是别的具体问题）返回 None。"""
+    # 场景闸：这套话术讲的是**资质申请单**的驳回原因与材料，只在真有申请单档案
+    # 时成立。售后/召回场景没有这个档案，讲出来只会是"您提交的资质申请…
+    # 原因是材料问题、要补对应材料"这种空壳话——11-12 Q2 课程自检实测：
+    # 售后「听不清」画像 EV17-20 第 7 轮被这里抢成解释，闭环从 40/40 掉到 36/40。
+    app = session["slots"].get("application")
+    if not isinstance(app, dict) or not app:
+        return None
+    if not (session.get("facts_spoken") or session.get("official_line_spoken")):
+        return None
+    # 明确表态的句子一律不拦：「我这边听不清**但同意了**」是同意，不是没听清。
+    # 词表永远差一条，语义优先：肯定/否定/挂断已由 classify 判出来，交给上层
+    # 正常闭环，绝不能因为句里带"听不清"三个字就把客户的表态吞掉。
+    if flags.get("yes") or flags.get("no") or flags.get("hangup") or flags.get("deny"):
+        return None
+    if not (_hearing_gap(text) or _concise_request(text)):
+        return None
+    if _re_explain_defer(text):
+        return None
+    cfg = config_loader.stage_config(stage)
+    if _concise_request(text):
+        tpl = cfg.get("reply_application_detail_short") or _APP_DETAIL_SHORT
+        return _reply(session, _fill_application(_soothe(tpl, flags), app),
+                      intent="hurry_short")
+    # intent=explain_detail 走冻结：这句是"客户没听清"时的**增量解释**，
+    # 里面按官方四段式把本单事实/材料清单/操作步骤/结果口径/热线逐项铺开。
+    # 一旦进 nlg 改写层，模型会把它压成一句"原因是XX"（验证脚本实测：
+    # 长解释被砍到只剩原因，材料清单和热线全丢），客户还是没听清，
+    # 于是下一轮继续复读——等于白改。冻结它，逐字可复述。
+    #
+    # 第二遍起**换角度**：只讲"接下来怎么办"（操作步骤/结果口径/热线），
+    # 不再把原因和材料清单从头念一遍。11-11 截图那通客户连说三次"没听清/
+    # 别重复了"，客服三次都是同一段"品类+原因+三样材料"——详细不等于
+    # 把同一段念得更长，得给新信息。
+    _n = int(session.get("explain_detail_n", 0)) + 1
+    session["explain_detail_n"] = _n
+    if _n >= 2:
+        tpl = cfg.get("reply_application_detail_rich_2") or _APP_DETAIL_RICH_2
+    else:
+        tpl = cfg.get("reply_application_detail_rich") or _APP_DETAIL_RICH
+    return _reply(session, _fill_application(_soothe(tpl, flags), app),
+                  intent="explain_detail")
 
 
 # ---------------------------------------------------------------------------
@@ -2838,6 +2936,16 @@ def _stage_need(session, text, flags):
     if _is_help_seek(session, text):
         return _help_reply(session, "NEED")
 
+    # 客户说"没听清 / 再说一遍 / 听不懂"或"简洁 / 别重复 / 直说"，且事实已讲过：
+    # 给**更详细**（rich）或**短版**（short）的解释，而不是把同一句驳回原因
+    # 原样再念一遍——念一样的他还是听不清（11-11 截图那通：客户连说"我根本没听清"，
+    # 客服把同一段又念了三遍，客户只好说"你别再重复了"）。放在 help_seek 之后、
+    # 含糊/情绪/提问之前：真正的"不会操作"（不清楚/咋补）走求助给步骤，
+    # 而"没听清/别重复"是上一句没接住，该换讲法而不是换话题。
+    _re = _re_explain(session, "NEED", text, flags)
+    if _re is not None:
+        return _re
+
     # 客户赶时间（"我时间有点急/长话短说"）且事实已经讲过：给短版，
     # 不把驳回原因整段再念一遍。
     if session.get("facts_spoken") and any(w in text for w in _HURRY_MARKS):
@@ -3016,6 +3124,12 @@ def _stage_offer(session, text, flags):
     # 旧逻辑走含糊梯子，反问"您是想让我再讲一遍吗"，白耗一轮。
     if _is_help_seek(session, text):
         return _help_reply(session, "OFFER")
+
+    # 客户说"没听清 / 再说一遍 / 听不懂"或"简洁 / 别重复 / 直说"，且事实已讲过：
+    # 给更详细（rich）或短版（short）的解释，而不是把同一句驳回原因原样再念一遍。
+    _re = _re_explain(session, "OFFER", text, flags)
+    if _re is not None:
+        return _re
 
     # 赶时间且事实已讲过 → 短版，不整段复述。
     if session.get("facts_spoken") and any(w in text for w in _HURRY_MARKS):
@@ -3867,8 +3981,12 @@ def _stage_done(session, text, flags):
         # 但那句热线必须留着：用户挂了电话还想找人，这是唯一的兜底路径。
         _ans, _qa_hit, _kb_hit = _answer_official(session, text, flags)
         if _ans:
+            # hotline_close 冻结：这句含官方热线号码与统一收线口径。11-12 实测
+            # intent="ask" 会进改写层，把"您也可以拨打热线 / 感谢您的接听"改成
+            # "欢迎拨打热线 / 感谢接听"——措辞一变，persona 的收线标记就匹配不上，
+            # "我放慢一点说"又会挂回"再见"后面。官方口径逐字播，不交给模型润色。
             return _reply(session, "%s %s" % (_ans, cfg.get("reply_ask") or cfg.get("reply", "")),
-                          intent="qa" if _qa_hit else "ask",
+                          intent="hotline_close", next_stage="DONE",
                           qa_hit=_qa_hit, kb_hit=_kb_hit)
         # 答不上时的兜底：第一次给热线，之后不再逐字复读同一句。
         # 真实通话 s_69aca7 里用户连问三个问题，客服把「如有疑问请拨热线」一字不差
@@ -3876,12 +3994,16 @@ def _stage_done(session, text, flags):
         n = int(session.get("done_ask_n", 0)) + 1
         session["done_ask_n"] = n
         if n == 1:
-            return _reply(session, cfg.get("reply_ask") or cfg.get("reply", ""), intent="ask")
+            # 这一句是收线话术：next_stage=DONE + hotline_close 双冻结，绝不挂
+            # "我放慢一点说"这类尾巴——11-11 截图末轮"…感谢您的接听，再见。
+            # 我放慢一点说。"就是这里没冻结、被 hard_of_hearing 后缀钻了空子。
+            return _reply(session, cfg.get("reply_ask") or cfg.get("reply", ""),
+                          intent="hotline_close", next_stage="DONE")
         return _reply(
             session,
             cfg.get("reply_ask_again")
             or "这个细节我这边说不全，专员回访时会跟您讲清楚；着急的话拨 4006180092 也能找到我们。",
-            intent="ask")
+            intent="hotline_close", next_stage="DONE")
 
     # 已经说过再见了：用户这句只是"再见""嗯""一个字"这种收尾词，不再重复整段。
     # 旧行为是每来一句就把整段结束语再念一遍（线上实测：说"再见"重复一次，
@@ -4082,12 +4204,23 @@ def _is_deny_company(text):
 
 
 def _fill_outbound(text, target):
-    """把开场白里的 {company_name} / {contact_role} 填成外呼目标的真值。
+    """把开场白里的 {company_name} 填成外呼目标的**店铺名/简称**。
 
     为什么要有这一步：官方 52 条话术的固定格式是
     "您好，我是京东商家资质审核专员，请问您是（商家公司名/店铺名）…吗？"——
-    **带公司名**。我们原来写的是"请问是贵公司的负责人吗？"，既没公司名，
-    又让人无从判断这通电话是找谁的。商家凭什么相信一个陌生来电说"你被驳回了"？
+    **要报出找的是哪家**。我们原来写的是"请问是贵公司的负责人吗？"，
+    既没单位名，又让人无从判断这通电话是找谁的；商家凭什么相信一个陌生来电？
+
+    11-12 改：原来优先报**工商登记全称**，线上实录念成"请问您是新疆维吾尔
+    自治区溪亭商贸有限公司的品牌授权经办人吗？"——一长串行政区划 + 预设
+    "品牌授权经办人"这顶身份帽子，对方只要回一句"是的"就被当成认过身份，
+    等于没核身先替对方把"他是谁"定了。现在：
+      1) 只确认**单位**（店铺名优先：官方允许"店铺名"，且短、听着自然），
+         不再念工商全称；没有店铺名才退回全称，再退回简称。
+      2) 话术里已删掉 {contact_role}，不再预设职务；"他到底是谁"交给下一环
+         IDENTITY 报预留手机号后四位核身，核身通过前不讲申请单详情。
+    赛题四段式第②环"确认对方身份（请问您是 XX 公司吗）不能省，打错人是重大
+    事故"仍守住：模板保留 {company_name} 占位符，开场白仍带单位名与"请问您是"。
 
     没有外呼目标时（自检、名单取空）原样返回，不留花括号给用户听。
     """
@@ -4096,13 +4229,14 @@ def _fill_outbound(text, target):
     name = (target.get("company_name") or "").strip()
     short = (target.get("company_short_name") or "").strip()
     shop = (target.get("shop_name") or "").strip()
-    role = (target.get("contact_role") or "").strip()
-    who = name or shop or short
+    who = shop or name or short
     out = text
     if who:
         out = out.replace("{company_name}", who)
-    if role:
-        out = out.replace("{contact_role}", role)
+    # {contact_role} 已从所有话术里删除，这里留一个兜底：万一有旧场景仍带
+    # 这个占位符，也要填掉，绝不把花括号念给客户听。
+    out = out.replace("{contact_role}",
+                      (target.get("contact_role") or "负责人").strip())
     return out if "{" not in out else text
 
 
