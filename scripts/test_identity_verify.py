@@ -222,6 +222,76 @@ class TestAcceptedWays(unittest.TestCase):
         self.assertEqual(r.get("intent"), "identity_ok", r.get("reply_text"))
 
 
+class TestSurnameOnly(unittest.TestCase):
+    """只报姓不能核上——这是 11-12 晚上线后实测抓到的洞。
+
+    发布后拿 HTTP 入口跑真链路：报「我姓晏」，客服回「核对上了，感谢配合」，
+    紧接着把驳回原因整段念了出来。根因是 `_extract_name` 的 `我姓([一-龥])`
+    只取一个字，而 `_matches_outbound` 的姓名比较是包含判断——"晏" 在
+    "晏青梧" 里必然命中。等于知道姓就能过，核身这道闸门形同虚设。
+    """
+
+    SURNAME = "晏"          # 本单联系人 晏青梧
+    WRONG_SURNAME = "王"
+
+    def test_surname_alone_never_passes(self):
+        s = _session("iv-surname-only")
+        for _ in range(3):
+            r = _say(s, "我姓%s" % self.SURNAME)
+            self.assertNotEqual(r.get("intent"), "identity_ok",
+                                "只报一个姓就核上了：%s" % r.get("reply_text"))
+            self.assertFalse(s["slots"].get("identity_confirmed"))
+            self.assertNotIn("核对上了", r.get("reply_text") or "")
+        self.assertNotIn("辛夷", s["slots"].get("application", {}).get("brand_name", ""))
+
+    def test_surname_asks_for_full_name(self):
+        s = _session("iv-surname-ask")
+        text = _say(s, "我姓%s" % self.SURNAME).get("reply_text") or ""
+        self.assertIn("全名", text, "没让客户补全名：%s" % text)
+        # 姓是对的，就不能说"对不上"——他确实姓晏。
+        self.assertNotIn("对不上", text, text)
+        # 也不能走"记不住号码也正常"那句跑题承接：他刚说了自己姓什么。
+        self.assertNotIn("记不住号码", text, text)
+
+    def test_wrong_surname_says_mismatch_then_asks_full_name(self):
+        s = _session("iv-surname-wrong")
+        text = _say(s, "我姓%s" % self.WRONG_SURNAME).get("reply_text") or ""
+        self.assertIn("对不上", text, "姓都不对却不说：%s" % text)
+        self.assertIn("全名", text, text)
+        self.assertFalse(s["slots"].get("identity_confirmed"))
+
+    def test_full_name_after_surname_passes(self):
+        s = _session("iv-surname-then-full")
+        _say(s, "我姓%s" % self.SURNAME)
+        r = _say(s, "晏青梧")
+        self.assertEqual(r.get("intent"), "identity_ok", r.get("reply_text"))
+
+    def test_surname_after_wrong_tail_asks_full_name(self):
+        """错两次尾号之后再报姓：要问全名，不能落到"记不住号码也正常"。
+
+        和上面第一条不是同一段：那一条下一句本来就要问槽位，`_ask_identity`
+        会拦住；这一条是"本轮一个槽位都没收到"、流程直接往跑题承接走，
+        得在跑题之前单独接住。少这一处，客户刚说完自己姓什么，客服转头
+        安慰他"记不住号码"，像没听见。
+        """
+        s = _session("iv-surname-after-tail")
+        _say(s, OTHER_TAIL)
+        _say(s, "4941")
+        text = _say(s, "我姓%s" % self.SURNAME).get("reply_text") or ""
+        self.assertIn("全名", text, "没让客户补全名：%s" % text)
+        self.assertNotIn("记不住号码", text, text)
+
+    def test_matcher_rejects_single_char_directly(self):
+        """兜底层也要挡住：就算单字绕过上游进了槽位，比较本身不能判对。
+
+        上面几条测的是"单字不进槽位"。这条直接调比较函数，测的是
+        "单字进到比较这一步也不许通过"——两层各管一段，缺一层就只剩一层。
+        """
+        rec = _rec()
+        self.assertFalse(dialogue._matches_outbound(rec, "name", self.SURNAME))
+        self.assertTrue(dialogue._matches_outbound(rec, "name", "晏青梧"))
+
+
 class TestLockIsTheOnlySwitch(unittest.TestCase):
     """锁定与否只由 start_call 的入参决定，不靠猜。
 

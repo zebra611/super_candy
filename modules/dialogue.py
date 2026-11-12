@@ -2255,6 +2255,13 @@ def _take_identity_slots(session, text, flags):
     if not name:
         # 带引导词的写法抽不到时，再看这是不是"上一句问了姓名、这一句裸答"（T7）
         name = _name_from_answer(session, text)
+    if name and len(name) == 1:
+        # 「我姓晏」只报了**姓**，不是全名。这不是报错，所以不能说"对不上"；
+        # 但也绝不能进 name 槽——`_matches_outbound` 的姓名比较是包含判断，
+        # 单字"晏"在"晏青梧"里必然命中，于是报个姓就核上（线上实测）。
+        # 存进 surname 只用来判断方向：姓对就请他补全名，姓都不对才说不符。
+        session["identity_surname"] = name
+        name = ""
     if name:
         _submit_identity_slot(session, "name", name)
         took.append("name")
@@ -2351,7 +2358,11 @@ def _matches_outbound(rec, slot, val):
         return bool(c) and (v in c or c in v or (short and short in v))
     if slot == "name":
         n = str(rec.get("contact_name") or "")
-        return bool(n) and (v in n or n in v)
+        # 单字永远不是姓名。缺这一条，"我姓晏" 会在 `v in n` 里一把过——
+        # 线上实测（11-12 晚，发布后用 HTTP 入口跑通）：报一个姓就核上，
+        # 接着把驳回原因全念了出来。等于知道姓就能过，核身形同虚设。
+        # 这里只做兜底；「我姓X」在收槽位时就已改存 surname，不进 name 槽。
+        return len(v) >= 2 and bool(n) and (v in n or n in v)
     return False
 
 
@@ -2542,6 +2553,9 @@ _IDENTITY_MISMATCH = {
              "重新报一次。"),
     "company": ("reply_mismatch_company",
                 "这个公司名我这边没有核对上，麻烦您再确认一次申请单上的公司全名。"),
+    # 客户只报了姓、而且这个姓都对不上时用。不说这句，他就以为"我姓X"已经够了。
+    "surname": ("reply_mismatch_surname",
+                "您说的这个姓跟申请单上的联系人对不上。"),
 }
 
 #: 同音字近似名要复述确认。ASR 把"晏"听成"宴"是常态，这时候既不能判对
@@ -2641,7 +2655,26 @@ def _ask_identity(session, slot, next_stage=None):
         session["last_asked_slot"] = pend.get("slot") or slot
         return _confirm_name_reply(session, next_stage=next_stage)
 
-    # ② 刚报的值没核对上，而且**这一轮还要问他同一个值**：
+    # ② 客户只报了姓（"我姓晏"）：请他补全名。
+    #    姓对 → 既不判对（一个姓核不了身）也不判错（他确实姓晏）；
+    #    姓都不对 → 先说不符，再要全名（不然他补个名字也还是不对）。
+    #    不论这一段本来要问哪个槽位：他刚刚报了姓，接着就该要全名。
+    #    转头去问"报一下尾号"，等于把他刚说的话扔掉。
+    if session.get("identity_surname"):
+        sur = session.pop("identity_surname") or ""
+        _rec = _outbound_record(session) or (session["slots"].get("application") or {})
+        full = str(_rec.get("contact_name") or "")
+        session["slot_asks"]["name"] = session["slot_asks"].get("name", 0) + 1
+        session["last_asked_slot"] = "name"
+        ask = _identity_text("reply_ask_full_name",
+                             "好的，那麻烦说一下您的全名，我核对一下。")
+        if full and not full.startswith(sur):
+            wkey, wdefault = _IDENTITY_MISMATCH["surname"]
+            return _reply(session, _identity_text(wkey, wdefault) + ask,
+                          next_stage=next_stage, intent="identity_retry")
+        return _reply(session, ask, next_stage=next_stage, intent="identity_retry")
+
+    # ③ 刚报的值没核对上，而且**这一轮还要问他同一个值**：
     #    整句用「没有核对上 + 请再确认 + 重报这个值」，不拼默认追问
     #    （那几句带"没关系"，拼上就自相矛盾）。
     #    如果调用方已经决定换一个槽位问（同一个值问满了两次），就不能再用这句——
@@ -3294,6 +3327,18 @@ def _stage_identity(session, text, flags):
                                "这个问题我记下了，专员会跟您解释得更细。咱们先把身份核对"
                                "一下——申请时预留手机号的后四位，四个数字就行。"),
                 intent="identity_ask")
+
+        # ②' 客户只报了姓（"我姓晏"）：这不是跑题，是答了一半。
+        #     旧流程把它当噪声，落到下面那句"没关系，记不住号码也正常"——
+        #     客户刚说了自己姓什么，客服却安慰他"记不住号码"，答非所问。
+        #     注意这一段和 `_ask_identity` 开头那条**不是重复**：那一条只在
+        #     "本段决定要再问一个槽位"时生效，而这里的情况是本轮什么都没收到、
+        #     流程根本不打算再问（直接往跑题承接走）。少这一段，线上那句
+        #     "我姓晏"就被当成噪声。
+        if session.get("identity_surname"):
+            _sn = "name"
+            if session["slot_asks"].get(_sn, 0) < SLOT_ASK_MAX:
+                return _ask_identity(session, _sn)
 
         # ③ 跑题 / 絮叨（有实义、既不是提问也不是拒绝）：中性承接 + 拉回话题。
         #

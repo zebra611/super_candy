@@ -58,12 +58,37 @@ class IdentityCorrectionTest(unittest.TestCase):
     """身份槽位的改口。"""
 
     def test_c03_trail(self):
-        """C03：李 → 张 → 张伟，最终只留张伟，轨迹里有两次改口。"""
-        s, _ = _run(["我姓李", "不对，我姓张", "对，张伟"], "corr-c03")
+        """C03：李雷 → 张强 → 张伟，最终只留张伟，轨迹里有两次改口。
+
+        台词原本是「我姓李」「我姓张」。11-12 换成全名，因为那两句测出来的
+        其实是**一个 bug**：单字被当成姓名收进槽位，而应用单的姓名核身是
+        包含比较——「晏」在「晏青梧」里必然命中。线上实测（发布后）报一句
+        「我姓晏」就直接核上、并把驳回原因整段念了出来。
+        现在单字只当姓氏、另起一句问全名（见 test_surname_not_stored_as_name），
+        所以这里改用真名；「改口覆盖 + 轨迹」这件事一条断言都没少。
+        """
+        s, _ = _run(["我叫李雷", "不对，我叫张强", "对，张伟"], "corr-c03")
         self.assertEqual("张伟", s["identity_slots"]["name"], "最终值必须是最后说的那个")
         pairs = [(c["from"], c["to"]) for c in s["corrections"] if c["slot"] == "name"]
-        self.assertIn(("李", "张"), pairs, "漏了 李→张 这次改口：%r" % pairs)
-        self.assertIn(("张", "张伟"), pairs, "漏了 张→张伟 这次改口：%r" % pairs)
+        self.assertIn(("李雷", "张强"), pairs, "漏了 李雷→张强 这次改口：%r" % pairs)
+        self.assertIn(("张强", "张伟"), pairs, "漏了 张强→张伟 这次改口：%r" % pairs)
+
+    def test_surname_not_stored_as_name(self):
+        """只报姓不进 name 槽。
+
+        `_matches_outbound` 的姓名比较是包含判断，单字进去必然命中：线上
+        报「我姓晏」直接判核上，接着把驳回原因念了出来——知道姓就能过。
+        """
+        s, outs = _run(["我姓李"], "corr-surname")
+        self.assertEqual("", s["identity_slots"].get("name") or "",
+                         "单字被当成姓名收进槽位：%r" % s["identity_slots"].get("name"))
+        # 姓氏当轮就被消费掉了（马上拿去问全名），所以看回复而不是看状态。
+        self.assertIn("全名", outs[0].get("reply_text") or "",
+                      "没让客户补全名：%s" % outs[0].get("reply_text"))
+        out = dialogue.respond(s, "不对，我姓张")
+        self.assertNotIn("核对上了", out.get("reply_text") or "",
+                         "只报姓就核上了：%s" % out.get("reply_text"))
+        self.assertEqual("", s["identity_slots"].get("name") or "")
 
     def test_c03_no_accumulation(self):
         """槽位里只能有一个值——不能变成"李张"或同时记两个姓名。
@@ -71,12 +96,12 @@ class IdentityCorrectionTest(unittest.TestCase):
         注意：查不到的值会被清空（这是刻意的，避免拿错值反复打接口），
         所以这里查的是**提交历史**与"值里没有拼接"两件事。
         """
-        s, _ = _run(["我姓李", "不对，我姓张"], "corr-c03b")
-        self.assertEqual(["李", "张"], s["slot_history"]["name"], "提交历史不对")
+        s, _ = _run(["我叫李雷", "不对，我叫张强"], "corr-c03b")
+        self.assertEqual(["李雷", "张强"], s["slot_history"]["name"], "提交历史不对")
         for v in s["slot_history"]["name"]:
-            self.assertIn(v, ("李", "张"), "槽位值被拼接了：%r" % v)
-        self.assertLessEqual(len(s["identity_slots"]["name"]), 1,
-                            "槽位里存了多个字符：%r" % s["identity_slots"]["name"])
+            self.assertIn(v, ("李雷", "张强"), "槽位值被拼接了：%r" % v)
+        self.assertIn(s["identity_slots"]["name"], ("", "李雷", "张强"),
+                      "槽位里存了拼接值：%r" % s["identity_slots"]["name"])
 
     def test_c04_tail_overwritten(self):
         """C04：报错尾号后自行更正，旧值不得残留。"""
@@ -89,13 +114,13 @@ class IdentityCorrectionTest(unittest.TestCase):
 
     def test_correction_has_turn(self):
         """轨迹要带轮次，否则没法回放到"哪一句改的口"。"""
-        s, _ = _run(["我姓李", "不对，我姓张"], "corr-turn")
+        s, _ = _run(["我叫李雷", "不对，我叫张强"], "corr-turn")
         turns = [c["turn"] for c in s["corrections"]]
         self.assertTrue(all(t > 0 for t in turns), "轮次没记：%r" % turns)
 
     def test_correction_synced_into_slots(self):
         """轨迹也要进 slots，因为 /api/turn 只回传 slots。"""
-        s, _ = _run(["我姓李", "不对，我姓张"], "corr-sync")
+        s, _ = _run(["我叫李雷", "不对，我叫张强"], "corr-sync")
         self.assertEqual(s["corrections"], s["slots"]["corrections"])
 
 
