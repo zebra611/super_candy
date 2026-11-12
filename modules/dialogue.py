@@ -2218,10 +2218,25 @@ def _take_identity_slots(session, text, flags):
     下一句该问姓名；再问尾号等于没听见用户说话。
     """
     took = []
-    if flags.get("digits"):
-        _submit_identity_slot(session, "tail", flags["digits"])
-        took.append("tail")
+    digits = _only_digits(flags.get("digits") or "")
+    _runs = re.findall(r"\d+", str(text or ""))
+    _longest = max(_runs, key=len) if _runs else ""
     app_id = _extract_application_id(text)
+    # classify 只认"孤立 4 位数字段"（那是手机尾号的形状），6 位、8 位、
+    # 11 位它一律返回空 digits。而核身要靠**位数**分流：
+    #   4 位        → 预留手机号后四位
+    #   6 位        → 申请单编号后六位
+    #   7~11 位     → 客户在报整号/多报了几位，取末四位当尾号
+    # 旧代码没有这一步：客户按提示报 060001（本单正确后六位）时，客服回的仍是
+    # "需要您预留手机号的后四位"，客户以为自己说错了——而客服上一句刚说过
+    # "报单号后六位也行"。报整号时同理，等于让人把号码说两遍。
+    if not app_id and len(_longest) == 6:
+        app_id = _longest
+    if not digits and 7 <= len(_longest) <= 11:
+        digits = _longest[-4:]
+    if digits and not (app_id and app_id.endswith(digits)):
+        _submit_identity_slot(session, "tail", digits)
+        took.append("tail")
     if app_id:
         _submit_identity_slot(session, "application_id", app_id)
         took.append("application_id")
@@ -2272,7 +2287,7 @@ def _matches_outbound(rec, slot, val):
     return False
 
 
-def _verify_against_outbound(session, rec):
+def _verify_against_outbound(session, rec, allow_customer=True):
     """外呼单的核身：**只跟这一单比**，不查库。
 
     11-11 线上实录（用户截图那通）：本单尾号是 9403，客户随口报了个 9673，
@@ -2313,6 +2328,13 @@ def _verify_against_outbound(session, rec):
     # （verify 证据 14 当场红）。
     # 但**绝不查申请单库**：那正是串单的入口。客户报 9673 命中青海梧丘、
     # slots.application 被换成那家，然后念别人家的驳回原因——就是这么来的。
+    #
+    # 11-12 又补一条：**开了 application_mode 的赛题场景连客户库也不查。**
+    # 两个业务域的 4 位尾号键空间是重叠的（120 份申请单 vs 12 位售后客户），
+    # 线上实测报 "1234"（本单是 0086）时，客户库/申请单库里都有能命中的记录，
+    # 于是这条回退把人核成了"别人"——见 allow_customer 的说明。
+    if not allow_customer:
+        return None
     for slot, val in tried:
         hit = tools.query_customer(val) or {}
         if hit.get("found"):
@@ -2341,7 +2363,9 @@ def _verify_identity(session):
     if use_app and session.get("target_locked"):
         _ob = _outbound_record(session)
         if _ob:
-            return _verify_against_outbound(session, _ob)
+            # 赛题场景不回退客户库：4 位尾号在两个业务域里是同一个键空间，
+            # 回退等于给"报了个售后客户的尾号"开门（allow_customer=False）。
+            return _verify_against_outbound(session, _ob, allow_customer=not use_app)
     for slot in ("tail", "name", "company", "application_id"):
         val = session["identity_slots"].get(slot)
         if not val:
@@ -2414,6 +2438,28 @@ def _next_identity_slot(session, prefer=None):
     return None
 
 
+#: 客户刚报的哪个值跟本单对不上 → 对应一句"对不上"的说明。
+#:
+#: 11-12 用户提的问题：「申请单号后六位对不上与客服的验证，手机号报错也有可能
+#: 被客户识别成正常的」。实测确实如此：报 "1234"（本单尾号是 0086）时客服直接
+#: 回「核对上了，感谢配合」并念了**另一家**的驳回原因；即使真核不上，原来的写法
+#: 也只是换一个槽位再问（"那我换个方式核对…"），客户听到的是"客服又问了个新问题"，
+#: 根本不知道自己刚报错了——他以为核对已经通过。
+#:
+#: 所以对不上必须**说出来**：是哪个值对不上、对不上这张单的什么。
+#: 只说不符、不透露正确值（正确值一旦念出来，核身就等于没做）。
+_IDENTITY_MISMATCH = {
+    "tail": ("reply_mismatch_tail",
+             "您报的这个尾号，跟这张申请单上预留的号码对不上。"),
+    "application_id": ("reply_mismatch_application_id",
+                       "这个申请单编号我这边对不上。"),
+    "name": ("reply_mismatch_name",
+             "这个姓名跟申请单上的联系人对不上。"),
+    "company": ("reply_mismatch_company",
+                "这个公司名跟申请单对不上。"),
+}
+
+
 def _ask_identity(session, slot, next_stage=None):
     """按槽位取话术追问，并记账（问了几次、上次问的是哪个）。
 
@@ -2426,7 +2472,14 @@ def _ask_identity(session, slot, next_stage=None):
     session["slot_asks"][slot] = session["slot_asks"].get(slot, 0) + 1
     session["last_asked_slot"] = slot
     key, default = pairs[idx]
-    return _reply(session, _identity_text(key, default), next_stage=next_stage,
+    text = _identity_text(key, default)
+    # 刚报过的值跟本单对不上：先说清"对不上"，再换问法。
+    # pop 掉保证同一笔不符只说一次——说了还反复提，就变成指责了。
+    wrong = session.pop("identity_mismatch", None)
+    if wrong in _IDENTITY_MISMATCH:
+        mkey, mdefault = _IDENTITY_MISMATCH[wrong]
+        text = _identity_text(mkey, mdefault) + text
+    return _reply(session, text, next_stage=next_stage,
                   intent="identity_retry")
 
 

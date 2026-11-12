@@ -955,7 +955,7 @@ def _scene_of(company):
             "dialogue": official_script.dialogue_text(got["script"])}
 
 
-def start_call(application_id=None, random_target=False):
+def start_call(application_id=None, random_target=False, lock_target=False):
     """开一通新电话：生成 session_id 与会话级 token、初始化状态、记一条 call_started。
 
     返回的 read_token 是这通电话的读取凭证：前端拿它查事件链与报告。
@@ -1002,7 +1002,15 @@ def start_call(application_id=None, random_target=False):
     #   需补境外商标注册证"——电话打给降真，说的是梧丘的事）。
     # 没指定（跑批/自练按名单取下一条）→ 不锁定：客户报的号就是"我是谁"，
     #   查库找到谁就是谁。C4 那 340 条用例全是这么跑的（用例自带台词"尾号4565"）。
-    sess["target_locked"] = bool(application_id)
+    #
+    # 11-12 补 lock_target：**真实外呼一定知道打给谁**，名单取到的那一单就是本单。
+    # 原来只认"外部显式指定 application_id"，于是页面点开始时走名单取单
+    # （outbound_target 有值、target_locked=False），客户报任何别家的号都会被
+    # 查库换单。线上实测：电话打给川上（尾号 0086），客户报 "1234" → 命中
+    # 天津静姝（辛夷品牌/美妆个护）→ 客服答"核对上了，感谢配合"并把辛夷的
+    # 驳回原因念给了川上——串单，还让客户以为核身通过了。
+    # HTTP 入口传 lock_target=True；脚本直调 start_call() 不传，跑批行为不变。
+    sess["target_locked"] = bool(application_id) or bool(lock_target)
     sess["read_token"] = secrets.token_urlsafe(12)
     sess["created_ts"] = time.time()
     sess["last_active_ts"] = time.time()
@@ -1760,9 +1768,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/call/start":
             # body 透传外呼目标选择：{application_id} 指定复测 / {random:true} 随机生成。
             # 都不带时退回外呼名单下一条（默认生产行为）。
+            # 这条是**真实外呼**入口：打给谁已经由名单决定了，所以锁目标
+            # （见 start_call 里 lock_target 的说明）。脚本直调的跑批不锁。
             self._send_json(start_call(
                 application_id=body.get("application_id") or None,
                 random_target=bool(body.get("random")),
+                lock_target=True,
             ))
             return
 
