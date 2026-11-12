@@ -1953,7 +1953,7 @@ IDENTITY_ASKS = {
     ),
     "name": (
         ("reply_ask_name",
-         "没关系，那方便说一下您的姓名吗？我核对一下。"),
+         "那方便说一下您的姓名吗？我核对一下。"),
         ("reply_ask_name_2",
          "您怎么称呼？说个姓也可以，我这边核对一下。"),
     ),
@@ -2082,8 +2082,10 @@ def _name_from_answer(session, text):
         return ""
     if not all("\u4e00" <= ch <= "\u9fa5" for ch in t):
         return ""
-    if t[0] not in _SURNAMES:
-        return ""
+    # 不再要求首字是姓氏（11-12）：ASR 把"晏"听成"宴"时，"宴"不在姓氏表，
+    # 整句名字就被丢掉，客户明明答了姓名却收到"报一下手机号后四位"。
+    # 放宽的代价靠 _NAME_BLOCK 兜住——"不知道""记不清""真忘了"里都含挡词。
+    # 前提仍是"上一句确实在问姓名"，不满足时这条函数根本不启用。
     if any(ch in _NAME_BLOCK for ch in t):
         return ""
     return t
@@ -2201,7 +2203,12 @@ def _extract_company(text):
     """
     t = _norm(text or "")
     marks = ("有限公司", "股份公司", "经营部", "分公司", "合伙企业", "商行", "商贸", "科技")
-    if len(t) < 6 or not any(m in t for m in marks):
+    # 门槛从 6 降到 4：语音里"s上市字号 + 行业"的简称很常见（"川上商贸"），
+    # 卡 6 会把真实的简称整个丢掉，客户听到的还是"报一下尾号"。
+    # 靠 marks（必须带主体后缀）挡住"我们公司""这个品牌"这类空指代。
+    if len(t) < 4 or not any(m in t for m in marks):
+        return ""
+    if any(w in t for w in ("我们公司", "贵公司", "这个公司", "那家公司", "什么公司")):
         return ""
     # 剥掉开头的应答词/引导语，剩下的当作公司名候选
     for lead in ("我是", "这里是", "我们公司是", "公司是", "我这边是", "对，", "好的，"):
@@ -2264,8 +2271,69 @@ def _outbound_record(session):
     return tgt if tgt.get("application_id") else None
 
 
+def _char_gap(a, b):
+    """两个等长中文字串有几个字不同。不等长直接判不可比（返回 99）。"""
+    if len(a) != len(b):
+        return 99
+    return sum(1 for x, y in zip(a, b) if x != y)
+
+
+def _name_level(rec_value, val):
+    """姓名 / 公司名的匹配程度：exact / fuzzy / none。
+
+    为什么不用拼音：项目零第三方依赖，标准库没有读音表；自己塞一张 3500 字
+    拼音表既大又漏（生僻姓氏正好是重灾区）。而语音核身真正要解决的不是
+    "算出读音"，是**别把同一个人判成错的**：
+
+        晏青梧 → 宴青梧 / 晏青无 / 严青梧   ASR 同音错字，实际是同一个人
+
+    这几种用"等长 + 只差一个字"就能覆盖（ASR 同音错几乎总是错一个位置，
+    连着错两个字的概率很低，而且那种情况还有尾号这条路兜着）。
+
+    代价是"张伟/张山"也会被判 fuzzy——所以 fuzzy **不直接核上**，
+    而是复述确认一句（"您说的是张山吗？"），客户点头才记账。
+    误判的成本是多问一句，不是把错的人放进来。
+    """
+    a = str(val or "").strip()
+    b = str(rec_value or "").strip()
+    if not a or not b:
+        return "none"
+    if a == b or a in b or b in a:
+        return "exact"
+    if abs(len(a) - len(b)) <= 1 and _char_gap(a, b) <= 1:
+        return "fuzzy"
+    # 公司名更长，容一位之差往往不够（"川上商贸"vs"川尚商贸"是 1，
+    # 但"北京川上商贸"vs"北京市川尚商贸有限公司"编辑距离会超）；
+    # 只对 ≥6 字的公司名放宽到"含相同字号且差异 ≤2"。
+    if len(a) >= 6 and len(b) >= 6:
+        core_a, core_b = _company_core(a), _company_core(b)
+        if core_a and core_b and abs(len(core_a) - len(core_b)) <= 1 \
+                and _char_gap(core_a, core_b) <= 2:
+            return "fuzzy"
+    return "none"
+
+
+#: 公司名里不携带辨识信息的尾巴。"北京市川上商贸有限公司" 与 "川尚商贸"
+#: 要能对上，就不能拿整串比——比的是字号。
+_COMPANY_NOISE = ("股份有限公司", "有限责任公司", "有限公司", "分公司", "公司",
+                  "商贸", "商行", "经营部", "科技", "电子商务", "贸易",
+                  "北京市", "北京", "上海市", "上海", "天津市", "天津")
+
+
+def _company_core(name):
+    """把公司名剥成字号："北京市川上商贸有限公司" → "川上"。"""
+    t = str(name or "").strip()
+    for w in _COMPANY_NOISE:
+        t = t.replace(w, "")
+    return t.strip("（()）·— ")
+
+
 def _matches_outbound(rec, slot, val):
-    """客户报的这句话，是不是这一单的。"""
+    """客户报的这句话，是不是这一单的。
+
+    只回答"确定是"（exact）。疑似（同音错字）走 _name_level 的另一条路——
+    确认过才算，见 _verify_against_outbound。
+    """
     v = str(val or "").strip()
     if not v:
         return False
@@ -2317,7 +2385,18 @@ def _verify_against_outbound(session, rec, allow_customer=True):
             session["slots"]["identity_via"] = slot
             session["identity_slots"][slot] = ""
             return rec
-        # 对不上：清掉这个值，下一轮重问。既不能"核上"，也不能去别家找。
+        # 姓名 / 公司名：同音错字很常见（ASR 把"晏青梧"听成"宴青梧"）。
+        # 只差一个字时**不判错也不判对**——判错会把同一个人赶走（而且现在还会
+        # 明确说"没核对上"，更伤）；判对则冒名的人报个近似名就过。
+        # 交给下一句复述确认（"我这边听着是「宴青梧」，您说的是这几个字吗？"），
+        # 客户点头才记账，记 identity_via=name:fuzzy 可追溯。
+        if slot in ("name", "company"):
+            _rec_val = rec.get("contact_name") if slot == "name" else rec.get("company_name")
+            if _name_level(_rec_val, val) == "fuzzy":
+                session["confirm_name"] = {"slot": slot, "heard": val, "asked": False}
+                session["identity_slots"][slot] = ""
+                return None
+        # 没核对上：清掉这个值，下一轮重问。既不能"核上"，也不能去别家找。
         tried.append((slot, val))
         session["identity_slots"][slot] = ""
         session["identity_mismatch"] = slot
@@ -2438,26 +2517,113 @@ def _next_identity_slot(session, prefer=None):
     return None
 
 
-#: 客户刚报的哪个值跟本单对不上 → 对应一句"对不上"的说明。
+#: 客户刚报的哪个值跟本单没核对上 → 对应一句**完整的**追问。
 #:
-#: 11-12 用户提的问题：「申请单号后六位对不上与客服的验证，手机号报错也有可能
-#: 被客户识别成正常的」。实测确实如此：报 "1234"（本单尾号是 0086）时客服直接
-#: 回「核对上了，感谢配合」并念了**另一家**的驳回原因；即使真核不上，原来的写法
-#: 也只是换一个槽位再问（"那我换个方式核对…"），客户听到的是"客服又问了个新问题"，
-#: 根本不知道自己刚报错了——他以为核对已经通过。
+#: 11-12 用户看完线上的要求（截图那通：「没关系，那方便说一下您的姓名吗？」）：
+#:   「不应该说没关系，而是我并没有核对上，请您再确认一次并给我报电话号码后四位，
+#:     其他两种也是同理。」
 #:
-#: 所以对不上必须**说出来**：是哪个值对不上、对不上这张单的什么。
-#: 只说不符、不透露正确值（正确值一旦念出来，核身就等于没做）。
+#: 两条都对：① "没关系"把一次核身失败说轻了，客户听不出自己报错了；
+#: ② 报错之后立刻换一个凭据问（"那说一下您的姓名"），等于告诉客户"你说的我不信"，
+#: 而且新凭据他也未必记得。正确做法是先请他就**同一个值**核对再报一次，
+#: 问满两次还不对，才换凭据。
+#:
+#: 所以这几句是整句替换，**不拼** IDENTITY_ASKS 的默认追问——那几句里带着
+#: "没关系"，拼在一起就自相矛盾。也不透露正确值（念出来核身就白做了）。
 _IDENTITY_MISMATCH = {
     "tail": ("reply_mismatch_tail",
-             "您报的这个尾号，跟这张申请单上预留的号码对不上。"),
+             "我这边没有核对上，麻烦您再确认一次，报一下申请时预留手机号的后四位，"
+             "说四个数字就行。"),
     "application_id": ("reply_mismatch_application_id",
-                       "这个申请单编号我这边对不上。"),
+                       "这个申请单编号我这边没有核对上，麻烦您再确认一次单号，"
+                       "报后六位就行。"),
     "name": ("reply_mismatch_name",
-             "这个姓名跟申请单上的联系人对不上。"),
+             "这个姓名我这边没有核对上，麻烦您再确认一次申请单上的联系人姓名，"
+             "重新报一次。"),
     "company": ("reply_mismatch_company",
-                "这个公司名跟申请单对不上。"),
+                "这个公司名我这边没有核对上，麻烦您再确认一次申请单上的公司全名。"),
 }
+
+#: 同音字近似名要复述确认。ASR 把"晏"听成"宴"是常态，这时候既不能判对
+#: （冒名的人报个近似名就过），也不能判错（是同一个人）。问一句最省事。
+_CONFIRM_NAME_DEFAULT = "我这边听着是「{heard}」，您说的是这几个字吗？"
+
+
+def _confirm_name_reply(session, next_stage=None):
+    """把待确认的近似名念回给客户确认。"""
+    pend = session.get("confirm_name") or {}
+    heard = str(pend.get("heard") or "")
+    text = (_identity_text("reply_confirm_name", _CONFIRM_NAME_DEFAULT)
+            .replace("{heard}", heard))
+    return _reply(session, text, next_stage=next_stage, intent="identity_confirm")
+
+
+def _identity_ok_reply(session, app, flags=None, next_stage="NEED"):
+    """核上那一刻的回复：精确核上 / 同音确认通过，共用这一句。
+
+    抽出来是因为出口有三处（GREETING 首句就报号、IDENTITY 追问后报号、
+    同音字复述确认通过）。三处各写一遍必然漂移——GREETING 那处以前就漏了
+    `_fill_application`，话术里的「{application_desc}」会原样念出来。
+    """
+    cfg = config_loader.stage_config("IDENTITY")
+    text = cfg.get("reply_ok", "")
+    app = app if isinstance(app, dict) else {}
+    # 售后主场景核上的是客户档案（没有 application_id），那种情况不填申请单槽位。
+    if app.get("application_id"):
+        text = _fill_application(text, app)
+    return _reply(session, _soothe(text, flags or {}),
+                  next_stage=next_stage, intent="identity_ok")
+
+
+#: 客户对"您说的是 X 吗"的否定说法。必须排在肯定之前判：
+#: "对不上" 以"对"开头、"是不是"以"是"开头，只看前缀会把否认读成确认。
+_CONFIRM_NEG_HEADS = ("不是", "不对", "对不", "错了", "弄错", "不姓", "不是我", "不在这")
+_CONFIRM_YES = ("对", "是", "是的", "对的", "没错", "嗯", "嗯对", "是我", "就是我",
+                "是啊", "对呀", "正确", "是这", "对的没错")
+
+
+def _confirm_name_answer(session, text, flags):
+    """客户对「您说的是 X 吗」的回答。返回回复 dict；不是这一类时返回 None。
+
+    为什么要在阶段分发**之前**判：这句"对/不是"在任何阶段都不是业务意图——
+    落进 GREETING 会被当成"确认公司"，落进 IDENTITY 会被当成"拒绝核身"。
+    """
+    pend = session.get("confirm_name")
+    if not pend or not pend.get("asked"):
+        return None
+    t = _norm(_strip_filler(str(text or ""))).strip("，,。.！!？? ")
+    if any(t.startswith(w) for w in _CONFIRM_NEG_HEADS):
+        no = True
+    else:
+        no = bool(flags.get("no") or flags.get("deny"))
+    yes = (not no) and (bool(flags.get("yes")) or t in _CONFIRM_YES
+                        or any(t.startswith(w) for w in ("对", "是", "没错", "嗯")))
+    session.pop("confirm_name", None)
+    if yes:
+        rec = _outbound_record(session) or {}
+        slot = pend.get("slot") or "name"
+        session["slots"]["identity_confirmed"] = True
+        if rec:
+            session["slots"]["application"] = rec
+            session["slots"]["customer"] = {
+                "customer_id": rec.get("merchant_id"),
+                "name": rec.get("contact_name"),
+                "phone_tail": rec.get("phone_tail"),
+            }
+        # 同音确认通过的留痕：事后能分清"报准了"和"听成同音、客户点头了"。
+        session["slots"]["identity_via"] = "%s:fuzzy" % slot
+        return _identity_ok_reply(session, rec, flags)
+    if no:
+        # 客户否认了：别再说"没核对上"（他刚纠正过，再强调就是抬杠），
+        # 直接给数字这条路——数字不受同音影响，是这通电话最硬的凭据。
+        slot = "tail"
+        session["last_asked_slot"] = slot
+        session["slot_asks"][slot] = session["slot_asks"].get(slot, 0) + 1
+        return _reply(session, _identity_text(
+            "reply_after_name_denied",
+            "明白，那我换个方式：麻烦您报一下申请时预留手机号的后四位，"
+            "说四个数字就行。"), intent="identity_retry")
+    return None
 
 
 def _ask_identity(session, slot, next_stage=None):
@@ -2467,19 +2633,33 @@ def _ask_identity(session, slot, next_stage=None):
     那一句在事件里仍归属 GREETING（它是对开场白的回应），
     后续追问则不推进（next_stage=None，阶段本来就在 IDENTITY）。
     """
+    # ① 有待确认的近似名（同音字）：先问"您说的是 X 吗"，别急着判对错。
+    pend = session.get("confirm_name")
+    if pend and not pend.get("asked"):
+        pend["asked"] = True
+        session["confirm_name"] = pend
+        session["last_asked_slot"] = pend.get("slot") or slot
+        return _confirm_name_reply(session, next_stage=next_stage)
+
+    # ② 刚报的值没核对上，而且**这一轮还要问他同一个值**：
+    #    整句用「没有核对上 + 请再确认 + 重报这个值」，不拼默认追问
+    #    （那几句带"没关系"，拼上就自相矛盾）。
+    #    如果调用方已经决定换一个槽位问（同一个值问满了两次），就不能再用这句——
+    #    客户刚被问"再报一次尾号"，下一句怎么变成"说一下姓名"了。
+    wrong = session.pop("identity_mismatch", None)
+    if wrong and wrong == slot and wrong in _IDENTITY_MISMATCH:
+        key, default = _IDENTITY_MISMATCH[wrong]
+        session["slot_asks"][slot] = session["slot_asks"].get(slot, 0) + 1
+        session["last_asked_slot"] = slot
+        return _reply(session, _identity_text(key, default), next_stage=next_stage,
+                      intent="identity_retry")
+
     pairs = IDENTITY_ASKS[slot]
     idx = min(session["slot_asks"].get(slot, 0), len(pairs) - 1)
     session["slot_asks"][slot] = session["slot_asks"].get(slot, 0) + 1
     session["last_asked_slot"] = slot
     key, default = pairs[idx]
-    text = _identity_text(key, default)
-    # 刚报过的值跟本单对不上：先说清"对不上"，再换问法。
-    # pop 掉保证同一笔不符只说一次——说了还反复提，就变成指责了。
-    wrong = session.pop("identity_mismatch", None)
-    if wrong in _IDENTITY_MISMATCH:
-        mkey, mdefault = _IDENTITY_MISMATCH[wrong]
-        text = _identity_text(mkey, mdefault) + text
-    return _reply(session, text, next_stage=next_stage,
+    return _reply(session, _identity_text(key, default), next_stage=next_stage,
                   intent="identity_retry")
 
 
@@ -2768,19 +2948,24 @@ def _stage_greeting(session, text, flags):
     # 为什么要收下再查而不是各写一段：两条路径的"报了但核不上"处理是反的
     # （报尾号要改问姓名、报姓名要改问尾号），写成两段必然有一边记不住。
     took = _take_identity_slots(session, text, flags)
-    if _verify_identity(session):
-        identity_cfg = config_loader.stage_config("IDENTITY")
-        return _reply(session, _soothe(identity_cfg.get("reply_ok", ""), flags),
-                      next_stage="NEED", intent="identity_ok")
+    _app = _verify_identity(session)
+    if _app:
+        return _identity_ok_reply(session, _app, flags)
     # P4：上游掉线不能走「报了但核不上 → 换槽位再问」这条路。
     failed = _lookup_failed(session)
     if failed:
         return failed
     if took:
-        # 报了但对不上：问另一个槽位。刚报过的那个再问一遍是最没信息量的一句
-        # （用户会以为你没听见他说话）。
-        other = "name" if "tail" in took else "tail"
-        slot = _next_identity_slot(session, prefer=other) or _next_identity_slot(session)
+        # 报了但没核对上：先请他就**同一个值**再确认一次（用户 11-12 明确要求：
+        # "我并没有核对上，请您再确认一次"）。立刻换凭据问"那说一下您的姓名"，
+        # 等于告诉客户"你说的我不信"，而且新凭据他也未必记得。
+        # 同一个槽位问满 SLOT_ASK_MAX 次之后才换。
+        wrong = session.get("identity_mismatch") or ""
+        if wrong in took and session["slot_asks"].get(wrong, 0) < SLOT_ASK_MAX:
+            slot = wrong
+        else:
+            other = "name" if "tail" in took else "tail"
+            slot = _next_identity_slot(session, prefer=other) or _next_identity_slot(session)
         if slot:
             return _ask_identity(session, slot, next_stage="IDENTITY")
 
@@ -2997,9 +3182,7 @@ def _stage_identity(session, text, flags):
         # 而官方话术是按"场景话术"写的（可能不提本单具体原因与需补材料）。
         # 官方原话留给"商家追问为什么"的场合（见 NEED 的提问分支），
         # 核身这一句保持"品牌 + 原因 + 补什么"的可溯源三件套。
-        return _reply(session,
-                      _fill_application(_soothe(cfg.get("reply_ok", ""), flags), app),
-                      next_stage="NEED", intent="identity_ok")
+        return _identity_ok_reply(session, app, flags)
 
     # P4：查询工具报 error 时不重问、不烧核身次数，直接兜底转专员。
     failed = _lookup_failed(session)
@@ -3142,7 +3325,13 @@ def _stage_identity(session, text, flags):
     session["identity_attempts"] += 1
 
     # ③ 问最缺的那一个；两个都问满了就收尾
-    slot = _next_identity_slot(session)
+    #    刚报错的那个优先再问一次（同一个值问满 SLOT_ASK_MAX 才换），
+    #    与 _stage_greeting 的 took 分支同一口径。
+    _wrong = session.get("identity_mismatch") or ""
+    if _wrong and session["slot_asks"].get(_wrong, 0) < SLOT_ASK_MAX:
+        slot = _wrong
+    else:
+        slot = _next_identity_slot(session)
     if slot is None:
         # T17-③：挂断前必须**完整重问一次**。真实事故里用户还在正常说话
         # 就被挂断（"人还在说话就挂断"），核不上≠不用再问——很多时候
@@ -4733,6 +4922,17 @@ def respond(session, user_text):
     session["last_user_text"] = text
     session["last_flags"] = flags
     session["last_user_angry"] = bool(flags.get("angry"))
+
+    # 同音字确认：「您说的是 X 吗」的回答。必须排在所有阶段判断之前——
+    # 这里的"对 / 不是"不是业务意图，落进 GREETING 会被当成"确认公司"，
+    # 落进 IDENTITY 会被当成"拒绝核身"。
+    _confirmed = _confirm_name_answer(session, text, flags)
+    if _confirmed:
+        return _confirmed
+    if session.get("confirm_name"):
+        # 既没肯定也没否定（客户换了个说法）：清掉待确认，按新输入走。
+        # 不清的话下一轮还会问"您说的是 X 吗"，变成复读。
+        session.pop("confirm_name", None)
 
     # 全局：要求转人工。放在挂断判断之前——"我要真人"和"别打了"是两种相反的诉求，
     # 前者要承诺有人接手，后者要立刻结束；同时出现时以转人工为准（用户还在听）。

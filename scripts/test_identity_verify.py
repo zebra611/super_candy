@@ -59,13 +59,26 @@ def _say(s, text):
 class TestWrongValueSpeaksUp(unittest.TestCase):
     """对不上必须说出来，而且说出来之后不能把单换掉。"""
 
+    def setUp(self):
+        # 同一进程里前面的用例会走 app.start_call / end_call（真实会话 + 回写），
+        # 适配器的内存表会留状态；核身只读档案，清一下保证这条用例干净。
+        # 不清的话整包跑与单条跑的结论会不一致——踩过一次。
+        try:
+            tools._reset_for_test()
+        except Exception:
+            pass
+
     def test_wrong_tail_admits_mismatch(self):
         s = _session("iv-wrong-tail")
         r = _say(s, OTHER_TAIL)
         text = r.get("reply_text") or ""
         self.assertNotIn("核对上了", text, "报错尾号被判核上：%s" % text)
-        self.assertIn("对不上", text, "没告诉客户哪个值对不上：%s" % text)
-        self.assertIn("尾号", text)
+        # 用户 11-12 的原话：「不应该说没关系，而是我并没有核对上，
+        # 请您再确认一次并给我报电话号码后四位」。三件事都得在这句里。
+        self.assertIn("没有核对上", text, "没明确说没核对上：%s" % text)
+        self.assertNotIn("没关系", text, "把一次核身失败说轻了：%s" % text)
+        self.assertIn("再确认", text, text)
+        self.assertIn("后四位", text, "没让他重报同一个值，反而换了问题：%s" % text)
         self.assertEqual(r.get("intent"), "identity_retry")
         # 串单检查：别家的品牌名一个字都不许出现
         self.assertNotIn(OTHER_BRAND, text, "把别家的驳回信息念出来了：%s" % text)
@@ -78,23 +91,105 @@ class TestWrongValueSpeaksUp(unittest.TestCase):
         r = _say(s, "999999")
         text = r.get("reply_text") or ""
         self.assertIn("申请单编号", text, text)
-        self.assertIn("对不上", text, text)
+        self.assertIn("没有核对上", text, text)
+        self.assertNotIn("没关系", text, text)
         self.assertNotIn("核对上了", text, text)
         self.assertEqual(
             (s["slots"].get("application") or {}).get("application_id"), TARGET_ID)
 
     def test_mismatch_is_said_each_time_but_not_repeated(self):
-        """每次报错都要让他知道不对上；但同一句话不许逐字复读。
+        """每次报错都要让他知道没核对上；但同一句话不许逐字复读。
 
         只测"说了一次就不许再说"是错的：客户第二次又报了个错号，
         他还得知道自己又错了。要防的是复读，不是反馈。
         """
         s = _session("iv-once")
         first = _say(s, OTHER_TAIL).get("reply_text") or ""
-        self.assertIn("对不上", first)
+        self.assertIn("没有核对上", first)
         second = _say(s, OTHER_TAIL).get("reply_text") or ""
-        self.assertIn("对不上", second, "第二次报错反而不说了：%s" % second)
+        self.assertIn("没有核对上", second, "第二次报错反而不说了：%s" % second)
         self.assertNotEqual(first, second, "同一句提示逐字复读：%s" % second)
+
+    def test_same_value_asked_twice_before_switching(self):
+        """报错之后先请他重报**同一个值**，不要立刻换成姓名。
+
+        换问题等于告诉客户"你说的我不信"，而新凭据他也未必记得。
+        同一个值问满 SLOT_ASK_MAX（2）次之后才换。
+        """
+        s = _session("iv-same-slot")
+        first = _say(s, "4940").get("reply_text") or ""
+        self.assertIn("后四位", first, first)
+        second = _say(s, "4941").get("reply_text") or ""
+        self.assertIn("后四位", second, "第二次还是该问尾号：%s" % second)
+        third = _say(s, "4942").get("reply_text") or ""
+        # 只断言"不再问尾号"。换成姓名还是换成单号是 _next_identity_slot 的
+        # 排序决定的，写死"必须问姓名"会把断言绑死在实现细节上。
+        self.assertNotIn("后四位", third, "问满两次仍不换渠道：%s" % third)
+
+
+class TestHomophone(unittest.TestCase):
+    """姓名 / 公司名的同音错字（ASR 常态）。
+
+    用户 11-12 提醒的就是这条：「名字在语音输入的时候会有同音无法识别的情况」。
+    档案联系人是「晏青梧」，ASR 很容易给成「宴青梧」「晏青无」「严青梧」。
+    既不判错（同一个人会被赶走），也不判对（冒名者报个近似名就过），
+    而是复述确认一句，客户点头才记账。
+    """
+
+    def _at_name(self, sid):
+        """造一个"上一句刚问了姓名"的会话——裸答的姓名只在这个前提下才收。"""
+        s = _session(sid)
+        s["stage"] = "IDENTITY"
+        s["last_asked_slot"] = "name"
+        return s
+
+    def test_homophone_name_asks_confirm(self):
+        s = self._at_name("ho-ask")
+        r = _say(s, "宴青梧")
+        text = r.get("reply_text") or ""
+        self.assertEqual(r.get("intent"), "identity_confirm", text)
+        self.assertIn("宴青梧", text, "没把听到的名字念回去：%s" % text)
+        self.assertIn("这几个字", text, text)
+        self.assertFalse(s["slots"].get("identity_confirmed"),
+                         "还没确认就直接核上了")
+
+    def test_homophone_name_confirmed_passes(self):
+        s = self._at_name("ho-yes")
+        _say(s, "晏青无")
+        r = _say(s, "对")
+        self.assertEqual(r.get("intent"), "identity_ok", r.get("reply_text"))
+        self.assertTrue(s["slots"].get("identity_confirmed"))
+        # 留痕：事后能分清"报准了"和"听成同音、客户点头了"
+        self.assertEqual(s["slots"].get("identity_via"), "name:fuzzy")
+
+    def test_homophone_name_denied_goes_to_digits(self):
+        s = self._at_name("ho-no")
+        _say(s, "严青梧")
+        r = _say(s, "不是")
+        text = r.get("reply_text") or ""
+        self.assertIn("后四位", text, "否认之后该给数字这条路：%s" % text)
+        self.assertFalse(s["slots"].get("identity_confirmed"))
+
+    def test_homophone_company_asks_confirm(self):
+        s = _session("ho-company")
+        r = _say(s, "北京市川尚商贸有限公司")
+        text = r.get("reply_text") or ""
+        self.assertEqual(r.get("intent"), "identity_confirm", text)
+        self.assertIn("川尚", text)
+
+    def test_company_short_name_recognized(self):
+        """「川上商贸」这种字号+行业的简称，语音里比全称常见得多。"""
+        s = _session("ho-short")
+        r = _say(s, "川上商贸")
+        self.assertEqual(r.get("intent"), "identity_ok", r.get("reply_text"))
+
+    def test_different_person_is_not_confirmed(self):
+        """负向：完全不像的名字不许被当成同音。"""
+        s = self._at_name("ho-diff")
+        r = _say(s, "王建国")
+        text = r.get("reply_text") or ""
+        self.assertNotEqual(r.get("intent"), "identity_confirm", text)
+        self.assertFalse(s["slots"].get("identity_confirmed"))
 
 
 class TestAcceptedWays(unittest.TestCase):
