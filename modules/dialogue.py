@@ -633,6 +633,42 @@ def _strip_user_echo(text, user_text):
     return rest if len(rest) >= 4 else text
 
 
+#: 用户要求（11-12 20:09）：**所有**收线/告别句之前都必须给热线。
+#: 写在这一层而不是逐个改配置，是因为收尾出口太多（正常闭环、拒绝、挂断、
+#: 转人工、语言不通、求助升级…），漏一处就等于那类任务没有热线。
+_HOTLINE = "4006180092"
+_HOTLINE_ZH = "如果还有问题，直接打电话联系 4006180092。"
+_HOTLINE_EN = "If you still have questions, just call us on 4006180092."
+
+
+def _with_hotline(text, session, next_stage=None):
+    """在"再见"之前补一句热线；已经给过就不再重复。
+
+    只动告别句：中间轮次（问材料、核身、解释）不挂热线，否则每轮都念一遍
+    电话号，客户听到的就是复读机——11-09 那通连问三个问题被念了三遍热线
+    的投诉刚修掉，不能又绕回去。
+    """
+    if not text or _HOTLINE in text:
+        return text
+    en = (session.get("lang") == "en") if session else False
+    if en:
+        if "Goodbye" not in text:
+            return text
+        return text.replace("Goodbye", _HOTLINE_EN + " Goodbye")
+    if "再见" in text:
+        idx = text.rfind("再见")
+        # 前一句以逗号结尾时改成句号：否则会读出「感谢您的配合，如果还有问题…」
+        # 这种一逗到底的长句，电话里听起来像没喘气。
+        head = text[:idx].rstrip().rstrip("，,、;； ")
+        if head and head[-1] not in "。！？!?":
+            head += "。"
+        return (head + _HOTLINE_ZH + text[idx:]).strip()
+    # 有些收尾话术不说"再见"（如"那我不打扰您了"），DONE 轮也要给热线。
+    if str(next_stage or "") == "DONE":
+        return text.rstrip() + " " + _HOTLINE_ZH
+    return text
+
+
 def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
            end_reason="", stage_label=None, kb_hit=None, intent_conf=None,
            qa_hit=None):
@@ -740,6 +776,7 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     text, _persona_applied = persona.adapt(
         session, text, stage_now, freeze=_persona_freeze)
     text = _strip_user_echo(text, session.get("last_user_text") or "")
+    text = _with_hotline(text, session, next_stage)
     # 骨架复读：同一句话连着说两遍，客户听到的就是"它根本没在听"。
     # 11-11 截图那通：客户「你不是知道吗？」「到底要补啥」两轮，客服逐字
     # 回了两遍「您可以简单回我一句清楚了或者还有疑问就行」。
@@ -4554,8 +4591,11 @@ def _localize(session, out):
     tpl = (i18n.EN_REPLIES.get(out.get("intent") or "")
            or i18n.EN_BY_STAGE.get(out.get("stage") or "")
            or i18n.EN_FALLBACK)
-    text = _fill_outbound(tpl, session.get("outbound_target"))
-    text = _fill_application(text, session["slots"].get("application"))
+    # 11-12 20:07：不能把后台中文原值直接塞进英文模板（会变成
+    # "Your 荃汀品牌、运动户外类目 application was not approved because…"）。
+    # 统一走 fill_en：品牌名/主体名保留原文，类目、原因、材料全部英文。
+    text = i18n.fill_en(tpl, session["slots"].get("application"),
+                        session.get("outbound_target"))
     if "{" in text:                      # 占位没填干净就别播出花括号
         text = i18n.EN_FALLBACK
     out["reply_text"] = text

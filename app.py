@@ -622,7 +622,7 @@ def _speaker_probe(sess, pcm, source):
 
 
 def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=False,
-                audio_dropped=0, asr_override=None):
+                audio_dropped=0, asr_override=None, text_only=False):
     """执行一轮对话：这是整个哑链路的核心，也是五个人将来各自替换的接缝。
 
     链路（每一步都写一条事件，方便事后归因）：
@@ -855,7 +855,16 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
     # ⑧ TTS：只等第一段就返回，剩余段在后台合成、由前端播完首段后来取。
     # 为什么必须这样：分段并发如果仍然等全部段落合成完，响应时间不会变，
     # 用户照样要等 1.6 秒——分段就成了只让内部指标好看的花架子。
-    tts_out = voice.tts(reply_text, wait_first_only=True)
+    #
+    # 纯文字模式（前端 S.textOnly）**根本不放音**，前端那行就是
+    # `if (!S.textOnly) speak(...)`。所以这里一个字都不该合成：11-12 实测
+    # 纯文字一轮里 TTS 占 0.3–8.0 秒（长句撞上合成接口长尾会重试一次，
+    # 4 秒超时 + 再一遍），而这段音频客户永远听不到——首字超 2 秒全是它。
+    if text_only:
+        tts_out = {"mode": "none", "text": reply_text, "provider": "none",
+                   "latency_ms": 0.0, "skipped": "text_only"}
+    else:
+        tts_out = voice.tts(reply_text, wait_first_only=True)
     rest_handle = tts_out.pop("_rest", None)
     if rest_handle:
         sess.setdefault("tts_rest", {})[turn_id] = rest_handle
@@ -868,7 +877,7 @@ def handle_turn(session_id, user_text=None, audio_bytes=b"", audio_streamed=Fals
     # 所以它是首字响应的下界，不是用户感知值；真正的 T4−T0 由前端上报。
     server_first_audio_ms = round((time.time() - t_start) * 1000, 2)
     total_ms = round((time.time() - t_start) * 1000, 2)
-    turn_cost = _accrue_cost(sess, audio_bytes, reply_text)
+    turn_cost = _accrue_cost(sess, audio_bytes, "" if text_only else reply_text)
 
     events.write_event(session_id, "turn_end",
                        {"stage": agent_out["next_stage"], "closed": sess["closed"],
@@ -1848,7 +1857,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             out = handle_turn(sid, user_text=body.get("text"), audio_bytes=audio_bytes,
                               audio_streamed=streamed,
-                              audio_dropped=body.get("audio_dropped") or 0)
+                              audio_dropped=body.get("audio_dropped") or 0,
+                              text_only=bool(body.get("text_only")))
         except Exception as e:
             # 兜底：不能让一次异常把整通电话打断
             self._send_json({"error": "TURN_FAILED", "detail": str(e)}, 500)

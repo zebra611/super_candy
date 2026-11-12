@@ -625,12 +625,19 @@ def _tts_dashscope(text):
     if not (text or "").strip():
         raise RuntimeError("空文本不合成")
 
+    # 语言跟着文本走：配置里是 Chinese，英文回复若仍按中文合成，
+    # 会把英文单词念成中文字母（11-12 英文互切后发现）。ASCII 占多数即按英文。
+    _lang = cfg.get("language_type") or "Chinese"
+    _ascii = sum(1 for ch in (text or "") if ord(ch) < 128)
+    _cjk = sum(1 for ch in (text or "") if "\u4e00" <= ch <= "\u9fff")
+    if _ascii > _cjk * 3:
+        _lang = "English"
     body = {
         "model": cfg.get("model") or "qwen3-tts-flash",
         "input": {
             "text": text,
             "voice": cfg.get("voice_name") or "Cherry",
-            "language_type": cfg.get("language_type") or "Chinese",
+            "language_type": _lang,
         },
     }
     req = urllib.request.Request(

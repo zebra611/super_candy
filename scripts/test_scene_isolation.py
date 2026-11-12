@@ -105,8 +105,13 @@ class ClosingReplyNoSuffixTest(unittest.TestCase):
         s = D.new_session("t-done")
         s["persona_code"] = "hard_of_hearing"
         done = D._reply(s, bye, next_stage="DONE", intent="consent")
-        self.assertEqual(done.get("reply_text"), bye,
-                         "DONE 是整通电话最后一句，不许挂补救语")
+        text = done.get("reply_text") or ""
+        # 11-12 用户要求：所有收线句在"再见"之前必须给出热线。
+        # 所以这里不再逐字等于原句，改守三件事：不挂补救语、热线在再见之前、仍以再见收尾。
+        self.assertNotIn("放慢", text, "DONE 是整通电话最后一句，不许挂补救语")
+        self.assertIn(D._HOTLINE, text, "收线前必须给热线")
+        self.assertLess(text.index(D._HOTLINE), text.index("再见"), "热线必须在再见之前")
+        self.assertTrue(text.endswith("再见。"), "整通最后一句仍应是再见")
 
         s2 = D.new_session("t-wb")
         s2["persona_code"] = "hard_of_hearing"

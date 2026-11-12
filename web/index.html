@@ -2185,7 +2185,11 @@ async function sendTurn(payload, t0) {
     const r = await fetch("/api/turn", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(Object.assign({ session_id: S.sessionId, token: S.token }, payload))
+      // text_only 告诉服务端"这一轮不会放音"：纯文字模式下服务端就不再合成 TTS。
+      // 不传的话，服务端仍会等合成（实测 0.3–8.0 秒），而前端 `if (!S.textOnly)`
+      // 根本不会播——首字超 2 秒的时间全花在没人听的音频上。
+      body: JSON.stringify(Object.assign(
+        { session_id: S.sessionId, token: S.token, text_only: !!S.textOnly }, payload))
     });
     const d = await r.json();
     if (d.error) { log("系统", "出错了：" + d.error + (d.detail ? "（" + d.detail + "）" : "")); return; }
