@@ -46,6 +46,11 @@ DB_PATH = os.path.join(DATA_DIR, "events.db")
 # 依据 docs/04 第 4 节的统计口径。
 TIMEOUT_MS = 10000
 
+# P95 的最小样本数。少于这个数不出 P95：小样本的 P95 等于最大值，
+# 一次偶发长尾就能把它拉到没有参考意义的水平。
+# 导出成常量是为了让看板能显示"样本不足（19/20）"，而不是自己再写一个 20。
+P95_MIN_SAMPLES = 20
+
 # 建表语句。
 # 索引四个，各有明确用途，不做"以防万一"的全字段索引——写入也要成本。
 _SCHEMA = """
@@ -164,8 +169,11 @@ def _open(path):
     return conn
 
 
-def _connect():
+def _connect(db_path=None):
     """取当前线程的库连接，没有就建一个并缓存。
+
+    参数 db_path 用于**只读地**看另一份库（演示种子库 `?db=demo`）。
+    不传就是默认的 events.DB_PATH，写路径永远走默认，不会误写种子库。
 
     为什么不用全局单例：sqlite3 连接不是线程安全的（check_same_thread），
     而服务端每个请求一个线程。
@@ -184,7 +192,7 @@ def _connect():
     if conns is None:
         conns = {}
         _local.conns = conns
-    path = DB_PATH
+    path = db_path or DB_PATH
     conn = conns.get(path)
     if conn is None:
         try:
@@ -388,6 +396,16 @@ def recent_sessions(limit=20):
     return [{"session_id": r[0], "last_ts": r[1], "event_count": r[2]} for r in rows]
 
 
+def _round_p(v, ndigits=1):
+    """分位数四舍五入；没有样本就返回 None。
+
+    为什么不能 `or 0`：0 的含义是"最快"，None 的含义是"没测到"。看板上一个 0ms
+    的 P95 会被读成"性能极好"，而同一行的 P50 可能已经 2358ms、早就超了闸门。
+    把"没有数据"显示成"数据很好"，是比缺数据更坏的错。
+    """
+    return round(float(v), ndigits) if v is not None else None
+
+
 def _percentile(sorted_vals, p):
     """线性插值求分位数。输入已排序。P50 用它、P95 也用它，口径统一。"""
     if not sorted_vals:
@@ -401,7 +419,7 @@ def _percentile(sorted_vals, p):
     return float(sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * frac)
 
 
-def metrics(gate_ms=LATENCY_GATE_MS):
+def metrics(gate_ms=LATENCY_GATE_MS, db_path=None):
     """算时延指标。**两套口径并列**，因为它们回答两个不同的问题。
 
     口径 A「处理耗时」= turn_end.payload.processing_ms
@@ -421,7 +439,7 @@ def metrics(gate_ms=LATENCY_GATE_MS):
 
     返回：dict，字段见函数末尾。新增字段只追加，不改已有名字。
     """
-    conn = _connect()
+    conn = _connect(db_path)
     rows = conn.execute(
         "SELECT session_id, turn_id, payload, latency_ms FROM events WHERE type='turn_end'"
     ).fetchall()
@@ -480,7 +498,7 @@ def metrics(gate_ms=LATENCY_GATE_MS):
 
     def p95(vals):
         # 样本太少时 P95 等于最大值，容易造成误判，干脆不出
-        return _percentile(vals, 95) if len(vals) >= 20 else None
+        return _percentile(vals, 95) if len(vals) >= P95_MIN_SAMPLES else None
 
     within = sum(1 for v in voice_vals if v <= gate_ms)
 
@@ -491,11 +509,12 @@ def metrics(gate_ms=LATENCY_GATE_MS):
         "turns_silence": sum(1 for t in turns if t["source"] == "silence"),
         # 口径 A：服务端处理耗时
         "processing_p50_ms": round(_percentile(processing, 50), 1),
-        "processing_p95_ms": round(p95(processing) or 0, 1),
+        "processing_p95_ms": _round_p(p95(processing)),
         # 口径 B：首字响应（语音轮，浏览器实测）
         "first_audio_p50_ms": round(_percentile(voice_vals, 50), 1),
-        "first_audio_p95_ms": round(p95(voice_vals) or 0, 1),
+        "first_audio_p95_ms": _round_p(p95(voice_vals)),
         "first_audio_samples": len(voice_vals),
+        "p95_min_samples": P95_MIN_SAMPLES,
         "first_audio_estimated": voice_est,
         "first_audio_timeouts": timeouts,
         "gate_ms": int(gate_ms),
@@ -511,7 +530,7 @@ def metrics(gate_ms=LATENCY_GATE_MS):
 # 看板聚合（M5）：事件流之外的第二层，只做"读出来、摆整齐"，不改任何在线逻辑
 # ---------------------------------------------------------------------------
 
-def aggregate(days=None):
+def aggregate(days=None, db_path=None):
     """按日/按类型聚合事件，供指标看板用。
 
     参数：
@@ -530,7 +549,7 @@ def aggregate(days=None):
     为什么单独一个函数而不塞进 metrics()：metrics() 是"对外承诺的时延口径"，
     字段被文档和答辩引用，只该追加不该长胖。看板是内部观察工具，口径可以更宽。
     """
-    conn = _connect()
+    conn = _connect(db_path)
     since = 0
     if days:
         since = now_ms() - int(days) * 86400 * 1000
@@ -585,20 +604,21 @@ def aggregate(days=None):
     }
 
 
-def db_stats():
+def db_stats(db_path=None):
     """事件库体检：体积、行数、时间跨度、索引是否就位。
 
     用途：盘前检查"库是不是被跑批污染了"（docs/14 提到踩过一次，305 个会话里
     300 个是跑批产物），以及归档脚本跑完看效果。
     """
-    conn = _connect()
+    conn = _connect(db_path)
     rows = conn.execute("SELECT COUNT(*), MIN(ts), MAX(ts) FROM events").fetchone()
     sessions = conn.execute("SELECT COUNT(DISTINCT session_id) FROM events").fetchone()[0]
     idx = [r[1] for r in conn.execute("PRAGMA index_list(events)").fetchall()]
-    size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+    target = db_path or DB_PATH
+    size = os.path.getsize(target) if os.path.exists(target) else 0
     # -wal / -shm 也算进实际占用，否则删了没 vacuum 会以为没变小
     for suffix in ("-wal", "-shm"):
-        p = DB_PATH + suffix
+        p = target + suffix
         if os.path.exists(p):
             size += os.path.getsize(p)
     return {
