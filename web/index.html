@@ -456,6 +456,33 @@
   .rrow .rk { flex: 0 0 36px; color: var(--ink-3); font-size: 11.5px; padding-top: 1px; }
   .rrow .rv { flex: 1; min-width: 0; color: var(--ink); word-break: break-word; }
   .rrow .rv .sub { display: block; color: var(--ink-3); font-size: 11.5px; margin-top: 1px; }
+
+  /* 补料清单：打电话最常被追问的就是"到底要补哪几样"。
+     原来这里只显示前两项 +「等 N 项」，剩下的得自己翻档案——等于把问题留在现场。
+     现在逐条列全，并把它 sticky 在面板顶部：翻下面的字段时清单一动不动。
+     每一行都来自档案字段，缺字段就整块不渲染，不做任何兜底文案。 */
+  .mat-guide {
+    position: sticky; top: 0; z-index: 2;
+    margin: 10px 0 2px; padding: 10px 11px 9px;
+    background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+  }
+  .mg-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .mg-t { font-size: 12px; font-weight: 600; color: var(--ink); letter-spacing: -.01em; }
+  .mg-n { font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .mg-list { margin: 6px 0 0; padding: 0; list-style: none; }
+  .mg-list li {
+    display: flex; gap: 6px; font-size: 12.5px; line-height: 1.5;
+    color: var(--ink); padding: 1px 0;
+  }
+  .mg-list .no { flex: 0 0 14px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .mg-list .mt { flex: 1; min-width: 0; word-break: break-word; }
+  .mg-foot {
+    margin-top: 7px; padding-top: 6px; border-top: 1px dashed var(--line-2);
+    display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; color: var(--ink-3);
+  }
+  .mg-foot b { font-weight: 500; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
   .rq {
     margin: 10px 0 0; padding: 8px 10px;
     background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-sm);
@@ -1382,19 +1409,39 @@ function renderRandomCompany(company, matched_by, scene) {
             tail.join("　") + "</span></div>";
   }
 
-  // ② 为什么被驳回 + 要补什么
+  // ①' 补料清单：逐条列全 + 常驻顶部。
+  // 只用档案里的字段，不写死任何材料名：required_materials / recheck_deadline /
+  // target_channel / hotline。字段缺了就不渲染那一行，宁可少一行也不编一句。
+  const mats = [].concat(company.required_materials || []).filter(Boolean);
+  if (mats.length) {
+    // 截止日只认 YYYY-MM-DD。档案里有 4 条写的是「（未设定截止日·069）」这种占位文案，
+    // 原样贴进来会变成「截止（未设定截止日·069）」——把占位符当日期念给客户听。
+    const dlRaw = String(company.recheck_deadline || "").trim();
+    const dl = /^\d{4}-\d{2}-\d{2}$/.test(dlRaw) ? dlRaw : "";
+    const ch = company.target_channel ? String(company.target_channel) : "";
+    const hot = company.hotline ? String(company.hotline) : "";
+    html += '<div class="mat-guide"><div class="mg-head">' +
+            '<span class="mg-t">这单要补这几样</span>' +
+            '<span class="mg-n">' + mats.length + " 项" + (dl ? " · 截止 " + esc(dl) : "") +
+            "</span></div>" +
+            '<ol class="mg-list">' +
+            mats.map((m, i) =>
+              '<li><span class="no">' + (i + 1) + '.</span><span class="mt">' +
+              esc(m) + "</span></li>").join("") +
+            "</ol>" +
+            '<div class="mg-foot">' +
+              (ch ? "<span>提交渠道 <b>" + esc(ch) + "</b></span>" : "") +
+              (hot ? "<span>不清楚拨 <b>" + esc(hot) + "</b></span>" : "") +
+            "</div></div>";
+  }
+
+  // ② 为什么被驳回
   if (company.reject_reason) {
     const kind = [company.reject_category, company.reject_code].filter(Boolean).join(" · ");
     html += '<div class="rrow"><span class="rk">驳回</span><span class="rv">' +
             esc(company.reject_reason) +
             (kind ? '<span class="sub">' + esc(kind) + "</span>" : "") +
             "</span></div>";
-  }
-  if (company.required_materials && company.required_materials.length) {
-    const ms = [].concat(company.required_materials);
-    html += '<div class="rrow"><span class="rk">补材料</span><span class="rv">' +
-            esc(ms.slice(0, 2).join("、")) +
-            (ms.length > 2 ? " 等 " + ms.length + " 项" : "") + "</span></div>";
   }
 
   // ②' 客服待会儿要说的话术：给测试者核对"原因到底来自哪句官方原话"
