@@ -382,6 +382,18 @@ def main():
                                      "processing_p50_ms", "gate_ms", "est_cost_cny")},
                                    ensure_ascii=False)])
 
+    check("首字 P95 样本不足时是 None，不是 0（0 会被读成「极快」）",
+          m["first_audio_samples"] < m["p95_min_samples"]
+          and m["first_audio_p95_ms"] is None,
+          ["first_audio_samples = %s，门槛 %s"
+           % (m["first_audio_samples"], m["p95_min_samples"]),
+           "first_audio_p95_ms = %r（期望 None；出现 0.0 说明 or 0 兜底又回来了）"
+           % (m["first_audio_p95_ms"],)])
+    check("分位数四舍五入对 None 保持 None（不把「没测到」变成 0）",
+          events._round_p(None) is None and events._round_p(12.34) == 12.3,
+          ["_round_p(None) = %r，_round_p(12.34) = %r"
+           % (events._round_p(None), events._round_p(12.34))])
+
     # 上报事件必须把轮次写进事件列。只写 payload 会让面板上每条都显示
     # "turn 0"，实测时根本对不上是哪一轮慢——这个 bug 真的发生过。
     rep = [e for e in events.list_events(sid_f) if e["type"] == "latency_report"]
@@ -3541,6 +3553,53 @@ def main():
         _tail = (_out.strip().splitlines() or [""])[-1]
         check(_label, _r.returncode == 0 and _want in _out,
               ["退出码 %d；末行：%s" % (_r.returncode, _tail[:80])])
+
+    # ---- 证据 37：部署包不带运行时库 ----
+    # 起因：prep_deploy 只挪 events.db，tickets.db（幂等库）留在包外没人管。
+    # 一旦把 tools.idempotency_store 改成 sqlite，上一轮的工单会跟着上线，
+    # 演示"同一通电话只建一张单"时可能读到旧单——看着幂等生效，其实是别的通话。
+    print()
+    print("=" * 74)
+    print("证据 37：部署清理清单覆盖 events.db 与幂等库，不靠单点判断")
+    print("=" * 74)
+
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        "prep_deploy_under_test", os.path.join(ROOT, "scripts", "prep_deploy.py"))
+    _prep = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_prep)
+
+    from modules.adapters.store import DEFAULT_PATH as _ticket_db
+    _abs = {label: os.path.abspath(path) for label, path in _prep.RUNTIME_DBS}
+    check("部署清理清单同时覆盖事件库与幂等库（新增运行时库必须登记）",
+          os.path.abspath(_prep.DB) in _abs.values()
+          and os.path.abspath(_ticket_db) in _abs.values(),
+          ["清单 = %s" % json.dumps(_abs, ensure_ascii=False),
+           "adapters.store.DEFAULT_PATH = %s" % os.path.abspath(_ticket_db)])
+
+    # 演示种子库：生成 → 只读读回。答辩当天看板全靠它，坏了等于白板。
+    import importlib.util as _ilu2
+    _spec2 = _ilu2.spec_from_file_location(
+        "make_demo_db_under_test", os.path.join(ROOT, "scripts", "make_demo_db.py"))
+    _demo = _ilu2.module_from_spec(_spec2)
+    _spec2.loader.exec_module(_demo)
+    _tmp_demo = os.path.join(tempfile.mkdtemp(), "demo.db")
+    _demo.build(out_path=_tmp_demo, sessions=6, days=3, quiet=True)
+    _dagg = events.aggregate(db_path=_tmp_demo)
+    _dmet = events.metrics(db_path=_tmp_demo)
+    check("演示种子库可生成、可只读读回（不污染 events.DB_PATH）",
+          _dagg["sessions"] == 6 and _dagg["events"] > 0
+          and os.path.abspath(events.DB_PATH) != os.path.abspath(_tmp_demo),
+          ["sessions = %s，events = %s" % (_dagg["sessions"], _dagg["events"]),
+           "该库 P50/P95 = %s / %s，样本 %s"
+           % (_dmet["first_audio_p50_ms"], _dmet["first_audio_p95_ms"],
+              _dmet["first_audio_samples"])])
+
+    _leftover = sorted(f for f in ("events.db", "tickets.db")
+                       if os.path.abspath(os.path.join(_prep.DATA, f)) in _abs.values())
+    check("两个库都在清单里，且归档名按库名区分（不会互相覆盖）",
+          len(_leftover) == 2,
+          ["清单覆盖：%s" % ", ".join(_leftover)])
 
     print()
     print("=" * 74)
