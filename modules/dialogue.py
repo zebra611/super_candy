@@ -784,6 +784,23 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
         # 挂断/拒绝/出错话术不走改写，但占位符仍要填（C5 统一兜底）。
         text = _fill_application(text, session["slots"].get("application"))
 
+    # 不管这句是模型写的、还是措辞层改写出来的，都不许直呼客户姓名。
+    # agent_free 内部有一道，但它只管自己生成的那一句；nlg 改写出来的句子
+    # 它管不到——11-13 线上收线句就成了「马涛，这通电话就先到这里」。
+    # 放在措辞层之后：改写会把整句重写一遍，之前剥掉的名字会被它加回来。
+    # 只剥**句首称呼**（「马涛，…」「马涛先生，…」「马经理，…」），
+    # 不管句子里的复述：客户自己报了姓名时，客服复述一次是承接他给的值
+    # （verify 有一条专门守这个区别：只说"是我"不许带名字，说了"是我，马涛"
+    # 才允许复述）。整句过滤会把后者一起删掉，那是过度。
+    if session.get("outbound_target"):
+        _nm = str((session["outbound_target"] or {}).get("contact_name") or "").strip()
+        if len(_nm) >= 2:
+            _forms = "|".join(re.escape(x) for x in sorted(
+                {_nm, _nm + "先生", _nm + "女士", _nm + "经理",
+                 _nm[0] + "先生", _nm[0] + "女士", _nm[0] + "经理", _nm[0] + "总"},
+                key=len, reverse=True))
+            text = re.sub(r"^\s*(?:%s)\s*[，,、]\s*" % _forms, "", text).lstrip("，,、 ")
+
     # 性格适配放在措辞层**之后**：它只调形式（客套前缀/引导句），
     # 官方原话、核身问句、挂断话术一个字都不动——那三类要么必须逐字复述，
     # 要么指代必须固定，改写与细化都会把依据改没。
