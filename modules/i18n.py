@@ -48,6 +48,35 @@ ASK_EN = (
     "speak english", "english please", "in english please",
 )
 
+#: 明确表示"我中文不行 / 请说英文"，**允许是用中文说的**。
+#:
+#: 11-13 用户要求：「直到用户使用完整的英语句子或者明确说我中文不好，才转换成英语」。
+#: 用中文说"我中文不好"时，`detect` 里那条"句子里有中文就判中文"会抢先把它判成 zh，
+#: 所以这两组必须在判中文之前先判。
+EN_REQUEST_ZH = (
+    "中文不好", "中文不太好", "中文不行", "中文很差",
+    "不会中文", "不会说中文", "不懂中文", "听不懂中文", "中文听不太懂",
+    "说英文", "说英语", "讲英文", "讲英语", "用英文", "用英语",
+    "英文沟通", "英语沟通", "换英文", "换英语",
+)
+EN_REQUEST_EN = (
+    "my chinese is not good", "my chinese is bad", "my chinese is poor",
+    "i don't speak chinese", "i dont speak chinese",
+    "i can't speak chinese", "i cant speak chinese",
+    "i don't understand chinese", "i dont understand chinese",
+    "no chinese",
+)
+
+#: 判断"这句是不是完整的英文句子"要用到的词：主语/代词/助动词。
+#: 三个词里只要出现一个，基本就是在说话（"what is this" / "i need help"），
+#: 而不是蹦了个单词（"ok" / "yes" / "thanks"）。
+_SUBJECT_AUX = {
+    "i", "you", "we", "they", "he", "she", "it", "my", "your", "our", "their",
+    "is", "are", "was", "were", "am", "do", "does", "did", "can", "could",
+    "would", "will", "should", "have", "has", "had", "not",
+    "don't", "dont", "can't", "cant", "isn't", "aren't", "won't",
+}
+
 #: 英文短句 -> 中文等价句。顺序即优先级：先长后短，避免 "no" 抢走 "no thanks"。
 #: 只收**能明确对应到意图**的短句；长句保留原文，走通用英文承接。
 _EN_INTENT = (
@@ -334,15 +363,59 @@ def _norm(t):
     return re.sub(r"\s+", " ", t).strip()
 
 
+def _english_words(text):
+    return re.findall(r"[A-Za-z][A-Za-z'\-]*", text or "")
+
+
+def is_full_english(text, min_words=4):
+    """这句算不算"在说英语"，而不是"蹦了个英文词"。
+
+    11-13 用户要求：回答 ok / yes 时不要立刻切英文，得等到**完整的英语句子**。
+    判据不是"有没有拉丁字母"（那样 "ok" 就够），而是**有没有成为一句句子**：
+
+        ok / yes / ok thanks / yes i am        → 不算（这是回答，不是语种）
+        what is this / i need help            → 算（三个词但带主语或助动词）
+        i want to know why it was rejected    → 算（四个词以上）
+
+    纯中文的句子直接返回 False；带中文的一律不按英文处理（混说的情况由
+    "句中有中文 → zh" 那条兜着，这里只做正向判断）。
+    """
+    t = (text or "").strip()
+    if not t or _ZH.search(t):
+        return False
+    words = _english_words(t)
+    if len(words) >= min_words:
+        return True
+    if len(words) == 3 and any(w.lower() in _SUBJECT_AUX for w in words):
+        return True
+    return False
+
+
 def detect(text, current="zh"):
     """判断这一轮该用哪种语言。返回 "zh" / "en"。
 
-    中文字符优先（"我听不懂 english" 也算中文）；纯英文短句且含拉丁字母才切 en；
-    两者都不是（数字、标点）时保持当前语言，不让一次噪声把语言切走。
+    顺序是有讲究的，每一条都对应一个真实踩过的坑（11-12 ~ 11-13）：
+
+        ① 明确要求中文（"i can't understand english" / "请说中文"）→ zh
+        ② 明确说中文不好 / 要求英文（可以是中文说的"我中文不好"）→ en
+        ③ 句子里有中文 → zh
+        ④ 明确问"你会说英语吗" → en
+        ⑤ 能对上中文短句的英文回答（ok / yes / thanks / what materials）
+           → **保持当前语言**。这是"回答"，不是"在说英语"。
+        ⑥ 完整的英文句子 → en
+        ⑦ 其余（数字、标点、单个词）→ 保持当前语言
+
+    第 ⑤ 条是 11-13 用户明确提的：「回答 ok、yes 的时候不要立马切英文」。
+    原来的判据是"有两个拉丁字母就切"，于是客户答一句 "ok"，客服下一句就整段
+    改口说英语——客户只是应了一声，并没有要换语言。
     """
     t = (text or "").strip()
     low = _norm(t)
-    if any(k in low for k in BACK_TO_ZH) or _ZH.search(t):
+    if any(k in low for k in BACK_TO_ZH):
+        return "zh"
+    if any(k in t for k in EN_REQUEST_ZH) or any(k in low for k in EN_REQUEST_EN):
+        return "en"
+    if _ZH.search(t):
         return "zh"
     if any(k in low for k in ASK_EN):
         return "en"
@@ -351,7 +424,9 @@ def detect(text, current="zh"):
     letters = "".join(_LATIN.findall(t))
     has_digit = any(ch.isdigit() for ch in t)
     looks_like_code = bool(has_digit and letters.isupper())
-    if len(letters) >= 2 and low and not looks_like_code:
+    if not looks_like_code and to_zh(t):
+        return current or "zh"
+    if not looks_like_code and is_full_english(t):
         return "en"
     return current or "zh"
 

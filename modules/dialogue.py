@@ -85,6 +85,30 @@ HANGUP_WORDS = ("挂了", "先挂", "忙着", "没空", "不聊了", "别打了"
 # 情绪信号（骂/威胁这类**强情绪**）
 ANGRY_WORDS = ("投诉", "骗子", "烦", "垃圾", "滚", "气死", "恶心", "骚扰")
 
+#: 判情绪之前先扣掉的"礼貌说法"和"商品词"。
+#:
+#: 11-13 实测：客户一句「麻烦把材料清单发到我商家后台」，客服回
+#: 「非常抱歉让您有这样的感受」——因为「烦」在 ANGRY_WORDS 里，而「麻烦」
+#: 含「烦」。同一类误伤还有："我卖滚筒洗衣机的"（滚）、"垃圾袋"（垃圾），
+#: 这两个词在这个赛题的类目里都是正经商品名。
+#:
+#: 做法是匹配情绪词之前先把这些片段扣掉，而不是删词表里的字：真骂人的
+#: 「真麻烦」「别烦我」「滚筒滚出去」扣完还剩「真麻烦」「别我」「出去」，
+#: 「烦」照样命中。宁可多一道归一，也不能让客户说句客气话就被道歉。
+_POLITE_PREFIXES = ("麻烦您", "麻烦你", "麻烦帮", "麻烦把", "麻烦给", "麻烦发",
+                    "麻烦再", "麻烦看", "麻烦说", "麻烦问", "麻烦转",
+                    "麻烦确认", "麻烦提供", "麻烦告诉", "麻烦核对")
+_ANGRY_FALSE_FRIENDS = ("滚筒", "垃圾袋", "垃圾桶", "垃圾处理器", "垃圾食品")
+
+
+def _anger_text(text):
+    """扣掉礼貌用语与商品词之后再看情绪。"""
+    s = text or ""
+    for w in _POLITE_PREFIXES + _ANGRY_FALSE_FRIENDS:
+        s = s.replace(w, "")
+    return s
+
+
 # 抱怨/泄气信号（T11）。与 ANGRY_WORDS 刻意的区别：那些是"骂人"，
 # 这些是"我说了也没用"——不是攻击客服，是**放弃沟通**。
 # 不接住这句话的后果比挨骂更严重：用户下一句往往就是"算了，挂了吧"。
@@ -384,7 +408,8 @@ def classify(text):
     _insult_extra = tuple(w for w in (config_loader.compliance_categories()
                                       .get("insult") or [])
                           if w and w not in ANGRY_WORDS)
-    if any(w in t for w in ANGRY_WORDS + _insult_extra):
+    _anger_src = _anger_text(t)
+    if any(w in _anger_src for w in ANGRY_WORDS + _insult_extra):
         flags["angry"] = True
         strong.append(("angry", CONF_CONTAINS))
     # 抱怨单独一个标记，不并进 angry：angry 的处理是"暂停推进+致歉"，
@@ -858,7 +883,14 @@ def _skeleton_variant(session, text, stage, end_reason):
         return text
     n = int(session.get("skeleton_variant_n", 0))
     session["skeleton_variant_n"] = n + 1
-    return _SKELETON_VARIANTS[n % len(_SKELETON_VARIANTS)] + text
+    # 原文常以「嗯，」「好的，」开头，直接拼会变成「换个说法，嗯，清单就在…」——
+    # 11-13 截图里那串"换了说法但更别扭"的句子就是这么来的。先剥掉语气词。
+    body = str(text or "").lstrip()
+    for filler in ("嗯，", "嗯、", "嗯 ", "好的，", "好，", "行，", "对，"):
+        if body.startswith(filler):
+            body = body[len(filler):].lstrip()
+            break
+    return _SKELETON_VARIANTS[n % len(_SKELETON_VARIANTS)] + body
 
 
 def _soothe(text, flags):
@@ -1735,6 +1767,24 @@ def _facts_told(session):
     return bool(session.get("facts_spoken") or session.get("official_line_spoken"))
 
 
+#: 收线之后还允许继续处理的话——只有"改口"。
+#: 客户在挂断前说"等等，我说错了""不是我本人"，业务事实变了，工单要出新版本；
+#: 除此之外（"对""好的""嗯"）一律回一句"已经结束"。
+_CORRECTION_MARKS = ("说错", "错了", "不对", "等等", "改一下", "改成", "重新说",
+                     "搞错", "记错", "收回")
+#: 收线之后的"表态"也算有效输入：客户在挂断前说"我同意""那就办吧"，
+#: 是业务事实变了，得再写一版工单（课程用例 EV01 就长这样：先说不要钱，
+#: 听到免费后改口说办）。这类句子不能按"电话已结束"挡掉。
+_CONSENT_MARKS = ("同意", "办吧", "就这么办", "那就办", "可以办", "不要了",
+                  "不需要了", "不用了", "拒绝")
+
+
+def _looks_like_correction(text):
+    t = text or ""
+    return (any(w in t for w in _CORRECTION_MARKS)
+            or any(w in t for w in _CONSENT_MARKS))
+
+
 def _is_done_ack(session, text, flags):
     """客户**不耐烦地/明确地**说完了（清楚了清楚了 / 知道了！！！ / 没有了！）。
 
@@ -1828,16 +1878,36 @@ def _short_affirm(text):
 
 
 def _checklist_again_reply(session, stage, flags):
+    """清单已发之后，客户又答一句短确认（对 / 好 / 知道了）。
+
+    11-13 用户截图：「清单发完之后，客户每说一句"对"，客服就再念一遍"清单就在
+    您后台"，通话说不到头」。旧实现是原地打转：阶段永远停在 NEED，客户怎么
+    应答都换不来下一句，最后只能靠客户自己挂断——这就是截图里那串
+    "对 / 对 / 对" 配五遍同样的话。
+
+    现在最多接两次就收口：
+        第 1 次：一句短确认 + 把四段式③问回去，并推进到 OFFER；
+        第 2 次：换一句，直接问"现在方便提交吗"；
+        第 3 次：不再磨，按"客户已经认可"回写收线（带热线）。
+    """
     n = int(session.get("checklist_ack_n", 0)) + 1
     session["checklist_ack_n"] = n
+    cfg = config_loader.stage_config(stage)
+    app = session["slots"].get("application") or {}
     if n == 1:
-        tpl = (config_loader.stage_config(stage).get("reply_checklist_again")
-               or "清单刚才已经发到您商家后台了，直接翻后台清单就行，不用再等我复述。")
-    else:
-        # 客户连着两轮只回「需要 / 知道了」，不把同一句短确认念第二遍。
-        tpl = "嗯，清单就在您后台，忘了随时翻；哪一步卡住直接说，我单讲这一步。"
-    return _reply(session, _fill_application(tpl, session["slots"].get("application")),
-                  intent="checklist_sent")
+        tpl = (cfg.get("reply_checklist_again")
+               or "清单已经发到您商家后台了，直接翻后台清单就行。"
+                  "这几样备齐后在商家后台重新提交，您清楚怎么提交吗？")
+        return _reply(session, _fill_application(_soothe(tpl, flags), app),
+                      next_stage="OFFER", intent="checklist_sent")
+    if n == 2:
+        tpl = (cfg.get("reply_checklist_submit")
+               or "清单就在后台，照着传就行；传完重新提交，这单会自动进复核。"
+                  "现在方便提交吗？")
+        return _reply(session, _fill_application(_soothe(tpl, flags), app),
+                      next_stage="CONFIRM", intent="checklist_sent")
+    # 第三句还是一句"对"：客户已经用行动表态了，不再问，直接记账收线。
+    return _do_writeback(session, True)
 
 
 def _early_answer(session, text, flags):
@@ -1865,10 +1935,12 @@ def _early_answer(session, text, flags):
     if _is_done_ack(session, text, flags):
         _ensure_checklist(session)
         return _do_writeback(session, True)
-    # 清单已经发过，客户又回「知道了 / 需要 / 好」：给一句短确认，
-    # 不复述驳回原因、不再问要不要发（11-12 19:42/19:46 两张截图）。
-    # 前提是本通清单真发过：没发过的会话仍按原有阶段推进，不抢四段式④。
-    if session["slots"].get("checklist_sent") and _short_affirm(text):
+    # 清单已经发过，客户又回「知道了 / 需要 / 好」：给一句短确认并**往前推一格**。
+    # 只在 NEED 里接：OFFER/CONFIRM 的"对"是四段式③④的表态，得走各自的阶段逻辑
+    # 去推进/收线；在这里截住，就等于把客户已经点了头的话当成"知道了"，
+    # 永远进不了下一步（11-13 截图那串"对/对/对"就是这么来的）。
+    if (session["slots"].get("checklist_sent") and _short_affirm(text)
+            and stage in ("NEED", "OFFER")):
         return _checklist_again_reply(session, stage, flags)
     if _wants_checklist(session, text, flags):
         return _checklist_reply(session, stage, flags)
@@ -3161,7 +3233,11 @@ def _stage_identity(session, text, flags):
     # identity_vague、不轮换槽位、不推进阶段、不回写，只礼貌请对方重说。
     # noise_turns 只在「用户真的给出了可核身信息」时清零（见下方 ② 之后），
     # 否则连续几声咳嗽会被每轮清零掩掉，永远触发不了兜底。
-    if flags.get("evidence") == "noise":
+    # 英文会话里的英文句子不算噪声：classify 的 noise 判据是"无中文且无数字"，
+    # 它只认中文语料。11-13 改完语言判定后，客户说完整英文句才会切到 en，
+    # 一旦把这种句子算成噪声，连着三句就把一个正常说英语的客户挂断
+    # （实测：三句英文 → "信号不太好…再见"）。噪声这条路只对中文会话生效。
+    if flags.get("evidence") == "noise" and session.get("lang") != "en":
         session["noise_turns"] = int(session.get("noise_turns", 0)) + 1
         if session["noise_turns"] >= NOISE_MAX:
             return _finish(session,
@@ -4927,10 +5003,36 @@ def respond(session, user_text):
                       intent="lang_en")
         _remember(session, text, _localize(session, _out))
         return _localize(session, _out)
-    if _lang == "en":
-        _zh = i18n.to_zh(text)
-        if _zh:
-            text = _zh
+    # 英文短句归一成中文等价句，**两种语言模式下都做**。
+    # 原来只在 en 模式下归一：11-13 改了判定之后，中文模式下的 "ok" 不再切英文，
+    # 于是 "ok" 会原样进分类器，被当成没听懂——客户明明应了一声，客服却反问
+    # "您刚才说什么"。归一之后，它就是一句中文的"是的"，流程照常往下走。
+    _zh = i18n.to_zh(text)
+    if _zh:
+        text = _zh
+
+    # 收线之后又来一句：不再走业务逻辑。
+    #
+    # 11-13 用户截图：「闭环了之后通话还能继续下去，很怪」。旧行为是每来一句就
+    # 再回一遍告别话术（"感谢您的配合…再见"），页面也一直能发消息——客户会觉得
+    # 这通电话没完没了。现在只回一句"已经结束 + 热线"，且**不再推进任何阶段**。
+    # 唯一的例外是改口：客户在挂断前说"等等，我说错了"，那是业务事实变了，
+    # 必须放回 `_do_writeback` 去改（见 test_correction 的 C03/C04）。
+    if session.get("stage") == "DONE" and not _looks_like_correction(text):
+        _n = int(session.get("after_done_n", 0))
+        session["after_done_n"] = _n + 1
+        # 三句轮换，都带热线、都不讲业务。为什么必须轮换：客户在收线后连问两句
+        # 答不上的事，同一句话念两遍，听起来就是"这电话卡住了"（verify 有一条
+        # 专门守它）。为什么不答问题：阶段已经 DONE，再答下去就是正文无限延长，
+        # 而这正是用户 11-13 说的"闭环之后通话还能继续，很怪"。
+        _after_done = (
+            config_loader.fallback_text("reply_after_done")
+            or "这通电话已经结束了。如果还有问题，直接打电话联系 4006180092。",
+            "这单已经记录完成了，通话也结束了。后续有问题，拨 4006180092 找专员就行。",
+            "电话这边已经结束了哈。还有事的话，打 4006180092 就能找到我们。",
+        )
+        return _reply(session, _after_done[_n % len(_after_done)],
+                      next_stage="DONE", intent="done_again")
 
     session["turn"] += 1
     session["slots"]["last_user_text"] = text

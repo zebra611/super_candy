@@ -152,7 +152,10 @@ class TestLanguageSwitch(unittest.TestCase):
     """19:48 截图：说 yes 必须有反应，且中英能互切。"""
 
     def test_detect_and_intent_map(self):
-        self.assertEqual("en", i18n.detect("yes"))
+        # 11-13：短回答（yes / ok）不再切语言，完整英文句子才切。
+        # 但"短回答要能听懂"这件事没变——to_zh 的映射照旧，见下面的断言。
+        self.assertEqual("zh", i18n.detect("yes"))
+        self.assertEqual("en", i18n.detect("I want to know why it was rejected"))
         self.assertEqual("zh", i18n.detect("怎么了"))
         self.assertEqual("是的", i18n.to_zh("yes"))
         self.assertEqual("是的，是我", i18n.to_zh("i am"))
@@ -163,18 +166,36 @@ class TestLanguageSwitch(unittest.TestCase):
         self.assertFalse(i18n.wants_chinese("yes"))
         self.assertTrue(i18n.asks_english("can you speak english"))
 
-    def test_yes_is_not_ignored_and_reply_is_english(self):
+    def test_yes_is_not_ignored_and_reply_is_chinese(self):
+        """11-12 提的是"说 yes 必须有反应"，11-13 补了"别一听 yes 就切英文"。
+
+        两件事都要：yes 要被当成"是的"接住并推进到核身，回复仍然是中文。
+        """
         _, _, outs, _ = _run(["yes"])
         o = outs[0][1]
         self.assertEqual("IDENTITY", o["next_stage"], "yes 必须确认公司并进核身")
-        self.assertFalse(_is_zh(o["reply_text"]), "英文模式下不该冒出中文句子")
-        self.assertIn("four digits", o["reply_text"])
+        self.assertTrue(_is_zh(o["reply_text"]), "一句 yes 就把回复切成英文了")
+        self.assertIn("后四位", o["reply_text"])
 
     def test_english_chain_stays_english(self):
-        _, _, outs, _ = _run(["yes", "ok", "i am", "hold on hold on"])
+        """切过去之后一直是英文：中间夹一句 ok 也不能切回来。
+
+        语种切换的入口从"短回答"换成了"完整英文句子"，所以这条链的起点也换了——
+        用 yes/ok 起头的话，现在压根不会切到英文（那正是 11-13 要的效果）。
+        """
+        _, _, outs, _ = _run(["I want to know why my application was rejected",
+                              "ok",
+                              "can you explain the materials again",
+                              "hold on hold on"])
         for t, o in outs:
-            self.assertFalse(_is_zh(o.get("reply_text") or ""), t)
-            self.assertNotIn("请问您是", o.get("reply_text") or "")
+            text = o.get("reply_text") or ""
+            # 英文话术里**主体名保留中文**（安食），所以不能拿"有没有汉字"当判据。
+            # 要守的是"没有整句中文"。
+            words = re.findall(r"[A-Za-z]{2,}", text)
+            self.assertGreaterEqual(len(words), 3,
+                                    "说的是 %r，回复不像英文：%s" % (t, text))
+            for zh in ("请问您是", "我这边", "咱们", "好的，", "您这笔"):
+                self.assertNotIn(zh, text, "说的是 %r，冒出中文句子：%s" % (t, text))
 
     def test_ask_english_then_back_to_chinese(self):
         _, _, outs, _ = _run(["can you speak english",

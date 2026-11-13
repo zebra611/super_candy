@@ -83,8 +83,12 @@ class EnglishOnlyTest(unittest.TestCase):
         """
         self.assertEqual(i18n.detect("QZ202611060001"), "zh")
         self.assertEqual(i18n.detect("SHOP20260101"), "zh")
-        self.assertEqual(i18n.detect("yes"), "en", "真说英语仍要切英文")
-        self.assertEqual(i18n.detect("ok, thanks"), "en")
+        # 11-13 用户改了判据：ok / yes 这类**短回答**不再切语言，得是完整
+        # 英文句子才切（"回答 ok 的时候不要立马切英文"）。这里守住两头：
+        # 短回答别切、真在说英语要切。
+        self.assertEqual(i18n.detect("yes"), "zh", "一句 yes 不该切英文")
+        self.assertEqual(i18n.detect("ok, thanks"), "zh")
+        self.assertEqual(i18n.detect("I want to know why it was rejected"), "en")
 
 
 class ClosingHotlineTest(unittest.TestCase):

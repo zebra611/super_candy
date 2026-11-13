@@ -3521,6 +3521,25 @@ def main():
           _r38.returncode == 0 and "29/29" in _last38,
           ["退出码 %d；末行：%s" % (_r38.returncode, _last38[:80])])
 
+    # ---- 11-13：语言切换的边界 + 清单闭环不打转（用户两次截图）----
+    # 这两套都是"行为级"断言，不读汇总指标：说一句 ok 到底切没切语言、
+    # 连说三句"对"到底有没有收线，只能逐轮看回复。
+    _env_off = dict(os.environ, LLM_DISABLE="1")
+    for _mod, _label, _want in (
+            ("test_lang_switch", "语言切换：ok/yes 不切英文、完整英文句才切、"
+                                 "「我中文不好」要切", "OK"),
+            ("test_checklist_close", "清单后不打转、收线必带热线、收线后不再走业务、"
+                                     "「麻烦您」不算骂人", "OK")):
+        _r = subprocess.run([sys.executable, "-m", "scripts.%s" % _mod],
+                            cwd=ROOT, capture_output=True, text=True,
+                            timeout=300, env=_env_off)
+        # unittest 的 runner 默认往 **stderr** 写，只看 stdout 会永远读到空行
+        # （第一版就是这样：测试全过，这条校验却红）。
+        _out = (_r.stdout or "") + (_r.stderr or "")
+        _tail = (_out.strip().splitlines() or [""])[-1]
+        check(_label, _r.returncode == 0 and _want in _out,
+              ["退出码 %d；末行：%s" % (_r.returncode, _tail[:80])])
+
     print()
     print("=" * 74)
     total = len(results)
