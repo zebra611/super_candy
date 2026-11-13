@@ -2276,6 +2276,23 @@ def _short_digit_run(text):
     return 2 <= best < 4
 
 
+#: 原因字段自带「…需补充X、Y后重新提交」的操作尾巴（68 条官方目录档案全都有，
+#: 120 条 CSV 里 38 条有）。模板后面本来就单说「需要补充{materials}…重新提交」，
+#: 两段拼起来就是「需补充A、B后重新提交，需要补充A、B」——客户听到的是结巴。
+#: 只裁「含补充/补齐/补交 且以重新提交收尾」的那一段：材料由 {materials} 单独给、
+#: 动作由模板说，信息不丢；「需先停用原品牌」这种必要动作不含这些词，原样保留。
+_REASON_TAIL = re.compile(
+    r"[，,][^，。；]*?(?:补充|补齐|补交)[^，。；]*?重新提交[。\s]*$")
+
+
+def _trim_reason(reason):
+    """去掉原因末尾与模板重复的「补X后重新提交」，只留原因本身。"""
+    t = (reason or "").strip()
+    if not t:
+        return t
+    return _REASON_TAIL.sub("", t).strip() or t
+
+
 def _fill_application(text, app):
     """C5：把申请单档案的真值填进话术占位符（不写死业务内容）。
 
@@ -2295,7 +2312,7 @@ def _fill_application(text, app):
                               if brand and category else "您提交的资质申请",
         "{brand}": brand or "该品牌",
         "{category}": category or "对应类目",
-        "{reason}": str(app.get("reject_reason") or "材料问题"),
+        "{reason}": _trim_reason(str(app.get("reject_reason") or "材料问题")),
         "{materials}": "、".join(app.get("required_materials") or []) or "对应材料",
         "{code}": str(app.get("reject_code") or ""),
         # 档案里的 recheck_deadline 是建库时写死的绝对日期（2026-09/10），
