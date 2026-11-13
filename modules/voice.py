@@ -7,7 +7,8 @@
 当前状态（每一条都经实测，不是照设计写的）：
     asr()        真识别，走 qwen3-asr-flash 的 HTTP 接口（整段上传，非流式）；
                  送识别前过 VAD（见 vad_detect），噪声不当人话送模型；
-    tts()        真合成，走 qwen3-tts-flash，返回 OSS 音频链接给前端播；
+    tts()        真合成，走 cosyvoice-v3-flash（音色 longanhuan_v3 龙安欢 V3），
+                 返回 OSS 音频链接给前端播；
                  合成失败回落到浏览器播报，不允许静默；
     vad_detect() Z6 已换掉"有字节就算说完"：逐帧判定 + 起止聚合，
                  引擎优先 Silero（装了 onnxruntime + 模型），否则纯标准库谱特征；
@@ -618,13 +619,78 @@ def _friendly_http_error(code, raw, what):
     return RuntimeError("%s接口返回 %d：%s" % (what, code, raw))
 
 
+#: 两个模型族端点不同，但**返回体结构相同**（output.audio.url），
+#: 所以下面的解析、重试、http→https 一行都不用分支。
+_TTS_ENDPOINT_QWEN = ("https://dashscope.aliyuncs.com/api/v1/services/aigc/"
+                      "multimodal-generation/generation")
+_TTS_ENDPOINT_COSY = ("https://dashscope.aliyuncs.com/api/v1/services/audio/"
+                      "tts/SpeechSynthesizer")
+
+
+def _https_audio_url(url):
+    """OSS 默认给 http://，而我们是 https 页面。
+
+    不换成 https 的话，浏览器会以"混合内容"为由直接拦掉播放，
+    表现是"合成成功但一点声音都没有"，极难查。两个模型族都返回 OSS 链接，
+    所以这一道共用。
+    """
+    if url.startswith("http://"):
+        return "https://" + url[len("http://"):]
+    return url
+
+
+def _is_cosyvoice(model):
+    return str(model or "").lower().startswith("cosyvoice")
+
+
+def tts_request_body(cfg, text):
+    """按模型族构造 (endpoint, body)。纯函数、不发网络，便于单测与回滚。
+
+    11-13 换 cosyvoice-v3-flash + longanhuan_v3（龙安欢 V3）时踩到的三个差别：
+
+    1. 端点是 `audio/tts/SpeechSynthesizer`，不是
+       `aigc/multimodal-generation/generation`。官方主推
+       `{WorkspaceId}.cn-beijing.maas.aliyuncs.com` 专属域名，但通用域名
+       dashscope.aliyuncs.com 仍完全可用（SDK 文档原话：The existing domain
+       remains fully functional）——实测 200，所以**不需要** WorkspaceId。
+    2. **没有 `language_type`**：CosyVoice 用 `language_hints`（数组，当前
+       只处理第一个元素）提示目标语言。照旧把 language_type 塞进去有被判
+       非法参数的风险。
+    3. `format` / `sample_rate` 是可选参数（默认 mp3 / 22050）；显式给
+       mp3 / 24000，与真跑验证过的一致。
+
+    老模型（qwen3-tts-flash）的分支原样留着：换音色属于配置决策，
+    万一线上音色效果不对，改回配置就能回滚，不需要再动代码。
+    """
+    cfg = cfg or {}
+    model = cfg.get("model") or "qwen3-tts-flash"
+    inp = {"text": text, "voice": cfg.get("voice_name") or "Cherry"}
+    _ascii = sum(1 for ch in (text or "") if ord(ch) < 128)
+    _cjk = sum(1 for ch in (text or "") if "\u4e00" <= ch <= "\u9fff")
+    english = _ascii > _cjk * 3
+    if _is_cosyvoice(model):
+        # 只在明确是英文时给提示。中文回复里夹着品牌名、热线数字，
+        # 强行传 ["zh"] 反而可能把这些按中文逐字念。中文让模型自己判。
+        if english:
+            inp["language_hints"] = ["en"]
+        inp["format"] = cfg.get("format") or "mp3"
+        inp["sample_rate"] = int(cfg.get("sample_rate") or 24000)
+        endpoint = cfg.get("endpoint") or _TTS_ENDPOINT_COSY
+    else:
+        inp["language_type"] = ("English" if english
+                                else (cfg.get("language_type") or "Chinese"))
+        endpoint = cfg.get("endpoint") or _TTS_ENDPOINT_QWEN
+    return endpoint, {"model": model, "input": inp}
+
+
 def _tts_dashscope(text):
-    """调 qwen3-tts-flash 合成，返回可播放的音频 URL。
+    """调云端 TTS 合成，返回可播放的音频 URL。
 
     为什么返回 URL 而不是自己下载转 base64：
         这条链路上音频只播一次，转一道手多一次读盘/编码，还让响应体从
         几百字节涨到几百 KB。OSS 链接 24 小时有效，当场播完全够。
-    为什么要 language_type：模型是多语种的，不指定时英文单词会被念成中文字母。
+    语言判定与请求体格式见 `tts_request_body`：两个模型族的参数名不同，
+    这里只负责发请求、解析 output.audio.url、重试。
     """
     cfg = config_loader.tts_config()
     key = config_loader.secret("dashscope_api_key")
@@ -633,24 +699,9 @@ def _tts_dashscope(text):
     if not (text or "").strip():
         raise RuntimeError("空文本不合成")
 
-    # 语言跟着文本走：配置里是 Chinese，英文回复若仍按中文合成，
-    # 会把英文单词念成中文字母（11-12 英文互切后发现）。ASCII 占多数即按英文。
-    _lang = cfg.get("language_type") or "Chinese"
-    _ascii = sum(1 for ch in (text or "") if ord(ch) < 128)
-    _cjk = sum(1 for ch in (text or "") if "\u4e00" <= ch <= "\u9fff")
-    if _ascii > _cjk * 3:
-        _lang = "English"
-    body = {
-        "model": cfg.get("model") or "qwen3-tts-flash",
-        "input": {
-            "text": text,
-            "voice": cfg.get("voice_name") or "Cherry",
-            "language_type": _lang,
-        },
-    }
+    endpoint, body = tts_request_body(cfg, text)
     req = urllib.request.Request(
-        cfg.get("endpoint") or
-        "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+        endpoint,
         data=json.dumps(body).encode("utf-8"),
         headers={"Authorization": "Bearer " + key,
                  "Content-Type": "application/json"},
@@ -668,11 +719,7 @@ def _tts_dashscope(text):
             if not url:
                 raise RuntimeError("返回体里没有音频链接：%s"
                                    % json.dumps(payload, ensure_ascii=False)[:200])
-            # OSS 默认给 http://，而我们是 https 页面。
-            # 不换成 https 的话，浏览器会以"混合内容"为由直接拦掉播放，
-            # 表现是"合成成功但一点声音都没有"，极难查。
-            if url.startswith("http://"):
-                url = "https://" + url[len("http://"):]
+            url = _https_audio_url(url)
             return url
         except urllib.error.HTTPError as e:
             raw = e.read().decode("utf-8", "replace")[:200]
