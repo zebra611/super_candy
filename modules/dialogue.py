@@ -151,6 +151,36 @@ def _refuse_identity(text):
     core = _norm(text)
     return bool(core) and any(w in core for w in _REFUSE_IDENTITY)
 
+
+# 「记不住」不是「听不清」，也不是「不愿给」——是第三种情况：人还在，凭据拿不出来。
+# 11-13 自进化从 L2 基线里翻出 S05 第 6 轮：客户说「号码是店里注册的，我一时真
+# 想不起来」，客服回「可能信号不太好，我先不打扰您了」并收线。前四轮客服都在给
+# 替代路径（问姓名/单号/公司名），说得挺好；可 `noise_turns` 在后台一直累加，
+# 到第 5 次就抢在替代路径前面挂断——两条判据打架，输的是能救回来的那通电话。
+#
+# 判据故意宽：这一条只用来**不累计噪声**，最坏结果也只是多问一次替代路径，
+# 不会挂断。所以「忘了」「记不清」「想不起」这类一律算内容。
+_CANT_REMEMBER = ("记不住", "记不得", "记不清", "想不起", "不记得", "没记住",
+                  "忘了", "忘掉", "忘记了", "想不起来了")
+
+
+def _cant_remember(text):
+    core = _norm(text)
+    return bool(core) and any(w in core for w in _CANT_REMEMBER)
+
+
+# 「我不**会**报」跟「我不报」是同一件事，词表只收后者就会漏。
+# 故意**不并进 `_REFUSE_IDENTITY`**：那个词表驱动"两次拒绝就收尾"，
+# 误判的代价是提前挂断；这里只驱动"别把人说的话当链路噪声"，
+# 误判的代价是多问一次替代路径。两处风险不对称，就不该共用一张表。
+_DECLINES_INFO = ("不会报", "不给", "不能给", "不想给", "不愿意给",
+                  "没法提供", "没办法提供", "不方便提供")
+
+
+def _declines_info(text):
+    core = _norm(text)
+    return bool(core) and any(w in core for w in _DECLINES_INFO)
+
 # "不要钱 / 不收钱"里的"不要"修饰的是"钱"，不是"这个服务"（T10 否定作用域）。
 # 不区分的话，"不要钱啊，那办上吧"会被判成拒绝——把一个想办的客户记成"客户拒绝"，
 # 业务侧拿着这张工单去做挽留，用户接到第二个电话会更火。
@@ -2058,6 +2088,13 @@ IDENTITY_ASKS = {
 # 连续 NOISE_MAX 轮纯噪声才收尾，是防死等的兜底；期间任何有效输入立即清零。
 NOISE_MAX = 5
 
+# 「记不住」给替代路径的次数上限。拒绝（identity_refusals 两次）和噪声
+# （NOISE_MAX 五次）都有上限，只有"记不住"原来没有——客户一直想不起号码，
+# 客服就一直回"不着急，您也可以说公司全名"，阶段永远停在 IDENTITY。
+# 11-13 自进化把它报成 `agent_no_progress|IDENTITY|cant_remember`：
+# 通了 6 轮还没结束，客户也挂不了。三次替代路径之后体面收尾，转专员。
+ALT_MAX = 3
+
 # 核验环节连续含糊的退出（T12）。
 # 旧行为：用户连说"嗯/哦"，客服在尾号/姓名/姓氏之间轮换问法，问满 4 次才
 # identity_failed，中间一句致歉都没有。用户体感是"机器在绕圈子"，
@@ -3339,7 +3376,8 @@ def _stage_identity(session, text, flags):
         # 明确拒绝核身仍由下面 ① 的 identity_refusals 两次收尾。
         # 真噪声（evidence=noise）走上面 2094 行那条独立通道，不受影响。
         _contentful = (flags.get("ask") or flags.get("no") or flags.get("complain")
-                       or _refuse_identity(text) or _is_rhetorical_displeasure(text))
+                       or _refuse_identity(text) or _is_rhetorical_displeasure(text)
+                       or _cant_remember(text) or _declines_info(text))
         if _contentful:
             session["noise_turns"] = 0
         else:
@@ -3350,10 +3388,15 @@ def _stage_identity(session, text, flags):
                                               "可能这边信号不太好，我先不打扰您了，稍后会有专员与您联系，再见。"),
                                "no_voice")
 
-        # ① 明确拒绝提供身份信息（不报/不说/凭什么/不告诉）：
-        #    不能追着要，也不能一句「再见」挂掉——先解释为什么核对，
-        #    并给替代路径（订单号 / 姓名 / 尾号任一）。两次仍拒绝才收尾。
-        if _refuse_identity(text):
+        # ① 明确拒绝提供身份信息（不报/不说/凭什么/不告诉，以及口语化的
+        #    「我不会报 / 不给」）：不能追着要，也不能一句「再见」挂掉——
+        #    先解释为什么核对，并给替代路径（订单号 / 姓名 / 尾号任一）。
+        #    两次仍拒绝才收尾。
+        #
+        #    11-13 补 `_declines_info`：原来只把这类话当"不算噪声"，不进拒绝计数，
+        #    于是客户连说六轮"号码我不会报"，客服六轮都在给替代路径，通话说不到头。
+        #    从"五轮挂断"修成"无限循环"比原来更糟——拒绝必须有终点。
+        if _refuse_identity(text) or _declines_info(text):
             session["identity_refusals"] = int(session.get("identity_refusals", 0)) + 1
             if session["identity_refusals"] >= 2:
                 return _finish(
@@ -3367,6 +3410,20 @@ def _stage_identity(session, text, flags):
                                "理解您谨慎，这边核对只是想确认是您本人接听。您不方便报尾号的话，"
                                "报一下订单号、或者您登记的姓名，任意一个都行。"),
                 intent="identity_refuse")
+
+        # ①' 客户记不住号码（"号码是店里注册的，我一时真想不起来"）：
+        #     这不是拒绝，也不是噪声，是**凭据拿不出来**。继续给替代路径是对的，
+        #     但必须有次数上限——否则客户一直记不住，客服就一直问，通话说不到头。
+        #     三次之后体面收尾，转专员用官方号码联系（客户可以事后核实）。
+        if _cant_remember(text):
+            session["identity_alt_n"] = int(session.get("identity_alt_n", 0)) + 1
+            if session["identity_alt_n"] >= ALT_MAX:
+                return _finish(
+                    session,
+                    _identity_text("reply_alt_final",
+                                   "那我把您的情况记下来，稍后会有专员用官方号码联系您，"
+                                   "您可以先核实身份，再核对这笔申请。再见。"),
+                    "identity_unverifiable")
 
         # ② 提问 / 质疑（"你先说号码哪来的"、"核验这么麻烦"）：先正面回答。
         #    官方 QA 原话优先，其次知识库（带出处），答不上也要给一句可核实的承诺，

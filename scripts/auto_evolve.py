@@ -71,17 +71,30 @@ def _draft_fallback(cand, base_cfg):
     11-08 实跑：双击入口沿用了上一轮的空草稿，跳过提案，于是既不调模型、
     也永远进不了闸门，屏幕上只留一句「待填」。这里保证第 3 步结束后
     草稿一定填好且过静态校验，第 4 步一定能真的跑起来。
+
+    11-13 补一条：本地模板**没有**对应句子时（比如 `stages.IDENTITY.reply_noise`
+    这轮就只有它一个簇），原来的写法是 `p["value"] = old`，也就是把原文复制
+    一遍凑数。这样写出来的候选 `old == value`，进闸门必然"无收益"被拒，
+    却在 `candidates/` 里留下一个看起来像"优化器提了个建议"的文件
+    （auto_011 就是这么来的）。没有可起草的内容就不写这条补丁；
+    整份候选全空时调用方不落盘。
     """
     n = 0
+    keep = []
     for p in cand.get("patches") or []:
         val, old = str(p.get("value") or ""), str(p.get("old") or "")
         extra = set(re.findall(r"\{[^}]+\}", val)) - set(re.findall(r"\{[^}]+\}", old))
         bad = (not val.strip() or bool(extra)
                or bool(_evo.validate_candidate({"patches": [p]}, base_cfg)))
         if bad:
-            p["value"] = _LOCAL_DRAFTS.get(p.get("path"), old)
+            draft = _LOCAL_DRAFTS.get(p.get("path"))
+            if not draft or draft == old:
+                continue
+            p["value"] = draft
             p["rationale"] = "本地模板草案（确定性兜底）：保留核对关键词，不新增变量"
             n += 1
+        keep.append(p)
+    cand["patches"] = keep
     return n
 
 
@@ -238,9 +251,21 @@ def main():
     print("\n第 0 步｜真实通话体检（有真实数据才跑：先看用户实际踩到什么问题）")
     # 只做展示，不产出候选：真实通话给的是「改什么」的优先级，能不能上仍由闸门说了算。
     # allow_fail：没有真实通话库（新克隆、纯离线环境）不应该挡住整个闭环。
-    _rc = _run("真实通话体检", [_PY, "scripts/mine_calls.py", "mine", "--verify",
-                               "--json", "eval/reports/auto/real_calls.json"],
-               allow_fail=True)
+    #
+    # 11-13：`prep_deploy.py` 每次发布都把 `data/events.db` 移进 `data/archive/`，
+    # 于是这一步永远扫到一个不存在的库，报「没有可用会话」然后跳过——
+    # 体检看着绿，其实是没读到东西。库不在了就自动退到最新一份存档。
+    _mine_db = os.path.join(_ROOT, "data", "events.db")
+    _arch = sorted(glob.glob(os.path.join(_ROOT, "data", "archive", "events-*.db")))
+    if not os.path.exists(_mine_db) and _arch:
+        _mine_db = _arch[-1]
+        print("  本地 events.db 已被部署清理，改扫最新存档：%s"
+              % os.path.basename(_mine_db))
+    _mine_cmd = [_PY, "scripts/mine_calls.py", "mine", "--verify",
+                 "--json", "eval/reports/auto/real_calls.json"]
+    if os.path.exists(_mine_db):
+        _mine_cmd += ["--db", os.path.relpath(_mine_db, _ROOT)]
+    _rc = _run("真实通话体检", _mine_cmd, allow_fail=True)
     if _rc != 0:
         print("  [跳过] 没有可用的真实通话数据，不影响后面的模拟链")
 
@@ -305,13 +330,34 @@ def main():
             cmd.append("--llm")
         _run("L2 提案", cmd)
         l2_cand = _read(l2_path) if os.path.exists(l2_path) else {}
+    if l2_cand and not (l2_cand.get("patches") or []):
+        # 「可优化簇（无）」时 propose 也会写一个空骨架文件（patches=[]）。
+        # 留着它，下一轮就会「沿用」并走到闸门口报「话术还空着」——
+        # 看起来像还有事没做完，其实本轮没有可优化的话术。
+        try:
+            os.remove(l2_path)
+        except OSError:
+            pass
+        print("  [完成] L2 没有可优化簇，不生成候选")
+        l2_cand = None
     # 无论沿用、重做还是模型起草，送闸门前的草稿必须填好且过静态校验。
     if l2_cand and l2_cand.get("patches"):
         base_cfg = _read(os.path.join(_ROOT, "config", "scenes", "pop_reject.json"))
+        had = len(l2_cand["patches"])
         n = _draft_fallback(l2_cand, base_cfg)
-        if n:
-            _write(l2_path, l2_cand)
-            print("  [完成] %d 句改写用本地模板填好（不调模型也能进闸门）" % n)
+        if l2_cand.get("patches"):
+            if n:
+                _write(l2_path, l2_cand)
+                print("  [完成] %d 句改写用本地模板填好（不调模型也能进闸门）" % n)
+        else:
+            # 全部补丁都起草不出来：不留空候选。否则下一次跑会「沿用」这个
+            # old==value 的文件，闸门每轮白跑一遍再判"无收益"。
+            try:
+                os.remove(l2_path)
+            except OSError:
+                pass
+            print("  [完成] %d 条补丁都无法起草（本地模板没有对应句子），不生成候选" % had)
+            l2_cand = None
     if p_cand is not None:
         print("  [沿用] 上一轮性格草稿：%s" % _rel(p_path))
     else:
@@ -360,6 +406,8 @@ def main():
         elif l2_cand:
             print("  [待填] L2 草稿的话术还空着：%s" % _rel(l2_path))
             print("         填 patches[].value 后再跑一次本命令；或加 --llm 自动起草")
+        else:
+            print("  [完成] L2 没有可起草的话术候选，本轮无需闸门")
         if p_cand and _p_ready(p_cand):
             rc = _run("性格闸门", [_PY, "scripts/evolve_persona.py", "gate", _rel(p_path)],
                       allow_fail=True)

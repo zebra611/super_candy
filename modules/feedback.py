@@ -23,6 +23,7 @@ import difflib
 import re
 
 import config_loader
+from modules.attribution import asks_same_fact
 
 #: 用户在提问的动作。与 user_sim 的动作名对齐，不额外发明词。
 ASK_ACTIONS = ("ask_why", "ask_material", "ask_fee", "reask_already_told")
@@ -101,21 +102,15 @@ def _stage(turn):
 
 
 def _asks_again(turn, fact_key):
-    """客服这一句是不是又在索要同一条信息（精确措辞，不用宽泛的 detect_asks）。
+    """客服这一句是不是又在索要同一条信息。
 
-    contact_name 不收裸「姓名」：性格适配层会在句尾挂「说联系人姓名也行」，
-    客服原话其实是「核对上了，感谢配合……」——裸词会把"已经接住、顺手给个
-    备选路径"误判成"又问一遍"（A04/A06 第 3 轮实测，11-10 与 attribution
-    同一处假阳，两边词表必须一致，否则同一句话在面板与归因里两种结论）。
+    11-13 起**不再维护第二份词表**，直接问 `attribution.asks_same_fact`：
+    原来这里对尾号那一栏的收词比归因器宽，同一句
+    「尾号 0086，对上了」在面板里算缺陷、在归因里算正常。自进化据此报了
+    5 条 `slot_loss`，全是假阳。两份词表的注释还写着"必须一致"——
+    靠注释约束的一致性不算一致性，改成引用同一个函数。
     """
-    said = _said(turn)
-    marks = {
-        "phone_tail": ("后四位", "后 4 位", "尾号", "最后四位"),
-        "contact_name": ("您的姓名", "怎么称呼", "怎么叫您", "您贵姓",
-                         "姓名是", "报一下姓名", "确认一下姓名", "说一下姓名"),
-        "application_id": ("申请单编号", "单号"),
-    }.get(fact_key, ())
-    return any(w in said for w in marks)
+    return asks_same_fact(_said(turn), fact_key)
 
 
 _FACT_OF_ACTION = {"answer_tail": "phone_tail", "answer_name": "contact_name",

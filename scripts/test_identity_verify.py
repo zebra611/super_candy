@@ -340,5 +340,75 @@ class TestLockIsTheOnlySwitch(unittest.TestCase):
                       "HTTP 入口没锁目标：线上会退回「报谁的号就换成谁」，也就是串单")
 
 
+class TestCantRemember(unittest.TestCase):
+    """客户记不住号码：不是噪声，也不是拒绝，但也不能无限问下去。
+
+    11-13 自进化从 L2 基线翻出 S05 第 6 轮：客户说「号码是店里注册的，我一时
+    真想不起来」，客服回「可能信号不太好，我先不打扰您了」并收线。前几轮客服
+    一直在给替代路径，说得挺好；可 `noise_turns` 在后台照涨，到第 5 次就抢在
+    替代路径前面挂断——两条判据打架，输的是能救回来的那通电话。
+    """
+
+    def setUp(self):
+        try:
+            tools._reset_for_test()
+        except Exception:
+            pass
+
+    def test_remember_is_not_noise(self):
+        """连说四句记不住，也不许出现「信号不太好」——人在说话，只是拿不出凭据。"""
+        s = _session("iv-remember-noise")
+        _say(s, "对，是我")
+        for text in ("号码我记不住", "我一时真想不起来", "那个号我忘了", "真的记不清了"):
+            out = _say(s, text)
+            said = out.get("reply_text") or ""
+            self.assertNotIn("信号不太好", said, "把记不住当成了噪声：%s" % said)
+            self.assertNotIn("杂音", said, "把记不住当成了噪声：%s" % said)
+            # 光看回复不够：噪声计数照样可能在后台涨到阈值（alt 上限先收尾，
+            # 回复上看不出区别）。这条断言的是机制本身。
+            self.assertEqual(int(s.get("noise_turns") or 0), 0,
+                             "记不住被记进了噪声计数：%s" % s.get("noise_turns"))
+
+    def test_offers_alternative_credential(self):
+        """记不住尾号时，必须给另一条能核上的路（姓名 / 单号 / 公司名）。"""
+        s = _session("iv-remember-alt")
+        _say(s, "对，是我")          # 先答公司确认，进到核身那一问
+        said = _say(s, "号码我记不住").get("reply_text") or ""
+        self.assertTrue(any(w in said for w in ("姓名", "单号", "公司")),
+                        "既没要到尾号也没给替代路径：%s" % said)
+
+    def test_closes_after_three_tries(self):
+        """三次替代路径之后收尾转专员——否则客户一直记不住，通话说不到头。"""
+        s = _session("iv-remember-close")
+        _say(s, "对，是我")
+        outs = [_say(s, "号码我记不住"), _say(s, "我一时真想不起来"),
+                _say(s, "那个号我忘了")]
+        last = outs[-1]
+        self.assertEqual(last.get("intent"), "identity_unverifiable",
+                         "第三次记不住还不收尾：%s" % last.get("reply_text"))
+        self.assertEqual(last.get("next_stage"), "DONE")
+        self.assertIn("专员", last.get("reply_text") or "",
+                      "收尾没给下一步：%s" % last.get("reply_text"))
+
+    def test_declines_with_would_not_closes_in_two(self):
+        """「我不**会**报」跟「我不报」是同一件事，不能只认后者。
+
+        词表只收「不报」时，客户说「号码我不会报」既不重置噪声计数、也不进
+        拒绝计数：第一版只把它算进"不算噪声"，结果从"五轮挂断"变成"永远不挂"——
+        实测连说六轮，客服六轮都在给替代路径，通话说不到头。
+        拒绝必须有终点：两次收尾，与 `_refuse_identity` 同一条出口。
+        """
+        s = _session("iv-declines")
+        _say(s, "对，是我")
+        first = _say(s, "号码我不会报")
+        self.assertEqual(first.get("intent"), "identity_refuse",
+                         "第一次拒绝该解释并给替代路径：%s" % first.get("reply_text"))
+        self.assertEqual(int(s.get("noise_turns") or 0), 0,
+                         "明确表态被记成了噪声：%s" % s.get("noise_turns"))
+        second = _say(s, "号码我不会报")
+        self.assertEqual(second.get("intent"), "refused_identity",
+                         "第二次拒绝仍不收尾，会无限循环：%s" % second.get("reply_text"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -52,17 +52,63 @@ _REFUSAL_DENY = ("不办", "不需要", "不用了", "别打了", "不整改")
 #: 路径"误判成"又问一遍"（11-09 实测 A04/A06/A09 三条都是这个假阳）。
 #: 判据宁可漏：记进去的每一条都要能被原话证实。
 _RE_ASK = {
-    "phone_tail": ("后四位", "后 4 位"),
+    "phone_tail": ("后四位", "后 4 位", "尾号", "最后四位"),
     "contact_name": ("您的姓名", "怎么称呼", "怎么叫您", "您贵姓",
                      "姓名是", "报一下姓名", "确认一下姓名", "说一下姓名"),
     "application_id": ("申请单编号", "单号"),
 }
+
+#: 索要的**祈使信号**：光提到名称不算，得有"要"的动作。
+#:
+#: 11-13 自进化跑出来的 5 条 `slot_loss` 全是假阳：客服说的是
+#: 「尾号 0086，对上了。那这几样材料您清楚怎么准备吗？」——它在**复述确认**
+#: 客户刚给的值，却被判成"又要一遍"。原因是 feedback 那份词表收「尾号」，
+#: 而 attribution 只收「后四位」，同一句话两处两种结论（feedback 的注释里
+#: 写着"两边词表必须一致"，实际早就漂了）。
+#:
+#: 名词判不了这件事，动词才行。「尾号 0086，对上了」没有要的动作；
+#: 「麻烦您再报一下后四位」有。所以判据收窄成：命中名称 **且** 命中祈使词。
+#: 宁可漏（「您的后四位是？」这种极简问句会漏）也不要误判——
+#: 误判会让优化器去追一个不存在的缺陷，还会把"客服确认客户答对了"优化掉。
+_ASK_IMPERATIVE = (
+    "麻烦", "请", "报一下", "报下", "说一下", "说下", "讲一下", "告诉我",
+    "是多少", "多少号", "方便说", "再报", "再给", "再确认", "需要您", "给我",
+    "核对一下您", "确认一下您",
+)
+
+
+def asks_same_fact(said, fact_key):
+    """客服这一句是不是**在要**同一条信息（不是复述确认）。
+
+    attribution 与 feedback 共用这一份：两边各写一份词表，就会像 11-13 那样
+    同一句话在归因里正常、在反馈面板里算缺陷，接着优化器朝错的方向改。
+    """
+    said = said or ""
+    if not any(w in said for w in _RE_ASK.get(fact_key, ())):
+        return False
+    return any(w in said for w in _ASK_IMPERATIVE)
 
 #: 客服把用户的话当噪声的典型措辞（Q1-D1 的原始现象）
 _NOISE_WORDS = ("杂音", "没听清", "没太听清", "听不清", "信号不太好")
 
 #: 按设计就不该闭环的画像目标
 _DESIGNED_DROPOFF = ("refuse", "wrong_person", "hangup_now", "offtopic")
+
+#: 用户整通都没给过可核身信息的三类动作：拒绝提供 / 记不住 / 否认本人。
+#: 用来给 `agent_no_progress` 加一道豁免——客户自始至终不给，客服停在同一阶段
+#: 是**用例设定**，不是客服没推进。
+#:
+#: 11-13 S05 实测：客户 8 轮一直拒绝且记不住，客服给了三次替代路径（姓名 /
+#: 单号 / 公司名）并体面收尾转专员，行为完全正确，仍被判 agent_no_progress。
+#: 这条假缺陷会一直挂在基线里，让每个候选都被"缺陷数没减少"卡住——
+#: 归因器一旦开始冤枉人，优化器就再也拿不到有效信号。
+#:
+#: 判据刻意留一道缝：只要出现过 ask_why / ask_material / mishear 这类
+#: "人在谈但没给信息"的动作就不豁免，因为那确实可能是客服问法把人堵住了；
+#: 而客户真有复读、丢槽位，会由 agent_loop / agent_slot_loss 单独报出来。
+_NO_INFO_ACTIONS = ("refuse_info", "cant_remember", "deny")
+#: 不表态的轮次（确认公司、嗯一声）：既不提供信息，也不构成"不配合"。
+_NEUTRAL_ACTIONS = ("", "yes_company", "ack")
 
 #: 客户明确表示"清楚了 / 明白了"的动作。出现它时，即使用例写着 expect.closed=False，
 #: 也不能断定是客服擅自回写——可能是画像被说服了，属于**用例期望待复核**。
@@ -116,8 +162,7 @@ def _agent_said(turn):
 
 def _asks_again(turn, fact_key):
     """客服这一句是不是又在要同一条信息。"""
-    said = _agent_said(turn)
-    return any(w in said for w in _RE_ASK.get(fact_key, ()))
+    return asks_same_fact(_agent_said(turn), fact_key)
 
 
 def _stage(turn):
@@ -215,7 +260,24 @@ def analyse_turns(turns):
     # 4) 走完一轮通话还停在 IDENTITY 且始终没核上 → 记为无进展（只记一次）
     if len(turns) >= 4:
         stages = [_stage(t) for t in turns]
-        if stages and all(s in ("", "GREETING", "IDENTITY") for s in stages):
+        acts = [(t.get("user") or {}).get("action") or "" for t in turns]
+        # 客户整通都没给过可核身信息（一直拒绝 / 记不住 / 否认）：停在 IDENTITY
+        # 是用例设定，不算客服没推进。理由与词表见 `_NO_INFO_ACTIONS`。
+        _uncooperative = (bool(acts)
+                          and any(a in _NO_INFO_ACTIONS for a in acts)
+                          and all(a in _NO_INFO_ACTIONS or a in _NEUTRAL_ACTIONS
+                                  for a in acts))
+        # 客服已经体面收尾（转专员 / 拒绝收线 / 噪声收线 / 已结束）：
+        # 通话**结束了**、给了下一步，"通话说不到头"不成立。
+        # 11-13 A08 实测：客户问材料（客服按合规答"先核对身份才能讲"）、
+        # 再记不住三次，第 6 轮收尾带热线——行为教科书级正确，仍被判
+        # agent_no_progress，只因为客户中途问过一个材料问题，不满足
+        # 上面那条"整通不配合"的豁免。收尾本身就该豁免，跟客户问过什么无关。
+        _closed_intent = _intent(turns[-1]) in (
+            "identity_unverifiable", "refused_identity", "no_voice",
+            "done_again", "unclear", "hotline_close")
+        if (stages and all(s in ("", "GREETING", "IDENTITY") for s in stages)
+                and not _uncooperative and not _closed_intent):
             out.append({
                 "turn": len(turns), "code": AGENT_NO_PROGRESS, "stage": stages[-1],
                 "user_action": (turns[-1].get("user") or {}).get("action", ""),

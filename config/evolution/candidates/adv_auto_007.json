@@ -1,0 +1,9 @@
+{
+ "id": "adv_auto_007",
+ "created": "2026-11-13 12:02:56",
+ "from_baseline": "eval/reports/adversarial_baseline.json",
+ "targets": [],
+ "patches": [],
+ "code_only": [],
+ "unexplained": []
+}
