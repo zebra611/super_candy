@@ -265,6 +265,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"created": False, "ticket": exist,
                             "note": "同一 idempotency_key 已建过单，返回原单"})
                 return
+            # content 原样整段存下来，不做字段白名单。
+            # 为什么：调用方回写的业务字段是随赛题场景变的（售后是
+            # reject_category / reject_summary / materials_required…），
+            # 对端如果只挑四个自己认识的字段，其余全丢，工单就变成空单——
+            # 而调用方读的是自己的本地副本，照样显示"成功"，这是最典型的假绿。
+            # 存原始 content 的代价是存储大一点，收益是"回写到底写了什么"可被对端验证。
+            content = body.get("content")
             ticket = {
                 "ticket_id": "T" + uuid.uuid4().hex[:10].upper(),
                 "idempotency_key": key,
@@ -274,6 +281,7 @@ class Handler(BaseHTTPRequestHandler):
                 "consent": body.get("consent"),
                 "need": body.get("need") or "",
                 "note": body.get("note") or "",
+                "content": content if isinstance(content, dict) else {},
                 "created_at": int(time.time() * 1000),
                 "source": body.get("source") or "voice-agent",
             }
