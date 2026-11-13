@@ -799,7 +799,9 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
                 {_nm, _nm + "先生", _nm + "女士", _nm + "经理",
                  _nm[0] + "先生", _nm[0] + "女士", _nm[0] + "经理", _nm[0] + "总"},
                 key=len, reverse=True))
-            text = re.sub(r"^\s*(?:%s)\s*[，,、]\s*" % _forms, "", text).lstrip("，,、 ")
+            # 「马涛您好，」「马涛你好，」也是称呼，别再迭代第四轮。
+            text = re.sub(r"^\s*(?:%s)\s*(?:您好|你好|哈|啊)?\s*[，,、]\s*" % _forms,
+                          "", text).lstrip("，,、 ")
 
     # 性格适配放在措辞层**之后**：它只调形式（客套前缀/引导句），
     # 官方原话、核身问句、挂断话术一个字都不动——那三类要么必须逐字复述，

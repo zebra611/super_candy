@@ -137,6 +137,39 @@ class AfterDone(unittest.TestCase):
                             "改口被当成闲聊挡掉了：%s" % r.get("reply_text"))
 
 
+class NoNameAtSentenceStart(unittest.TestCase):
+    """出话路径上不许以客户姓名开头——措辞层很爱加这个称呼。
+
+    11-13 线上连续见到三种写法：`马涛，…` / `马涛先生，…` / `马涛您好，…`。
+    agent_free 内部剥过一道，但措辞层把整句重写之后又会加回来，
+    所以必须在 `_reply` 出口再剥一次。
+    """
+
+    def setUp(self):
+        tools._reset_for_test()
+        self.sid = app.start_call(lock_target=True)["session_id"]
+        self.sess = app._SESSIONS[self.sid]
+
+    def tearDown(self):
+        app.end_call(self.sid)
+
+    def test_salutation_forms_stripped(self):
+        for text in ("马涛，这通电话就先到这里。",
+                     "马涛先生，这通电话就先到这里。",
+                     "马涛您好，这通电话就先到这里。",
+                     "马经理，麻烦您报一下后四位。"):
+            out = dialogue._reply(self.sess, text, next_stage="DONE",
+                                  intent="done_again")
+            self.assertNotIn("马涛", out["reply_text"], out["reply_text"])
+            self.assertNotIn("马经理", out["reply_text"], out["reply_text"])
+
+    def test_echo_of_reported_name_kept(self):
+        """客户自己报了名字，句中的复述要留着（那是承接他给的值）。"""
+        out = dialogue._reply(self.sess, "对，是您本人，马涛。",
+                              next_stage="DONE", intent="done_again")
+        self.assertIn("马涛", out["reply_text"], out["reply_text"])
+
+
 class PoliteIsNotAngry(unittest.TestCase):
     """「麻烦您…」是客气话，不是骂人。"""
 
