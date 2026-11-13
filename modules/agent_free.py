@@ -502,9 +502,12 @@ def _drop_name_call(text, session):
     if len(nm) < 2:
         return text
     forms = {nm}
-    # 「晏经理」「晏总」：模型很爱把联系人自动升级成职务称呼，同样不许。
+    # 「马经理」「马总」：模型很爱把联系人自动升级成职务称呼，同样不许。
+    # 11-13 线上又见到第三种写法：「马涛先生，这通电话就先到这里」——
+    # 全名 + 尊称，既不是 nm 也不是 nm[0]+尊称，前面两轮都没盖住。
     for title in ("经理", "总", "老板", "老师", "女士", "先生"):
         forms.add(nm[0] + title)
+        forms.add(nm + title)
     t = text
     for f in sorted(forms, key=len, reverse=True):
         ef = re.escape(f)
