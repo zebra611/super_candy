@@ -35,12 +35,12 @@ def _app():
     a = (T.next_outbound_target().get("application") or {})
     if a.get("brand_name") and a.get("required_materials"):
         return a
-    return {"brand_name": "闻樾", "category_l1": "家用电器",
+    return {"brand_name": "暖时光", "category_l1": "家用电器",
             "reject_reason": "授权链路不完整，缺少品牌方到一级经销商的逐级授权文件",
             "required_materials": ["品牌授权书", "逐级授权链路证明", "授权方营业执照"],
             "recheck_deadline": "2026-10-05",
-            "company_name": "北京市川上商贸有限公司",
-            "company_short_name": "川上", "shop_name": "川上官方旗舰店",
+            "company_name": "北京市安食商贸有限公司",
+            "company_short_name": "安食", "shop_name": "安食官方旗舰店",
             "contact_role": "法定代表人"}
 
 

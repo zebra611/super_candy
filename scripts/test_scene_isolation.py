@@ -153,7 +153,7 @@ class RepairMarkTest(unittest.TestCase):
         tools._reset_for_test()
         s = D.new_session("t-refuse")
         s["stage"] = "OFFER"
-        s["slots"]["application"] = {"brand": "闻樾", "category": "家用电器",
+        s["slots"]["application"] = {"brand": "暖时光", "category": "家用电器",
                                      "reject_reason": "授权链路不完整",
                                      "materials": "品牌授权书"}
         s["slots"]["identity_confirmed"] = True

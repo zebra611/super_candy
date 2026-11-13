@@ -136,9 +136,9 @@ class TestGuard(unittest.TestCase):
         self.assertIn("20261101001", out)
 
     def test_company_name_cannot_disappear(self):
-        app = {"company_name": "北京市柏庐商贸有限公司"}
-        out, _ = self._adapt("北京市柏庐商贸有限公司的申请被驳回。", application=app)
-        self.assertIn("北京市柏庐商贸有限公司", out)
+        app = {"company_name": "北京市京华商贸有限公司"}
+        out, _ = self._adapt("北京市京华商贸有限公司的申请被驳回。", application=app)
+        self.assertIn("北京市京华商贸有限公司", out)
 
     def test_placeholder_not_introduced(self):
         out, applied = self._adapt("请补充材料。")

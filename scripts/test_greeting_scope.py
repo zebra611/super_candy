@@ -154,7 +154,7 @@ class TestScopeGates(unittest.TestCase):
         s = D.new_session("scope")
         if with_app:
             s["slots"]["application"] = {
-                "brand_name": "闻樾", "category_l1": "家用电器",
+                "brand_name": "暖时光", "category_l1": "家用电器",
                 "reject_reason": "授权链路不完整",
                 "required_materials": ["品牌授权书", "逐级授权链路证明"],
                 "recheck_deadline": "2026-09-09",

@@ -2122,19 +2122,19 @@ def main():
     config_loader.set_scene(_q4_prev)      # 切回默认场景
 
     # ⓪-d nlg 实体保护：改写把公司名改没了必须丢弃（实测踩过：
-    #     "北京市川上商贸有限责任公司" 被改写成 "这家公司"，六道守卫一道没拦）。
+    #     "北京市安食商贸有限责任公司" 被改写成 "这家公司"，六道守卫一道没拦）。
     try:
         from modules import nlg as _nlg
-        _sess = {"outbound_target": {"company_name": "北京市川上商贸有限责任公司",
-                                     "company_short_name": "川上",
-                                     "shop_name": "川上官方旗舰店",
+        _sess = {"outbound_target": {"company_name": "北京市安食商贸有限责任公司",
+                                     "company_short_name": "安食",
+                                     "shop_name": "安食官方旗舰店",
                                      "application_id": "QZ202611060001",
-                                     "brand_name": "闻樾",
+                                     "brand_name": "暖时光",
                                      "phone_tail": "0086"}}
-        _base = "请问您是北京市川上商贸有限责任公司的法定代表人吗？"
+        _base = "请问您是北京市安食商贸有限责任公司的法定代表人吗？"
         check("nlg 实体保护：公司名被改写掉时必须丢弃改写",
               _nlg._entities_ok(_base, "请问您是这家公司的法定代表人吗？", _sess) is False
-              and _nlg._entities_ok(_base, "请问您是北京市川上商贸有限责任公司的法定代表人吗？",
+              and _nlg._entities_ok(_base, "请问您是北京市安食商贸有限责任公司的法定代表人吗？",
                                     _sess) is True,
               ["改掉公司名 → 判为不合格；保留公司名 → 判为合格"])
     except Exception as _exc:
@@ -2477,7 +2477,7 @@ def main():
           attribution.AGENT_REPAIR_IGNORED in _codes, ["缺陷码=%s" % _codes])
 
     # 30.8d 性格层会在句尾挂「说联系人姓名也行」，不能被当成"又在要姓名"。
-    _suffix_turn = [{"user": {"action": "answer_name", "text": "我叫晏青梧"},
+    _suffix_turn = [{"user": {"action": "answer_name", "text": "我叫马涛"},
                      "agent": {"reply_text": "核对上了，感谢配合。说联系人姓名也行。",
                                "stage": "IDENTITY", "next_stage": "NEED",
                                "intent": "ack", "slots": {}}}]
@@ -2847,12 +2847,12 @@ def main():
                == "hard_of_hearing")({}),
           ["8 类词表 + 弱信号阈值"])
 
-    _ps = {"slots": {"application": {"company_name": "北京市柏庐商贸有限公司"}}}
+    _ps = {"slots": {"application": {"company_name": "北京市京华商贸有限公司"}}}
     _ps.update({"persona_code": "impatient", "persona_conf": 1.0})
-    _base = "北京市柏庐商贸有限公司的申请单编号 20261101001 请核对。"
+    _base = "北京市京华商贸有限公司的申请单编号 20261101001 请核对。"
     _pn, _pa = _pm.adapt(_ps, _base, "NEED")
     check("针对性回复只改形式：公司名/单号/禁语/占位一律不被改掉",
-          "北京市柏庐商贸有限公司" in _pn and "20261101001" in _pn
+          "北京市京华商贸有限公司" in _pn and "20261101001" in _pn
           and not any(m in _pn for m in ("【", "】", "XX"))
           and not any(w in _pn for w in config_loader.forbidden_words()),
           ["原句=%s 适配后=%s" % (_base[:20], _pn[:34])])
@@ -3390,41 +3390,41 @@ def main():
           ["退出码 %d；末行：%s" % (_r35.returncode, _last35[:80])])
 
     # ---- 模型客服的三处线上毛病（11-11 截图那通，用户逐句指出来的）----
-    # ① 直呼客户姓名：「晏青梧，您简单回我一句清楚了或者还有疑问就行。」
-    #    核身对上的是"这通电话打对了单"，不是"接电话的人叫晏青梧"。
+    # ① 直呼客户姓名：「马涛，您简单回我一句清楚了或者还有疑问就行。」
+    #    核身对上的是"这通电话打对了单"，不是"接电话的人叫马涛"。
     from modules import agent_free as _af
-    _nm_sess = {"outbound_target": {"contact_name": "晏青梧",
-                                    "company_name": "北京晏青梧科技有限公司"}}
+    _nm_sess = {"outbound_target": {"contact_name": "马涛",
+                                    "company_name": "北京马涛科技有限公司"}}
     _nm_cases = [
-        ("晏青梧，您简单回我一句清楚了或者还有疑问就行。", "晏青梧"),
-        ("晏经理，麻烦您报一下后四位。", "晏经理"),
-        ("对，是您本人，晏青梧。", "晏青梧"),
+        ("马涛，您简单回我一句清楚了或者还有疑问就行。", "马涛"),
+        ("马经理，麻烦您报一下后四位。", "马经理"),
+        ("对，是您本人，马涛。", "马涛"),
     ]
     _nm_bad = []
     for _a, _b in _nm_cases:
         _got = _af._drop_name_call(_a, _nm_sess)
         if _b in _got:
             _nm_bad.append((_a, _got))
-    _nm_keep = _af._drop_name_call("您的联系人写的是晏青梧，对不上就得改授权书。", _nm_sess)
+    _nm_keep = _af._drop_name_call("您的联系人写的是马涛，对不上就得改授权书。", _nm_sess)
     check("模型客服不直呼客户姓名（句首/句尾/职务称呼都删，句子里的档案值不动）",
-          not _nm_bad and "晏青梧" in _nm_keep,
+          not _nm_bad and "马涛" in _nm_keep,
           ["漏删=%s" % (_nm_bad[:1] or "无"), "档案句保留=%r" % _nm_keep[:26]])
 
-    # ② 「对，是您本人，晏青梧」——客户只说"是我"，姓名是客服手上的资料，
+    # ② 「对，是您本人，马涛」——客户只说"是我"，姓名是客服手上的资料，
     #    不是他刚给的值。念出来等于把联系人姓名告诉一个还没确认是谁的人。
     _fw = dialogue.new_session("verify-factack-name")
-    _fw["outbound_target"] = {"contact_name": "晏青梧", "company_name": "北辰商贸"}
+    _fw["outbound_target"] = {"contact_name": "马涛", "company_name": "北辰商贸"}
     _fw["slots"]["identity_confirmed"] = True
     _fw_cfg = config_loader.stage_config("CONFIRM") or {}
     # 这一条只验承接句本身，不改写层：nlg.say 直接返回骨架，
     # 免得自检因为网络抖动红绿不定（改写层自己有离线用例）。
     with mock.patch.object(nlg, "say", side_effect=lambda *a, **k: a[1]):
         _fw_out = dialogue._fact_ack_reply(_fw, "是我", _fw_cfg, {})
-        _fw_named = dialogue._fact_ack_reply(_fw, "是我，晏青梧", _fw_cfg, {})
+        _fw_named = dialogue._fact_ack_reply(_fw, "是我，马涛", _fw_cfg, {})
     check("客户只说「是我」时，承接句不许带出档案里的姓名（他自己报了才复述）",
           "是您本人" in _fw_out["reply_text"]
-          and "晏青梧" not in _fw_out["reply_text"]
-          and "晏青梧" in _fw_named["reply_text"],
+          and "马涛" not in _fw_out["reply_text"]
+          and "马涛" in _fw_named["reply_text"],
           ["只说是我=%s｜自己报了=%s"
            % (_fw_out["reply_text"][:22], _fw_named["reply_text"][:22])])
 
@@ -3440,7 +3440,7 @@ def main():
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0},
                 "retries": 0, "error": ""}
 
-    _lat_sess = {"outbound_target": {"contact_name": "晏青梧", "phone_tail": "9403",
+    _lat_sess = {"outbound_target": {"contact_name": "马涛", "phone_tail": "9403",
                                      "required_materials": ["授权书"]}}
     with mock.patch.object(_af, "enabled", return_value=True), \
             mock.patch.object(_af.llm, "available", return_value=True), \

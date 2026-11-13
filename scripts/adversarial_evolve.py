@@ -386,14 +386,14 @@ def cmd_check(a):
     from modules.adversary import AdversarySim as AS, _TEMPLATES
     p = {"id": "CHK", "max_level": 4, "traits": {"patience": 20},
          "knows": {"phone_tail": True}, "style": ["哎呀"]}
-    company = {"phone_tail": "0086", "contact_name": "晏青梧",
-               "company_name": "闻樾", "application_id": "123456"}
+    company = {"phone_tail": "0086", "contact_name": "马涛",
+               "company_name": "暖时光", "application_id": "123456"}
 
     def play(replies):
         s = AS(p, company, seed="CHK")
         return [s.say(t) for t in replies], s
 
-    seq = ["请问您是闻樾的负责人吗？"] + ["好的，核对申请单需要您预留手机号的后四位，说四个数字就行。"] * 6
+    seq = ["请问您是暖时光的负责人吗？"] + ["好的，核对申请单需要您预留手机号的后四位，说四个数字就行。"] * 6
     o1, s1 = play(seq)
     o2, s2 = play(seq)
     ok_det = json.dumps(o1, ensure_ascii=False) == json.dumps(o2, ensure_ascii=False)
@@ -402,9 +402,9 @@ def cmd_check(a):
                             and "XX" not in (x or {}).get("text", "")
                             for x in o1 if x)
     ok_escalate = s1.level >= 3 and s1.hits["repeat"] >= 2
-    _, calm = play(["请问您是闻樾的负责人吗？",
+    _, calm = play(["请问您是暖时光的负责人吗？",
                     "您的号码是商家入驻时预留的联系方式，官方审核只用来核对这笔资质申请。",
-                    "闻樾品牌因授权链不完整没有通过审核，需要补充品牌授权书后重新提交。"])
+                    "暖时光品牌因授权链不完整没有通过审核，需要补充品牌授权书后重新提交。"])
     ok_calm = calm.level <= 2
     p2 = dict(p, knows={"company_name": True})
     s3 = AS(p2, company, seed="CHK2")

@@ -244,7 +244,7 @@ class TestAdvSim(unittest.TestCase):
             "knows": {"phone_tail": True, "contact_name": True,
                       "application_id": True, "company_name": True},
         }
-        self.company = {"company_name": "江西省云涛商贸中心", "contact_name": "虞扶苏",
+        self.company = {"company_name": "江西省安品商贸中心", "contact_name": "高超",
                         "phone_tail": "0497", "application_id": "QZ202611060014"}
         self.card = customer_data.card_by_application("QZ202611060014")
 
@@ -264,7 +264,7 @@ class TestAdvSim(unittest.TestCase):
         # 模型嘴上在应声，动作却标成"确认"——这一轮的规则动作是"报公司名"。
         self._fake("好的我明白了，就按你说的办。", action="confirm")
         sim = self._sim()
-        out = sim.say("请问您是江西省云涛商贸中心的负责人吗？")
+        out = sim.say("请问您是江西省安品商贸中心的负责人吗？")
         self.assertTrue(out["veto"].startswith("action_locked"))
         self.assertEqual(out["source"], "rule")            # 退回规则层原话
         self.assertTrue(out["text"])                       # 但话还在，通话不断
@@ -282,20 +282,20 @@ class TestAdvSim(unittest.TestCase):
         self.assertEqual(sim._veto("尾号 0497", ANSWER_TAIL, base), "")
 
     def test_company_short_name_is_allowed(self):
-        """真人不会每句都念全称；说"我们云涛"应当放行，说别人的名字不行。"""
+        """真人不会每句都念全称；说"我们安品"应当放行，说别人的名字不行。"""
         sim = self._sim()
         base = {"action": llm_user.ANSWER_COMPANY}
-        self.assertEqual(sim._veto("对，就是我们云涛。", llm_user.ANSWER_COMPANY, base), "")
+        self.assertEqual(sim._veto("对，就是我们安品。", llm_user.ANSWER_COMPANY, base), "")
         self.assertTrue(sim._veto("对，我们是南昌鼎盛商贸中心。",
                                   llm_user.ANSWER_COMPANY, base))
 
     def test_grounded_line_passes(self):
-        self._fake("我们这儿就是江西省云涛商贸中心。")
+        self._fake("我们这儿就是江西省安品商贸中心。")
         sim = self._sim()
-        out = sim.say("请问您是江西省云涛商贸中心的负责人吗？")
+        out = sim.say("请问您是江西省安品商贸中心的负责人吗？")
         # 动作恰好不是"报公司名"时，这句换动作会被拦——那也是正确行为。
         if out["source"] == "llm":
-            self.assertIn("云涛", out["text"])
+            self.assertIn("安品", out["text"])
         else:
             self.assertTrue(out["veto"].startswith("action_locked"))
 
@@ -303,8 +303,8 @@ class TestAdvSim(unittest.TestCase):
         """模型改了措辞，也不能改难度与弱点统计——它们指回"客服哪里没做好"。"""
         self._fake("嗯，你说。")
         sim = self._sim()
-        sim.say("请问您是江西省云涛商贸中心的负责人吗？")
-        sim.say("请问您是江西省云涛商贸中心的负责人吗？")   # 原话重复 = 客服复读
+        sim.say("请问您是江西省安品商贸中心的负责人吗？")
+        sim.say("请问您是江西省安品商贸中心的负责人吗？")   # 原话重复 = 客服复读
         self.assertGreaterEqual(sim.hits.get("repeat", 0), 1)
         self.assertGreaterEqual(max(sim.levels or [0]), 1)
         self.assertEqual(sim.rule.level, sim.level)
@@ -331,9 +331,9 @@ class TestAgentAssist(unittest.TestCase):
         self._orig_avail = llm.available
         llm.available = lambda: True
         self.session = {"slots": {"application": {
-            "company_name": "北京市川上商贸有限公司", "brand_name": "闻樾",
+            "company_name": "北京市安食商贸有限公司", "brand_name": "暖时光",
             "reject_reason": "授权链路不完整", "required_materials": ["品牌授权书"]}},
-            "outbound_target": {"company_name": "北京市川上商贸有限公司",
+            "outbound_target": {"company_name": "北京市安食商贸有限公司",
                                 "phone_tail": "0086"}}
 
     def tearDown(self):
@@ -357,7 +357,7 @@ class TestAgentAssist(unittest.TestCase):
         self.assertIsNone(agent_llm.assist(self.session, "请补充品牌授权书。", "NEED"))
 
     def test_rejects_dropping_company_name(self):
-        base = "请问您是北京市川上商贸有限公司的法定代表人吗？"
+        base = "请问您是北京市安食商贸有限公司的法定代表人吗？"
         self._fake("请问您是这个公司的法人吗？")
         self.assertIsNone(agent_llm.assist(self.session, base, "GREETING"))
 
@@ -366,13 +366,13 @@ class TestAgentAssist(unittest.TestCase):
         self.assertIsNone(agent_llm.assist(self.session, "请补充品牌授权书。", "NEED"))
 
     def test_accepts_grounded_reply(self):
-        self._fake("您这笔是闻樾品牌的授权链路不完整，把品牌授权书补上就行。")
+        self._fake("您这笔是暖时光品牌的授权链路不完整，把品牌授权书补上就行。")
         got = agent_llm.assist(self.session, "需要补充品牌授权书。", "NEED",
                                user_text="我要补什么材料")
         self.assertTrue(got and "授权书" in got)
 
     def test_counts_and_caps(self):
-        self._fake("您这笔是闻樾品牌的授权链路不完整，把品牌授权书补上就行。")
+        self._fake("您这笔是暖时光品牌的授权链路不完整，把品牌授权书补上就行。")
         s = {}
         for _ in range(8):
             agent_llm.assist(s, "需要补充品牌授权书。", "NEED", user_text="补什么")

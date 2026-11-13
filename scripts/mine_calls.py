@@ -455,9 +455,9 @@ def check(_args=None):
         str(r["metrics"]))
 
     # 9) 脱敏：数字与「某某女士」不许原样出现在报告里
-    masked = audit.redact("尾号0086，虞静姝女士，单号QZ202611060001")
+    masked = audit.redact("尾号0086，虞优品女士，单号QZ202611060001")
     one("脱敏：数字与姓名不落报告",
-        "0086" not in masked and "虞静姝" not in masked and "QZ2026" not in masked,
+        "0086" not in masked and "虞优品" not in masked and "QZ2026" not in masked,
         masked)
 
     # 10) 聚类：support 按会话去重，不按缺陷条数

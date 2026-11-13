@@ -30,11 +30,11 @@ sys.path.insert(0, _ROOT)
 
 from modules import dialogue, tools                            # noqa: E402
 
-#: 本单：北京市川上商贸（申请单 QZ202611060001，品牌闻樾，预留尾号 0086）。
+#: 本单：北京市安食商贸（申请单 QZ202611060001，品牌暖时光，预留尾号 0086）。
 TARGET_ID = "QZ202611060001"
-#: 尾号 1234 属于另一家：天津静姝百货（QZ202611060003，品牌辛夷，美妆个护）。
+#: 尾号 1234 属于另一家：天津优品百货（QZ202611060003，品牌鲜集市，美妆个护）。
 OTHER_TAIL = "1234"
-OTHER_BRAND = "辛夷"
+OTHER_BRAND = "鲜集市"
 
 
 def _rec():
@@ -131,7 +131,7 @@ class TestHomophone(unittest.TestCase):
     """姓名 / 公司名的同音错字（ASR 常态）。
 
     用户 11-12 提醒的就是这条：「名字在语音输入的时候会有同音无法识别的情况」。
-    档案联系人是「晏青梧」，ASR 很容易给成「宴青梧」「晏青无」「严青梧」。
+    档案联系人是「马涛」，ASR 很容易给成「马滔」「马淘」「马陶」。
     既不判错（同一个人会被赶走），也不判对（冒名者报个近似名就过），
     而是复述确认一句，客户点头才记账。
     """
@@ -145,17 +145,17 @@ class TestHomophone(unittest.TestCase):
 
     def test_homophone_name_asks_confirm(self):
         s = self._at_name("ho-ask")
-        r = _say(s, "宴青梧")
+        r = _say(s, "马滔")
         text = r.get("reply_text") or ""
         self.assertEqual(r.get("intent"), "identity_confirm", text)
-        self.assertIn("宴青梧", text, "没把听到的名字念回去：%s" % text)
+        self.assertIn("马滔", text, "没把听到的名字念回去：%s" % text)
         self.assertIn("这几个字", text, text)
         self.assertFalse(s["slots"].get("identity_confirmed"),
                          "还没确认就直接核上了")
 
     def test_homophone_name_confirmed_passes(self):
         s = self._at_name("ho-yes")
-        _say(s, "晏青无")
+        _say(s, "马淘")
         r = _say(s, "对")
         self.assertEqual(r.get("intent"), "identity_ok", r.get("reply_text"))
         self.assertTrue(s["slots"].get("identity_confirmed"))
@@ -164,7 +164,7 @@ class TestHomophone(unittest.TestCase):
 
     def test_homophone_name_denied_goes_to_digits(self):
         s = self._at_name("ho-no")
-        _say(s, "严青梧")
+        _say(s, "马陶")
         r = _say(s, "不是")
         text = r.get("reply_text") or ""
         self.assertIn("后四位", text, "否认之后该给数字这条路：%s" % text)
@@ -172,15 +172,15 @@ class TestHomophone(unittest.TestCase):
 
     def test_homophone_company_asks_confirm(self):
         s = _session("ho-company")
-        r = _say(s, "北京市川尚商贸有限公司")
+        r = _say(s, "北京市安是商贸有限公司")
         text = r.get("reply_text") or ""
         self.assertEqual(r.get("intent"), "identity_confirm", text)
-        self.assertIn("川尚", text)
+        self.assertIn("安是", text)
 
     def test_company_short_name_recognized(self):
-        """「川上商贸」这种字号+行业的简称，语音里比全称常见得多。"""
+        """「安食商贸」这种字号+行业的简称，语音里比全称常见得多。"""
         s = _session("ho-short")
-        r = _say(s, "川上商贸")
+        r = _say(s, "安食商贸")
         self.assertEqual(r.get("intent"), "identity_ok", r.get("reply_text"))
 
     def test_different_person_is_not_confirmed(self):
@@ -228,10 +228,10 @@ class TestSurnameOnly(unittest.TestCase):
     发布后拿 HTTP 入口跑真链路：报「我姓晏」，客服回「核对上了，感谢配合」，
     紧接着把驳回原因整段念了出来。根因是 `_extract_name` 的 `我姓([一-龥])`
     只取一个字，而 `_matches_outbound` 的姓名比较是包含判断——"晏" 在
-    "晏青梧" 里必然命中。等于知道姓就能过，核身这道闸门形同虚设。
+    "马涛" 里必然命中。等于知道姓就能过，核身这道闸门形同虚设。
     """
 
-    SURNAME = "晏"          # 本单联系人 晏青梧
+    SURNAME = "马"          # 本单联系人 马涛
     WRONG_SURNAME = "王"
 
     def test_surname_alone_never_passes(self):
@@ -242,7 +242,7 @@ class TestSurnameOnly(unittest.TestCase):
                                 "只报一个姓就核上了：%s" % r.get("reply_text"))
             self.assertFalse(s["slots"].get("identity_confirmed"))
             self.assertNotIn("核对上了", r.get("reply_text") or "")
-        self.assertNotIn("辛夷", s["slots"].get("application", {}).get("brand_name", ""))
+        self.assertNotIn("鲜集市", s["slots"].get("application", {}).get("brand_name", ""))
 
     def test_surname_asks_for_full_name(self):
         s = _session("iv-surname-ask")
@@ -263,7 +263,7 @@ class TestSurnameOnly(unittest.TestCase):
     def test_full_name_after_surname_passes(self):
         s = _session("iv-surname-then-full")
         _say(s, "我姓%s" % self.SURNAME)
-        r = _say(s, "晏青梧")
+        r = _say(s, "马涛")
         self.assertEqual(r.get("intent"), "identity_ok", r.get("reply_text"))
 
     def test_surname_after_wrong_tail_asks_full_name(self):
@@ -289,7 +289,7 @@ class TestSurnameOnly(unittest.TestCase):
         """
         rec = _rec()
         self.assertFalse(dialogue._matches_outbound(rec, "name", self.SURNAME))
-        self.assertTrue(dialogue._matches_outbound(rec, "name", "晏青梧"))
+        self.assertTrue(dialogue._matches_outbound(rec, "name", "马涛"))
 
 
 class TestLockIsTheOnlySwitch(unittest.TestCase):

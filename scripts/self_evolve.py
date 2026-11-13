@@ -750,7 +750,7 @@ def cmd_check(a):
        "no_answer" in feedback.judge_turn(t_bad, 0)["codes"])
 
     # 3) 槽位丢失只在“刚给了又再要”时判
-    t_slot = [{"user": {"text": "我叫晏青梧", "action": "answer_name"},
+    t_slot = [{"user": {"text": "我叫马涛", "action": "answer_name"},
                "agent": {"reply_text": "核对上了，感谢配合。请问您的姓名是？",
                          "stage": "IDENTITY", "next_stage": "NEED"}}]
     ck("给了姓名又被要一遍判槽位丢失",

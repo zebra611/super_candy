@@ -1006,9 +1006,9 @@ def start_call(application_id=None, random_target=False, lock_target=False):
     # 11-12 补 lock_target：**真实外呼一定知道打给谁**，名单取到的那一单就是本单。
     # 原来只认"外部显式指定 application_id"，于是页面点开始时走名单取单
     # （outbound_target 有值、target_locked=False），客户报任何别家的号都会被
-    # 查库换单。线上实测：电话打给川上（尾号 0086），客户报 "1234" → 命中
-    # 天津静姝（辛夷品牌/美妆个护）→ 客服答"核对上了，感谢配合"并把辛夷的
-    # 驳回原因念给了川上——串单，还让客户以为核身通过了。
+    # 查库换单。线上实测：电话打给安食（尾号 0086），客户报 "1234" → 命中
+    # 天津优品（鲜集市品牌/美妆个护）→ 客服答"核对上了，感谢配合"并把鲜集市的
+    # 驳回原因念给了安食——串单，还让客户以为核身通过了。
     # HTTP 入口传 lock_target=True；脚本直调 start_call() 不传，跑批行为不变。
     sess["target_locked"] = bool(application_id) or bool(lock_target)
     sess["read_token"] = secrets.token_urlsafe(12)

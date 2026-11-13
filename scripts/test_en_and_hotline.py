@@ -66,7 +66,7 @@ class EnglishOnlyTest(unittest.TestCase):
     def test_reason_and_materials_are_translated(self):
         app = {"brand_name": "荃汀", "category_l1": "运动户外",
                "reject_reason": "授权方联系不上，需补充品牌授权书后重新提交",
-               "required_materials": ["品牌授权书"], "company_short_name": "川上"}
+               "required_materials": ["品牌授权书"], "company_short_name": "安食"}
         text = i18n.fill_en(i18n.EN_REPLIES["official_script"], app)
         self.assertIn("荃汀", text, "品牌名要保留（后台专有名词）")
         self.assertNotIn("品牌、", text, "不许再出现「XX品牌、XX类目」这种半成品")

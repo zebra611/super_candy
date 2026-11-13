@@ -17,7 +17,7 @@ sys.path.insert(0, ROOT)
 
 from modules import i18n, voice
 
-_APP = {"brand_name": "闻樾", "category_l1": "家用电器", "company_short_name": "川上",
+_APP = {"brand_name": "暖时光", "category_l1": "家用电器", "company_short_name": "安食",
         "reject_reason": "授权链路不完整，缺少品牌方到一级经销商的逐级授权文件",
         "required_materials": ["品牌授权书", "逐级授权链路证明", "授权方营业执照"]}
 
@@ -44,7 +44,7 @@ class SplitForTtsTest(unittest.TestCase):
         samples = [
             i18n.fill_en(i18n.EN_REPLIES["official_script"], _APP),
             i18n.fill_en(i18n.EN_REPLIES["identity_ok"], _APP),
-            "核对上了，感谢配合。闻樾品牌、家用电器类目没有通过审核，原因是授权链路不完整，"
+            "核对上了，感谢配合。暖时光品牌、家用电器类目没有通过审核，原因是授权链路不完整，"
             "缺少品牌方到一级经销商的逐级授权文件，需要补充品牌授权书、逐级授权链路证明、授权方营业执照。",
             "Your application was not approved please provide the brand authorization letter now",
             "好的。",
@@ -70,7 +70,7 @@ class SplitForTtsTest(unittest.TestCase):
 
     def test_chinese_unchanged(self):
         """中文没有空格，行为保持原样：按标点切、首段短。"""
-        text = "核对上了，感谢配合。闻樾品牌、家用电器类目没有通过审核。"
+        text = "核对上了，感谢配合。暖时光品牌、家用电器类目没有通过审核。"
         parts = voice._split_for_tts(text)
         self.assertEqual("".join(parts), text)
         self.assertLessEqual(len(parts[0]), 8)
