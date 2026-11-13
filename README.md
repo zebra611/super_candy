@@ -37,6 +37,27 @@ GitHub 的 Contributors 只显示账号名，看不出是谁，所以这里给�
 
 > 最新在最上面。每条改动都附当时的回归结果，断言数即验收标准。
 
+**2026-11-13（14:40）· 换声这件事要"融进去"——三个场景包的价、试听工具的族与分段**：
+
+换模型那次只改了 `config/scene.json` 的 `budget.price_per_1k_chars_tts`，
+三个场景包还是旧模型的 0.08。默认场景读主配置所以看不出来，一换场景
+（跑批、售后、演示切包）成本就少算 20%——数字不报错，只是偏低。
+
+`scripts/audition_tts.py` 更彻底不能用：候选表整张是 qwen3-tts 的音色
+（Kai / Serena / Moon…），换 CosyVoice 后被接口逐条拒；就算改成对的名字，
+它也只认 `mode="url"`，而合成早就按句分段返回 `mode="segments"`，
+于是任何音色都报「没有拿到音频链接」——跟音色无关，是没读返回。
+
+改法：三个包单价 → 0.1 并统一说明；试听候选表按模型族分组、
+`--voices` 可点名、`--model` 可临时换族；分段音频按顺序下载、
+后几段剥掉 ID3 头再拼接，产物改成 `.mp3`。真跑一句话 2 段、597ms、
+92KB，`file` 认作 MPEG layer III 24kHz。
+
+价格断言原来只查主配置，现在遍历四个文件（漏一个就红，变异验证过）；
+`test_tts_cosy` 9 → 15 条。verify 264 项全 PASS（exit 0），
+L2 基线 v57→v58（budget 也算场景内容），性格 p13 复检 12/12。
+详见 docs/63。未上线。
+
 **2026-11-13（14:10）· 换成「龙安欢（V3）」音色，确实要换模型但不用换账号**：
 
 用户贴百炼 `cosyvoice-v3-flash` 音色列表截图，圈住「龙安欢（V3）」
@@ -1639,8 +1660,19 @@ curl -s -X POST http://127.0.0.1:8000/api/call/start \
 
 ### 想换个声音
 
-`python scripts/audition_tts.py` 会把候选音色各合成一句存到 `audition/`，听哪个顺耳，
-就把音色名写进 `config/scene.json` 的 `tts.voice_name`，代码一行都不用改。
+`python scripts/audition_tts.py` 会把候选音色各合成一句存到 `audition/`（mp3，
+分段合成的几段会接成一条），听哪个顺耳再写进配置。
+
+**音色不能跨模型用**——百炼页面上那句「所选音色须在当前模型的音色列表中」是硬约束：
+`longanhuan_v3` 只属于 CosyVoice 系列，`Serena` 只属于 qwen3-tts。所以
+
+- 同族换音色：只改 `tts.voice_name`；
+- 跨族换音色：`tts.model` 一起改，`tts.endpoint` 写 `null` 交给模型族默认值，
+  单价也要跟着改（0.08 ↔ 0.1 元/千字符）。改完跑 `scripts/test_tts_cosy.py`。
+
+候选表按族分组（`scripts/audition_tts.py` 里的 `CANDIDATES`）；表里没有的名字
+用 `--voices 名字1,名字2` 直接点名，不用改代码。想临时听另一族：
+`--model qwen3-tts-flash`。
 
 ### 三种跑法
 
@@ -1683,7 +1715,9 @@ python mock_business/service.py     # Mock 业务系统：http://127.0.0.1:8100/
 **关于声音**
 - **用外放时把音量调低或戴耳机。** 以前 TTS 是浏览器念的、服务端不出声，不会有回声；
   现在服务端真发声，播报声可能被麦克风收进下一轮上行音频。
-- 音色是 `Serena`（温柔女声）。开场白写的是"客服中心的小采"，换成男声记得同时改话术。
+- 音色是 `longanhuan_v3`（龙安欢 V3，欢脱元气女），模型 `cosyvoice-v3-flash`。
+  音色是**跟着模型走的**：换音色就得换模型（见上文 11-13 那条），只改 `voice_name`
+  会被接口拒。开场白写的是"客服中心的小采"，换成男声记得同时改话术。
 
 **关于速度（30 轮基准实测，服务端口径）**
 
