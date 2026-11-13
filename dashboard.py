@@ -16,6 +16,7 @@
     10 通大约几十毫秒；不缓存的话页面轮询会把读压力叠到在线写入上。
 """
 
+import os
 import threading
 import time
 
@@ -25,6 +26,9 @@ import events
 from modules import eval as eval_mod
 
 # 缓存有效期（秒）。看板自己每 10 秒拉一次，15 秒缓存足够且不会看到隔夜数据。
+# 演示种子库路径。放在 data/ 下、与 events.db 并列，但它是**只读**的静态文件。
+DEMO_DB = os.path.join(events.DATA_DIR, "demo_events.db")
+
 _CACHE_TTL = 15.0
 _cache = {"ts": 0.0, "data": None}
 _lock = threading.Lock()
@@ -108,7 +112,7 @@ def quality(limit=10):
     }
 
 
-def summary(days=None, session_limit=10, use_cache=True):
+def summary(days=None, session_limit=10, use_cache=True, db="live"):
     """看板要的全部数据，一次返回。
 
     分成五块，对应看板上的五个区：
@@ -119,20 +123,35 @@ def summary(days=None, session_limit=10, use_cache=True):
         sessions 最近几通的逐条摘要
         quality  质检汇总（角色 3 的口径）
         db       库体积/行数/索引，用来判断"数据是不是被跑批污染了"
+
+    参数 db：`live`（默认，真实通话）或 `demo`（演示种子库，只读）。
+    演示库是**只读**打开的：走 events 的 db_path 参数，写路径永远只认 live，
+    所以切到 demo 不会把演示数据写回生产库。
     """
     global _cache
+    db = (db or "live").strip().lower()
+    db_path = None
+    if db == "demo":
+        db_path = DEMO_DB
+        if not os.path.exists(db_path):
+            raise FileNotFoundError(
+                "演示库不存在：%s；先生成一次：python scripts/make_demo_db.py" % db_path)
+
     with _lock:
-        if (use_cache and days is None and _cache["data"] is not None
+        # 只缓存 live：演示库是静态文件，多算一次也不贵，缓存反而会在
+        # 重新生成种子库后继续吐旧数字。
+        if (use_cache and days is None and db == "live" and _cache["data"] is not None
                 and time.time() - _cache["ts"] < _CACHE_TTL):
             return _cache["data"]
 
-        agg = events.aggregate(days=days)
-        met = events.metrics()
+        agg = events.aggregate(days=days, db_path=db_path)
+        met = events.metrics(db_path=db_path)
         reps = [_session_row(s) for s in events.recent_sessions(limit=int(session_limit))]
 
         data = {
             "generated_at": events.now_ms(),
             "window_days": days,
+            "data_source": db,
             "scene": config_loader.describe(),
             "headline": {
                 "sessions": agg["sessions"],
@@ -142,6 +161,7 @@ def summary(days=None, session_limit=10, use_cache=True):
                 "first_audio_p50_ms": met["first_audio_p50_ms"],
                 "first_audio_p95_ms": met["first_audio_p95_ms"],
                 "first_audio_samples": met["first_audio_samples"],
+                "p95_min_samples": met.get("p95_min_samples", 20),
                 "gate_ms": met["gate_ms"],
                 "cost_cny": agg["cost_cny"],
                 "barge_ins": agg["barge_ins"],
@@ -153,6 +173,7 @@ def summary(days=None, session_limit=10, use_cache=True):
                 "first_audio_p50_ms": met["first_audio_p50_ms"],
                 "first_audio_p95_ms": met["first_audio_p95_ms"],
                 "first_audio_text_p50_ms": met["first_audio_text_p50_ms"],
+                "p95_min_samples": met.get("p95_min_samples", 20),
                 "first_audio_estimated": met["first_audio_estimated"],
                 "first_audio_timeouts": met["first_audio_timeouts"],
                 "note": "首字口径只统计语音轮（source=asr）；处理耗时是服务端口径。两者不能混着报。",
@@ -164,7 +185,7 @@ def summary(days=None, session_limit=10, use_cache=True):
             "sessions": reps,
             "quality": quality(limit=session_limit),
             "cost": cost_guard.snapshot(),
-            "db": events.db_stats(),
+            "db": events.db_stats(db_path=db_path),
         }
         _cache["ts"] = time.time()
         _cache["data"] = data
