@@ -1672,7 +1672,20 @@ class Handler(BaseHTTPRequestHandler):
                 limit = 10
             # 上限 50：逐会话质检要读整通事件，放太大等于让看板把库扫一遍
             limit = max(1, min(limit, 50))
-            self._send_json(dashboard_mod.summary(days=days, session_limit=limit))
+
+            # ?db=demo 打开演示种子库（只读）。白名单而不是拼路径：
+            # 让 URL 直接决定读哪个文件，等于把任意文件读取开在公网上。
+            db = (qs.get("db") or ["live"])[0].strip().lower()
+            if db not in ("live", "demo"):
+                self._send_json({"error": "BAD_QUERY",
+                                 "detail": "db 只能是 live 或 demo"}, 400)
+                return
+            try:
+                self._send_json(dashboard_mod.summary(
+                    days=days, session_limit=limit, db=db))
+            except FileNotFoundError as e:
+                # 演示库没生成时给一条能照着做的提示，而不是 500
+                self._send_json({"error": "DEMO_DB_MISSING", "detail": str(e)}, 404)
             return
         if path == "/api/scenes":
             # 场景清单：谁都能看，切换才是敏感操作（见 POST /api/scene）

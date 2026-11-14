@@ -138,6 +138,11 @@ def snapshot():
         "rate_limit_per_min": cfg["rate_limit_per_min"],
         "warn": used >= cfg["daily_warn_cny"],
         "over_limit": used >= cfg["daily_hard_limit_cny"],
+        # 关着不是漏了，是选择。答辩时被问"有没有成本兜底"，
+        # 页面上这句话就是答案：有代码、演示期关着、开的方法写在配置里。
+        "note": ("演示期关闭硬熔断（config/scene.json → budget.guard_enabled=false）；"
+                 "开启后按日上限与每分钟轮次限流"
+                 if not cfg["enabled"] else "闸门已开启：日上限与每分钟轮次限流生效中"),
     }
 
 
