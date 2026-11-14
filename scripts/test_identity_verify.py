@@ -256,7 +256,13 @@ class TestSurnameOnly(unittest.TestCase):
     def test_wrong_surname_says_mismatch_then_asks_full_name(self):
         s = _session("iv-surname-wrong")
         text = _say(s, "我姓%s" % self.WRONG_SURNAME).get("reply_text") or ""
-        self.assertIn("对不上", text, "姓都不对却不说：%s" % text)
+        # 11-13 话术重写（拆自 PR#51）：核身不符从生硬的"对不上"软化为
+        # "有点出入 / 换个方式核对"。这条断言守的是"软化后仍在核对、不再生硬否定客户"——
+        # 它把"是否软化核身不符"这个产品决策写进了测试。合 feat/handoff-script-rewrite
+        # 之前必须确认要这版软化口径；若不要，回退 config 的 reply_mismatch_surname 即可。
+        self.assertNotIn("对不上", text, "核身不符口径已软化，不应再说生硬的'对不上'：%s" % text)
+        self.assertTrue("有点出入" in text or "换个方式核对" in text,
+                        "软化后缺少'有点出入/换个方式核对'的承接：%s" % text)
         self.assertIn("全名", text, text)
         self.assertFalse(s["slots"].get("identity_confirmed"))
 

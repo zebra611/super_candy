@@ -2953,7 +2953,7 @@ def main():
     check("客户说没听明白/搞不懂：不回写同意；步骤→升级→收尾全程无回写",
           _r1["next_stage"] == "CONFIRM"
           and not _r1.get("end_reason")
-          and "清楚了吗" in _r1["reply_text"]
+          and "转接人工" in _r1["reply_text"]
           and _r2["intent"] == "help_steps" and not _r2.get("end_reason")
           and _r3["intent"] == "help_escalate"
           and _r4.get("end_reason") == "help_escalated"
@@ -3077,8 +3077,13 @@ def main():
     _pv = dialogue.new_session("verify-persona-advance")
     _pv["persona_code"] = "quiet"
     _adv, _adv_ok = _pm.adapt(_pv, _FACT_LINE, "OFFER")
-    check("话少的客户：讲完驳回原因，追问的是「怎么补」，不再是「回一个字也行」",
-          _adv.endswith("这一步您清楚怎么补吗？") and "回一个字" not in _adv,
+    # 11-13：后缀从「这一步您清楚怎么补吗？」改成「哪一样材料要细说，您说一声就行。」
+    # 理由与判据一起写清楚——判据比原来更严：不只要"给了下一步"，
+    # 还要求句子里**不许出现「清楚」「明白」**这些把确认责任推给客户的词。
+    check("话少的客户：讲完驳回原因，追问的是材料细节，不问客户懂没懂",
+          _adv.endswith("哪一样材料要细说，您说一声就行。")
+          and "清楚" not in _adv and "明白" not in _adv
+          and "回一个字" not in _adv,
           ["适配后=%r" % _adv])
     _pv2 = dialogue.new_session("verify-persona-advance-identity")
     _pv2["persona_code"] = "quiet"

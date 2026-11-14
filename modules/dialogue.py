@@ -310,7 +310,7 @@ FALLBACK_SCENES = {
     "tool": ("reply_tool",
              "我这边查得有点慢，稍后让专员给您回电说明，可以吗？"),
     "writeback": ("reply_writeback",
-                  "我这边登记时出了点问题，稍后会有专员联系您确认。感谢您的接听，再见。"),
+                  "我这边登记时出了点问题，稍后会有专员联系您确认。感谢您的接听，祝您生活愉快，再见！"),
 }
 _KEY_TO_REASON = dict((v[0], k) for k, v in FALLBACK_SCENES.items())
 
@@ -710,6 +710,17 @@ def _with_hotline(text, session, next_stage=None):
         if "Goodbye" not in text:
             return text
         return text.replace("Goodbye", _HOTLINE_EN + " Goodbye")
+    # 官方结束语「感谢您的接听，祝您生活愉快，再见！」要整句连着念：
+    # 热线插在「再见」之前会把这句话劈成两半（"祝您生活愉快。如果还有问题…再见"），
+    # 官方那句就成了半句。热线放在「感谢您的接听」前面——官方话术里热线本来
+    # 也在这之前（"如有疑问您可以电话联系：4006180092"），位置对得上。
+    for _anchor in ("感谢您的接听", "感谢您的配合"):
+        if _anchor in text:
+            idx = text.find(_anchor)
+            head = text[:idx].rstrip().rstrip("，,、;； ")
+            if head and head[-1] not in "。！？!?":
+                head += "。"
+            return (head + _HOTLINE_ZH + text[idx:]).strip()
     if "再见" in text:
         idx = text.rfind("再见")
         # 前一句以逗号结尾时改成句号：否则会读出「感谢您的配合，如果还有问题…」
@@ -769,6 +780,15 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     # 11-08 实测，按 intent 判会漏掉它，措辞层把整句压缩成
     # "麻烦您确认下，您是XX公司的负责人吗"，官方答案被丢掉了。
     _freeze_official = bool(qa_hit) or intent in ("qa", "official_script")
+    # 收尾语必须逐字播（11-13）：官方外呼话术的结束语是
+    # 「感谢您的接听，祝您生活愉快，再见！」——这是商家在整通电话里最后听到的
+    # 一句，改写层会把它压成「感谢接听，祝您生活愉快」，官方口径就没了。
+    # 实测同一句在 consent 分支被改成「感谢接听。如果还有问题…」，逐字核不上。
+    _freeze_close = any(w in str(text or "") for w in ("感谢您的接听", "感谢您的配合"))
+    # 复述句同理：这一句的职责就是把「要做什么」原样交代一遍，
+    # 改写会顺手把「我复述一遍」这个标记删掉——must_say 要的「复述」就丢了，
+    # 听起来也从"我把事再说一遍"变成"又一次通知"。冻结骨架原文最省事。
+    _freeze_restate = "复述" in str(text or "")
     # 先让**模型客服**说这一句（modules/agent_free）：它的输入是"本环节目标 +
     # 本单事实 + 最近对话"，不是已经定死的骨架——客户说"我早报过三遍了"，
     # 它可以直接认账，而骨架里压根没有这个选项。
@@ -783,7 +803,9 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     # 核对的东西（后四位/尾号/姓名/单号），说不出来就退回骨架。
     # _freeze_identity 仍然作用于下面 nlg 那条改写路径：骨架自己那句不许改。
     if (not end_reason and intent not in ("error", "empty")
-            and not _freeze_official and intent not in _FREEZE_INTENTS):
+            and not _freeze_official and not _freeze_close
+            and not _freeze_restate
+            and intent not in _FREEZE_INTENTS):
         try:
             from modules import agent_free
             _free = agent_free.reply(
@@ -802,6 +824,7 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
         session["agent_free_n"] = int(session.get("agent_free_n") or 0) + 1
     elif (not end_reason and intent not in ("error", "empty")
             and not _freeze_identity and not _freeze_official
+            and not _freeze_close and not _freeze_restate
             and intent not in _FREEZE_INTENTS):
         text = nlg.say(session, _fill_application(text, session["slots"].get("application")),
                        stage_now,
@@ -1499,6 +1522,34 @@ _HOW_SEEK_MARKS = ("咋补", "怎么补", "怎么弄", "怎么操作", "咋弄",
 _ADVANCE_ASK_MARKS = ("清楚怎么补吗", "清楚了吗", "明白了吗", "清楚要怎么准备",
                       "怎么补吗")
 
+# ---------------------------------------------------------------------------
+# CONFIRM 收尾问的是「需要我帮您转接人工客服吗」（11-13 改：不再问「清楚了吗」）
+#
+# 于是「不需要」「不用了」这类回答有两种可能的语义，必须分开：
+#   ① 「明白了，不用人接手」  → 这通电话已经谈完，正常闭环；
+#   ② 「我不改了 / 不补了」   → 商家拒绝整改，工单要记 refused。
+# 旧逻辑只有 flags["no"] 一条路，两者都落进 consent=False。
+# 实际外呼里 ① 占绝大多数，把已经谈完的单记成「拒绝」，业务侧会按
+# 「这单没谈成」跟进——比判错一个含糊更糟。
+# ---------------------------------------------------------------------------
+_NO_HANDOFF_MARKS = ("不用转", "不需要转", "不用转接", "不需要转接",
+                     "不用人工", "不需要人工", "不用麻烦您", "不麻烦",
+                     "不用了", "不需要了", "不必了", "不用",
+                     "自己弄", "自己来", "自己搞", "我自己",
+                     "没别的事", "没有别的事", "没事了", "没问题了",
+                     "就这样", "先这样", "可以了", "行了")
+# 否定整改：这些词在时，「不」否定的是整改动作本身，不是转人工
+_REJECT_FIX_MARKS = ("不改", "不补", "不提交", "不再提交", "不弄了", "不办了",
+                     "不同意", "不接受", "不通过", "放弃了", "不做了", "不申请")
+
+
+def _no_handoff(text):
+    """「不需要转人工」——是对收尾问句的答复，不是拒绝整改。"""
+    t = text or ""
+    if not any(w in t for w in _NO_HANDOFF_MARKS):
+        return False
+    return not any(w in t for w in _REJECT_FIX_MARKS)
+
 
 def _is_help_seek(session, text):
     """客户这句话是不是在求助（要操作指引），而不是没听清。
@@ -1555,7 +1606,7 @@ def _help_reply(session, stage):
         cfg.get("reply_help_bye")
         or "那这单我先帮您记录到这，材料清单和操作步骤会发到您商家后台，"
            "稍后专员会用官方号码给您回电，带着您一步步弄。"
-           + "如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，再见。",
+           + "如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，祝您生活愉快，再见！",
         "help_escalated")
 
 
@@ -1606,7 +1657,7 @@ def _language_reply(session, stage):
         session,
         cfg.get("reply_lang_bye")
         or "很抱歉，我暂时没办法用英文为您办理。我先把您的需求记下来，"
-           "稍后会有专员与您联系。如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，再见。",
+           "稍后会有专员与您联系。如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，祝您生活愉快，再见！",
         "language_barrier")
 
 
@@ -2276,6 +2327,23 @@ def _short_digit_run(text):
     return 2 <= best < 4
 
 
+#: 原因字段自带「…需补充X、Y后重新提交」的操作尾巴（68 条官方目录档案全都有，
+#: 120 条 CSV 里 38 条有）。模板后面本来就单说「需要补充{materials}…重新提交」，
+#: 两段拼起来就是「需补充A、B后重新提交，需要补充A、B」——客户听到的是结巴。
+#: 只裁「含补充/补齐/补交 且以重新提交收尾」的那一段：材料由 {materials} 单独给、
+#: 动作由模板说，信息不丢；「需先停用原品牌」这种必要动作不含这些词，原样保留。
+_REASON_TAIL = re.compile(
+    r"[，,][^，。；]*?(?:补充|补齐|补交)[^，。；]*?重新提交[。\s]*$")
+
+
+def _trim_reason(reason):
+    """去掉原因末尾与模板重复的「补X后重新提交」，只留原因本身。"""
+    t = (reason or "").strip()
+    if not t:
+        return t
+    return _REASON_TAIL.sub("", t).strip() or t
+
+
 def _fill_application(text, app):
     """C5：把申请单档案的真值填进话术占位符（不写死业务内容）。
 
@@ -2295,7 +2363,7 @@ def _fill_application(text, app):
                               if brand and category else "您提交的资质申请",
         "{brand}": brand or "该品牌",
         "{category}": category or "对应类目",
-        "{reason}": str(app.get("reject_reason") or "材料问题"),
+        "{reason}": _trim_reason(str(app.get("reject_reason") or "材料问题")),
         "{materials}": "、".join(app.get("required_materials") or []) or "对应材料",
         "{code}": str(app.get("reject_code") or ""),
         # 档案里的 recheck_deadline 是建库时写死的绝对日期（2026-09/10），
@@ -4514,7 +4582,7 @@ def _stage_confirm(session, text, flags):
                            cfg.get("reply_not_clear_handoff")
                            or "那我先不打扰您了，稍后专员会用官方号码再联系您，"
                               "需要补充的材料清单也会同步到商家后台。"
-                           + "如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，再见。",
+                           + "如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，祝您生活愉快，再见！",
                            "unclear")
         session["reexplain_used"] = True
         return _reply(session, _confirm_restatement(session, cfg),
@@ -4571,6 +4639,13 @@ def _stage_confirm(session, text, flags):
         return _do_writeback(session, True)
 
     if flags["yes"] and flags.get("conf", 1.0) >= YES_MIN_CONF:
+        return _do_writeback(session, True)
+
+    # 「不需要转人工」是收尾问句的答复，不是拒绝整改（见 _no_handoff 的说明）。
+    # 必须排在 flags["no"] 之前：那句「不用了」意图层判的就是 no，
+    # 排在后面等于永远走不到，工单会把这通已经谈完的电话记成「商家拒绝」。
+    if _no_handoff(text) and not flags.get("angry"):
+        _reset_ambiguity(session, True)
         return _do_writeback(session, True)
 
     if flags["no"]:
@@ -4647,7 +4722,7 @@ def _stage_confirm(session, text, flags):
                 cfg.get("reply_engaged_handoff")
                 or "您的问题我这边确认不到，先不打扰您了；稍后专员会用官方号码"
                    "再联系您，需要补充的材料清单也会同步到商家后台。"
-                + "如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，再见。",
+                + "如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，祝您生活愉快，再见！",
                 "unresolved_question")
         return _reply(
             session,
@@ -4671,7 +4746,8 @@ def _stage_confirm(session, text, flags):
         session["confirm_again_n"] = _k + 1
         _again = [cfg.get("reply_again", cfg.get("reply", "")),
                   cfg.get("reply_again_2")
-                  or "不用您复述全部，就一句：这三样材料您清楚要怎么准备了吗？"]
+                  or "那我再讲一句：材料备齐、后台重新提交。需要人工跟进的，"
+                     "我现在就给您转过去。"]
         return _reply(session, _soothe(_again[_k % len(_again)], flags),
                       intent="ambiguous")
     # 连续两次含糊：**不写工单，也不结束通话**。
@@ -4691,8 +4767,7 @@ def _stage_confirm(session, text, flags):
             session,
             _soothe(cfg.get("reply_ambiguous_hold")
                     or "没关系，您再想想。我这边先不记任何结论，"
-                       "您别急，我不催您表态。您具体想问哪一步，我直接说给您听，"
-                       "不用先回一句清楚了。", flags),
+                       "您别急，我不催您表态。您具体想问哪一步，我直接说给您听。", flags),
             next_stage="CONFIRM", intent="ambiguous")
 
     # 连续三次含糊：交给人，全程一张工单都不写。
@@ -4780,7 +4855,7 @@ def _stage_done(session, text, flags):
 
     # 第一次进终态：说结束语，并标记"已告别"，同时请求服务端收线。
     session["done_announced"] = True
-    out = _reply(session, cfg.get("reply", "感谢您的接听，再见。"),
+    out = _reply(session, cfg.get("reply", "感谢您的接听，祝您生活愉快，再见！"),
                  intent="done", end_reason="done")
     out["hangup"] = True
     return out
@@ -4841,7 +4916,7 @@ def forced_end(session, reason):
     cfg = config_loader.stage_config("DONE")
     key = {"max_turns": "reply_budget_turns",
            "max_call_seconds": "reply_budget_time"}.get(reason)
-    text = (cfg.get(key) if key else "") or cfg.get("reply", "感谢您的接听，再见。")
+    text = (cfg.get(key) if key else "") or cfg.get("reply", "感谢您的接听，祝您生活愉快，再见！")
     return _finish(session, text, reason)
 
 
@@ -4890,7 +4965,7 @@ def _handoff(session, reason="handoff"):
     text = (cfg.get("reply_handoff")
             or config_loader.fallback_text("reply_handoff")
             or "好的，我帮您转接人工同事，稍后会有专人和您联系，"
-                   "如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，再见。")
+                   "如有疑问，您也可以拨打京东商家热线 4006180092。感谢您的接听，祝您生活愉快，再见！")
     return _finish(session, text, reason)
 
 
