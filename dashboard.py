@@ -152,6 +152,10 @@ def summary(days=None, session_limit=10, use_cache=True, db="live"):
             "generated_at": events.now_ms(),
             "window_days": days,
             "data_source": db,
+            # P3-4：让截图脱离上下文也能自证数据来源。前端 header 有持久徽标读这两个字段，
+            # API 自身也带标签——谁直接抓 JSON 做报告，也不会把演示数字当真实统计。
+            "is_demo": db == "demo",
+            "source_label": "演示数据（非真实通话）" if db == "demo" else "真实通话数据",
             "scene": config_loader.describe(),
             "headline": {
                 "sessions": agg["sessions"],
