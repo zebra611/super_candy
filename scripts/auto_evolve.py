@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
@@ -34,6 +35,8 @@ _P_DIR = os.path.join(_ROOT, "config", "evolution", "persona", "candidates")
 _L2_VERSIONS = os.path.join(_ROOT, "config", "evolution", "versions.json")
 _P_VERSIONS = os.path.join(_ROOT, "config", "evolution", "persona", "versions.json")
 _ADV_BASE = os.path.join(_ROOT, "eval", "reports", "adversarial_baseline.json")
+#: P1-2：只能改代码的簇汇总成 append-only 待办，关掉终端也不丢。
+_CODE_ONLY_BACKLOG = os.path.join(_ROOT, "eval", "reports", "code_only_backlog.jsonl")
 
 
 def _rel(path):
@@ -63,6 +66,59 @@ _LOCAL_DRAFTS = {
         "您的号码是商家入驻时预留的联系方式，官方审核只用来核对这笔资质申请。"
         "您报手机号后四位，或者说联系人姓名，都可以。",
 }
+
+
+def _collect_code_only_backlog():
+    """把所有候选里的 code_only 簇汇总成 append-only 待办文件。
+
+    P1-2：evolve.py / adversarial_evolve.py 以前只在终端 printf "请转为开发任务"，
+    候选文件要么没这个字段（L2），要么有但没人汇总（对抗）；关掉终端待办就没了。
+    这里扫候选目录（L2 与对抗链共用同一目录）的全部候选，把每个 code_only 簇
+    写成一行 JSONL：{ts, source, key, reason, sessions}。
+    append-only：不覆盖历史；同一 (source, key, reason) 三元组记过就不再重复写，
+    避免每轮进化把同一簇复制一遍把文件撑爆。reason 变了（归因更新）记一条新的，
+    这是有意义的变更。返回本轮新增行数。
+    """
+    seen = set()
+    if os.path.exists(_CODE_ONLY_BACKLOG):
+        with open(_CODE_ONLY_BACKLOG, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                    seen.add((r.get("source"), r.get("key"), r.get("reason")))
+                except (ValueError, AttributeError):
+                    continue
+    added = 0
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    new_lines = []
+    # L2 候选（auto_*.json）与对抗候选（adv_auto_*.json）都在 _L2_DIR
+    for path in sorted(glob.glob(os.path.join(_L2_DIR, "*.json"))):
+        try:
+            cand = _read(path)
+        except Exception:
+            continue
+        source = os.path.basename(path)
+        for c in cand.get("code_only") or []:
+            key = c.get("key") or ""
+            reason = c.get("reason") or ""
+            if not key:
+                continue
+            triple = (source, key, reason)
+            if triple in seen:
+                continue
+            seen.add(triple)
+            new_lines.append({
+                "ts": ts, "source": source, "key": key, "reason": reason,
+                "sessions": c.get("sessions", 0),
+                "candidate": _rel(path),
+            })
+            added += 1
+    if new_lines:
+        os.makedirs(os.path.dirname(_CODE_ONLY_BACKLOG), exist_ok=True)
+        with open(_CODE_ONLY_BACKLOG, "a", encoding="utf-8") as f:
+            for r in new_lines:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return added
 
 
 def _draft_fallback(cand, base_cfg):
@@ -390,6 +446,13 @@ def main():
             if n:
                 _write(adv_path, adv_cand)
                 print("  [完成] %d 句改写用本地模板填好（不调模型也能进闸门）" % n)
+
+    # P1-2：把本轮所有候选里"只能改代码"的簇汇总成持久待办。
+    # 放在提案之后、闸门之前——提案刚落盘的 code_only 这一轮就能被收进去；
+    # 去重键保证同一簇不会每轮复制一遍。关掉终端，待办仍在文件里。
+    _added = _collect_code_only_backlog()
+    print("\n  [完成] 只能改代码的簇已落盘待办：%s（本轮新增 %d 条）"
+          % (_rel(_CODE_ONLY_BACKLOG), _added))
 
     print("\n第 4 步｜三链闸门（同一批电话只换配置；不过就只留档）")
     if no_gate:

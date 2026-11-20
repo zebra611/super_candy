@@ -421,6 +421,12 @@ def cmd_propose(args):
         "from_baseline": os.path.relpath(base_json, _ROOT).replace("\\", "/"),
         "targets": [c["key"] for c in optional],
         "patches": patches,
+        # P1-2：只能改代码的簇以前只在终端 print（385-388 行），关掉终端就没了。
+        # 这里按簇原样落盘，与 patches 同级；auto_evolve.py 第 3 步会把所有候选的
+        # code_only 汇总成 append-only 待办文件，让"请转为开发任务"不再说完就消失。
+        "code_only": [{"key": c["key"], "reason": c.get("needs_code", ""),
+                       "sessions": c.get("sessions", 0)}
+                      for c in code_only],
     }
     _write_json(out, cand)
     print("\n候选骨架已写入：%s" % os.path.relpath(out, _ROOT))
