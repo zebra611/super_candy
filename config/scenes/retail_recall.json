@@ -19,6 +19,10 @@
   "language": "zh",
   "itn": true,
   "_timeout_why": "识别不再用单一超时值。实测两段几乎等长的音频（2080ms / 2040ms）耗时 398ms 与 5404ms，是云端长尾，与音频长度无关；而 urllib 的 timeout 只管单次 socket 操作，管不住总时长。现在改成两轮「socket 2s/墙钟 2s → socket 3s/墙钟 3s」，超时即重试，见 modules/voice.py 的 plan。",
+  "hotwords": {
+   "vocabulary_id": "vocab-supercandy-5f7bde8f48a84fcfb514c66e8464ff39",
+   "_why": "热词表 ID：先跑 scripts/setup_hotwords.py 建表（读 asr.hints 当词源），把返回的 vocabulary_id 填这里；留空=不启用，识别请求逐字节不变。paraformer-realtime-v2 用 vocabulary_id（v1 才用 phrase_id）。"
+  },
   "hints": [
    "张伟",
    "李娜",
@@ -124,6 +128,8 @@
    ],
    "reply_offtopic": "没关系，记不住号码也正常。您说个联系人姓名，或者订单编号后六位，任意一个我都能核对上；实在不方便，我让专员用官方号码再联系您。",
    "reply_ask_identity": "您的号码是您在我们这边留的联系方式，我们是官方客服，只用来核对这次到店礼包，不会外传。您报一下手机号后四位，或者说姓名也可以。",
+   "reply_caller_identity": "您问得对，这通电话是京东官方客服打来的，号码是您在我们这边预留的联系方式，只用来核对这次到店礼包，不会外传，也不会要您转账或验证码。您要是不放心，可以拨京东官方客服热线核实。您报一下手机号后四位，或者姓名，我核对完马上给您说清楚礼包的事。",
+   "reply_caller_identity_2": "是的，这是京东官方来电，号码取自您预留的联系方式，只核对这次到店礼包。您可以拨官方客服热线核实。核对完身份我把礼包详情一次说清——先报后四位或姓名就行。",
    "reply_ask_identity_2": "您这个问题我记下了，专员会给您更细的解释。咱们先把身份核对一下——手机号后四位，四个数字就行。",
    "reply_noise": "不好意思，这边有点杂音没听清，您方便再说一次吗？不着急。",
    "reply_refuse_identity": "理解您谨慎，核对只是为了确认是您本人，礼包才不会发错人。您不方便报手机号后四位的话，说个姓名也可以，我这边核对一下。",
