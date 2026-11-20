@@ -779,7 +779,7 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
     # intent 记的是 greeting_confirm_company，但里面含官方原话——
     # 11-08 实测，按 intent 判会漏掉它，措辞层把整句压缩成
     # "麻烦您确认下，您是XX公司的负责人吗"，官方答案被丢掉了。
-    _freeze_official = bool(qa_hit) or intent in ("qa", "official_script")
+    _freeze_official = (bool(qa_hit) or intent in ("qa", "official_script", "detail_gap"))
     # 收尾语必须逐字播（11-13）：官方外呼话术的结束语是
     # 「感谢您的接听，祝您生活愉快，再见！」——这是商家在整通电话里最后听到的
     # 一句，改写层会把它压成「感谢接听，祝您生活愉快」，官方口径就没了。
@@ -2058,6 +2058,107 @@ def _checklist_again_reply(session, stage, flags):
                       next_stage="CONFIRM", intent="checklist_sent")
     # 第三句还是一句"对"：客户已经用行动表态了，不再问，直接记账收线。
     return _do_writeback(session, True)
+
+
+# ---------------------------------------------------------------------------
+# 无据细节追问：所有「官方资料没给细则」的问法统一收口（11-20）
+#
+# 11-20 用户截图 + 实测暴露的是一类问题，不是某一句话：
+#   商家问「主体变更证明麻烦细说一下」→ 被意图模型判成 angry，回"别急慢慢说"；
+#   问「变更证明具体要什么标准」→ 念本单驳回原因（发票类目数量），答非所问；
+#   问「照片有什么规格 / 通过率多少 / 多久审核完」→ 一律复读"您这笔没通过"。
+# 三类岔题的根因相同：官方细节我们确实没有，但代码里没有统一的"没有细则"出口，
+# 于是每条问法各自掉进复读 / 情绪 / 催确认分支。
+#
+# 统一口径（对真实商家，不暴露任何内部语境）：
+#   这单能查到的 → 具体标准不替审核下结论 → 后台提示上传 → 结果为准 → 热线兜底。
+# 两类问题**不**走这里（有官方依据，必须照常答，不能被这条吞掉）：
+#   ① 官方 QA/KB 命中且可播的（如"在职证明有哪些"）；
+#   ② 本单档案能正面回答的（驳回原因、要补哪些材料）。
+# ---------------------------------------------------------------------------
+#: 属于「审核细则、官方资料没给」的追问词。宽表按类收，不按单句写。
+#: 每条都在注释里标了它覆盖的同类问法，改这里就能覆盖一整类。
+_DETAIL_GAP_MARKS = (
+    # 证明/材料类细则：变更证明、主体变更、认证截图、公证书等"细说/要什么"
+    ("证明", ("证明", "变更", "凭证")),
+    ("规格", ("规格", "尺寸", "像素", "格式", "清晰", "原件", "彩色", "盖章")),
+    # 判定标准与适用条件
+    ("标准", ("标准", "要求", "条件", "门槛", "范围", "符合", "才算", "认定")),
+    # 结果与时效（无官方承诺，不能替审核下结论）
+    ("结果", ("通过率", "通过的概率", "能不能过", "一定过", "包过", "多久",
+              "多长时间", "几天", "什么时候好", "审核时间", "时效")),
+    ("细说", ("细说", "详细说明", "具体说", "具体讲", "祥细", "详细讲", "展开说")),
+)
+# 问句信号：必须是在问（疑问词或"说一下/讲一下"），避免把"我材料都准备好了"误收。
+_DETAIL_GAP_ASK = ("吗", "呢", "什么", "怎么", "哪些", "哪几", "多少", "几",
+                   "是否", "能不能", "可不可以", "说说", "说下", "讲讲", "讲下",
+                   "细说", "说明", "要求", "标准", "规格", "通过率", "多久")
+# 有本单事实、应照常回答的问法——这些不是"无据细节"，不能吞。
+_DETAIL_GAP_EXCLUDE = (
+    "为什么驳回", "驳回原因", "为什么没通过", "为啥驳回",
+    "要补哪些", "补哪些材料", "需要补什么", "补什么材料",
+    "要补什么材料", "原因是什么",
+    # 来电身份质疑：这些"证明"问的是"你是官方的吗"，不是审核细则。
+    # Q1-R2「我凭什么报号码，你先证明你是官方的」曾被"证明"+"什么"误收，
+    # 结果该走 _caller_legit_answer 的官方来电口径变成了无据细节收口。
+    "证明你是官方", "你是官方", "证明官方", "凭什么报", "凭什么告诉你",
+    "哪来的号码", "哪来的电话", "怎么相信你", "怎么信你",
+    # 求通过保证：这类走 _promise_block 合规红线（明确的"不能保证"），
+    # 比缺口话术更严；被缺口收口截住会让 C4 变异测试失去区分度。
+    "保证", "包过", "一定通过", "百分百", "确保通过",
+)
+
+
+def _detail_gap_topic(text):
+    """这句是不是在问「官方没给细则」？返回命中的类别名，否则 None。"""
+    t = (text or "").strip()
+    if not t or not any(w in t for w in _DETAIL_GAP_ASK):
+        return None
+    if any(w in t for w in _DETAIL_GAP_EXCLUDE):
+        return None
+    for topic, marks in _DETAIL_GAP_MARKS:
+        if any(w in t for w in marks):
+            return topic
+    return None
+
+
+def _detail_gap_answer(session, text, flags):
+    """全局守卫：无据细节追问统一用一段话收口，答不了也不岔题。
+
+    放在 respond 的全局前置（早于 _caller_legit / _early_answer / 阶段处理器），
+    因为岔题就发生在这些分支里；也正因如此，必须先确认官方问答与本单事实
+    都答不了，才能走到这里，否则会把有据的问题一起吞掉。
+    返回 _reply 结果或 None（不是本类问题，交回原逻辑）。
+    """
+    topic = _detail_gap_topic(text)
+    if not topic:
+        return None
+    # 只放行**官方 QA 原话**（qa_hit）：那是逐字来自官方表格的答案，有据可依
+    # （如"在职证明有哪些"）。用只读的 tools.lookup_qa 判断，**绝不能调
+    # _answer_official**——它会把答案写进 spoken_answers，提前调一次后，
+    # 阶段处理器再查时这条 QA 会被判"已播过"而挡掉，intent 从 qa 掉成 ask
+    # （11-20 实测 verify 官方QA 用例就是这样被回归的）。
+    # KB 命中不放行：kb_pop 里全是带槽位的驳回话术，商家问"变更证明标准是什么"
+    # 时它填出来的是"你这单变更证明不满足标准"，那是本单原因、不是通用标准，
+    # 属于答非所问。这类无据细节一律走下面的统一收口。
+    try:
+        _official = tools.lookup_qa(text)
+    except Exception:
+        _official = None
+    if (_official and _official.get("found") and _official.get("answer")
+            and len(str(_official["answer"]).strip()) >= 4
+            and not _unreadable(str(_official["answer"]))):
+        return None
+    cfg_all = config_loader.load() or {}
+    n = int(session.get("detail_gap_n", 0)) + 1
+    session["detail_gap_n"] = n
+    tpl = (cfg_all.get("reply_detail_gap_2") if n % 2 == 0 else None) \
+        or cfg_all.get("reply_detail_gap") \
+        or ("这一项我这边能查到的就是这单需要补交，具体审核标准系统里没有更细的"
+            "说明，我不能替审核下结论。您按商家后台的提示上传对应材料就行，"
+            "有问题会再跟您联系。着急的话拨打 4006180092，让专员按您这单核对。")
+    session.setdefault("detail_gaps", []).append(topic)   # 留痕：缺口项供质检/资料评审
+    return _reply(session, _soothe(tpl, flags), intent="detail_gap")
 
 
 def _early_answer(session, text, flags):
@@ -5372,6 +5473,10 @@ def respond(session, user_text):
         out = None
         if out is None:
             out = _caller_legit_answer(session, text, flags)
+        if out is None:
+            # 11-20：无据细节统一收口。必须在 _early_answer / 各阶段分支之前——
+            # 岔题（复读驳回原因、误判情绪、催确认）都发生在那些分支里。
+            out = _detail_gap_answer(session, text, flags)
         if out is None:
             out = _recall(session, text) if _is_recall_question(text) else None
         # 11-12：追问范围 / 质疑 / 明确说清楚了 / 要清单，都必须在**所有阶段

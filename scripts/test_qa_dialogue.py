@@ -216,6 +216,83 @@ class OfficialQaGuards(unittest.TestCase):
         self.assertIsNone(out.get("qa"))
 
 
+#: 11-20：官方没给细则的追问，覆盖多种问法，_dialogue 里另有一组用例
+#: （test_detail_gap_dialogue.py 风格）逐条断言。这里的问法清单兼作回归输入。
+DETAIL_GAP_QUESTIONS = (
+    "变更证明具体要什么标准",
+    "主体变更证明麻烦细说一下",
+    "这个材料照片有什么规格要求",
+    "变更证明审核标准是什么",
+    "通过率大概多少",
+    "多久能审核完",
+)
+
+
+class DetailGapUnifiedReply(unittest.TestCase):
+    """无据细节追问：一类问题收口成同一段话，不再各走各的岔路。
+
+    11-20 用户截图：商家问「主体变更证明细说一下」被回"别急慢慢说"（误判情绪），
+    问「变更证明标准」被念本单驳回原因，问「通过率/时限」一律复读。
+    这些都是同一类：官方细节没给，代码却没有统一出口。
+    """
+
+    def test_all_variants_use_one_template(self):
+        """不同问法、不同阶段，全部走 detail_gap 统一收口，不推进阶段。"""
+        for q in DETAIL_GAP_QUESTIONS:
+            for stage in ("NEED", "OFFER", "CONFIRM"):
+                s = _session(stage, application=_app())
+                out = dialogue.respond(s, q)
+                self.assertEqual(out["intent"], "detail_gap",
+                                 "%s 在 %s 没走统一收口，回了 %r"
+                                 % (q, stage, out["reply_text"]))
+                self.assertEqual(out["next_stage"], stage,
+                                 "答细节不该推进流程：%s" % q)
+                self.assertIn("后台", out["reply_text"], "必须给后台动作")
+                self.assertIn("4006180092", out["reply_text"], "必须留热线兜底")
+
+    def test_reply_is_frozen_against_rewriter(self):
+        """统一话术必须逐字播，措辞层/模型改写不得改一个字。
+
+        否则同一类问题每次说得都不一样，听感上又变成"岔题"。
+        """
+        s = _session("NEED", application=_app())
+        with mock.patch.object(dialogue.nlg, "say",
+                               side_effect=lambda sess, text, stage: "改写后的句子"):
+            out = dialogue.respond(s, "主体变更证明麻烦细说一下")
+        self.assertNotIn("改写后的句子", out["reply_text"])
+        self.assertIn("我不能替审核", out["reply_text"],
+                      "统一话术的核心边界句被改写了")
+
+    def test_gap_is_recorded_for_review(self):
+        """缺口项要落进 session，质检/资料评审能回答'哪些细节没给'。"""
+        s = _session("NEED", application=_app())
+        dialogue.respond(s, "照片有什么规格要求")
+        self.assertIn("规格", s.get("detail_gaps", []),
+                      "缺口项 %s 未留痕" % s.get("detail_gaps"))
+
+    def test_official_qa_still_passes_through(self):
+        """有官方原话答案的问法不能被这条吞掉。"""
+        s = _session("OFFER")
+        out = dialogue.respond(s, Q_HF004)
+        self.assertEqual(out["intent"], "qa")
+        self.assertEqual(out["qa"]["id"], "QA-HF-004")
+
+    def test_application_facts_still_pass_through(self):
+        """本单档案能正面答的（驳回原因/补哪些材料）不能走缺口模板。"""
+        s = _session("NEED", application=_app())
+        out = dialogue.respond(s, "为什么驳回了")
+        self.assertNotEqual(out["intent"], "detail_gap")
+        self.assertEqual(s.get("detail_gaps", []), [])
+
+    def test_no_writeback_and_no_hangup(self):
+        """答不上细节不等于客户拒绝，不许回写、不许收线。"""
+        s = _session("CONFIRM", application=_app())
+        out = dialogue.respond(s, "通过率大概多少")
+        self.assertIsNone(out.get("tool_call"), "无据细节不该触发回写")
+        self.assertNotIn(out.get("next_stage"), ("DONE", "WRITEBACK"))
+        self.assertFalse(out.get("hangup"))
+
+
 class QaHelpers(unittest.TestCase):
     """两个纯函数的边界，单独钉一下。"""
 
