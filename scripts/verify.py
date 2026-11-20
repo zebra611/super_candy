@@ -398,6 +398,24 @@ def main():
           ["_round_p(None) = %r，_round_p(12.34) = %r"
            % (events._round_p(None), events._round_p(12.34))])
 
+    # 11-20 线上事故：部署包带了半写 events.db → /api/metrics 抛 DatabaseError
+    # → 前端 d.closed_sessions 全 undefined。降级对象必须字段齐全、不抛异常。
+    # 用 mock 让计算函数抛错（真实坏库会被 _connect 自愈，测不到降级分支）。
+    def _boom(*_a, **_kw):
+        raise __import__("sqlite3").DatabaseError("database disk image is malformed")
+    with mock.patch.object(events, "_metrics_calc", side_effect=_boom):
+        _deg = events.metrics()
+    check("损坏库下 metrics 返回结构完整的降级对象（不抛异常、无缺字段）",
+          _deg.get("degraded") is True
+          and set(m.keys()).issubset(set(_deg.keys()))
+          and _deg["closed_sessions"] == 0 and _deg["turns"] == 0
+          and _deg["gate_ms"] == m["gate_ms"]
+          and _deg["first_audio_p50_ms"] is None
+          and _deg["degraded_reason"],
+          ["degraded=%s，字段数 %d（正常 %d）"
+           % (_deg.get("degraded"), len(_deg), len(m)),
+           "reason=%s" % _deg.get("degraded_reason")])
+
     # 上报事件必须把轮次写进事件列。只写 payload 会让面板上每条都显示
     # "turn 0"，实测时根本对不上是哪一轮慢——这个 bug 真的发生过。
     rep = [e for e in events.list_events(sid_f) if e["type"] == "latency_report"]
@@ -2431,6 +2449,18 @@ def main():
                                          "isAutoplayBlocked")),
            "旧刷屏文案出现 %d 次（只允许注释里 1 次）"
            % _html_v1.count("自动播放被拦截，改用浏览器播报")])
+
+    # 11-20 指标面板 undefined：接口回错误对象时前端读字段全 undefined。
+    check("指标面板对错误对象/缺字段兜底，不把 undefined 铺到界面",
+          "d.error" in _html_v1
+          and "指标暂不可用" in _html_v1
+          and "const n = (v)" in _html_v1
+          and "n(d.closed_sessions)" in _html_v1
+          and "n(d.turns)" in _html_v1,
+          ["错误对象判断/兜底文案/字段兜底都在=%s"
+           % all(k in _html_v1 for k in ("d.error", "指标暂不可用",
+                                         "const n = (v)",
+                                         "n(d.closed_sessions)", "n(d.turns)"))])
 
     print()
     print("=" * 74)

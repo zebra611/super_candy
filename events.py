@@ -419,7 +419,60 @@ def _percentile(sorted_vals, p):
     return float(sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * frac)
 
 
+def _degraded_metrics(gate_ms, reason):
+    """事件库读不动时返回**结构完整**的降级指标，不让接口退化成错误对象。
+
+    11-20 线上事故：部署包带了半写状态的 events.db，`/api/metrics` 抛
+    DatabaseError → 全局 _guard 回 {"error":"SERVER_ERROR"} → 前端读
+    d.closed_sessions / d.turns / d.gate_ms 全是 undefined，界面直接显示
+    「undefined 通（共 undefined 轮）」「门槛 undefinedms」，比没有指标更糟。
+
+    原则：
+      - 字段与正常 metrics() **完全一致**，调用方不必分支判断；
+      - 计数类归 0，分位类用 None（0ms 会被读成「极快」，见 _round_p）；
+      - 明确标 degraded=True + degraded_reason，前端可提示「指标暂不可用」，
+        而不是把 0 当成真实成绩汇报。
+    """
+    return {
+        "turns": 0,
+        "turns_voice": 0,
+        "turns_text": 0,
+        "turns_silence": 0,
+        "processing_p50_ms": None,
+        "processing_p95_ms": None,
+        "first_audio_p50_ms": None,
+        "first_audio_p95_ms": None,
+        "first_audio_samples": 0,
+        "p95_min_samples": P95_MIN_SAMPLES,
+        "first_audio_estimated": 0,
+        "first_audio_timeouts": 0,
+        "gate_ms": int(gate_ms),
+        "first_audio_text_p50_ms": None,
+        "first_audio_text_samples": 0,
+        "closed_sessions": 0,
+        "est_cost_cny": 0.0,
+        "jitter_p50_ms": None,
+        "jitter_p95_ms": None,
+        "jitter_samples": 0,
+        "degraded": True,
+        "degraded_reason": str(reason)[:200],
+    }
+
+
 def metrics(gate_ms=LATENCY_GATE_MS, db_path=None):
+    """对外指标入口。库损坏时降级为结构完整的零值对象，绝不向上抛异常。
+
+    口径说明见 `_metrics_calc`。新增字段只追加，不改已有名字。
+    """
+    try:
+        return _metrics_calc(gate_ms, db_path)
+    except sqlite3.Error as exc:
+        # 只吞 sqlite 自身的错（库损坏 / 表缺失）。真逻辑 bug 照常抛，
+        # 否则一个笔误会被降级对象盖住，永远查不出来。
+        return _degraded_metrics(gate_ms, exc)
+
+
+def _metrics_calc(gate_ms=LATENCY_GATE_MS, db_path=None):
     """算时延指标。**两套口径并列**，因为它们回答两个不同的问题。
 
     口径 A「处理耗时」= turn_end.payload.processing_ms
