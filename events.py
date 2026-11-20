@@ -450,6 +450,19 @@ def metrics(gate_ms=LATENCY_GATE_MS, db_path=None):
         "SELECT COUNT(DISTINCT session_id) FROM events WHERE type='writeback'"
     ).fetchone()[0]
 
+    # 到达间隔抖动（老师 11-20 口径纠正）：WS 走 TCP 不丢包，
+    # gaps/duplicates 恒为 0 不能反映流质量；真正的指标是帧到达间隔的抖动。
+    jitter_rows = conn.execute(
+        "SELECT payload FROM events WHERE type='audio_stream'"
+    ).fetchall()
+    jitter_vals = []
+    for (payload,) in jitter_rows:
+        p = json.loads(payload or "{}")
+        v = p.get("jitter_ms")
+        if isinstance(v, (int, float)) and v >= 0:
+            jitter_vals.append(float(v))
+    jitter_vals.sort()
+
     # 前端上报按 (session, turn) 建索引；同一轮重复上报以最后一条为准
     client = {}
     timeouts = 0
@@ -523,6 +536,10 @@ def metrics(gate_ms=LATENCY_GATE_MS, db_path=None):
         "first_audio_text_samples": len(text_vals),
         "closed_sessions": int(closed or 0),
         "est_cost_cny": round(sum(t["cost_cny"] for t in turns), 4),
+        # 到达间隔抖动：TCP 不丢包，用它替代丢包率反映音频流稳定性
+        "jitter_p50_ms": round(_percentile(jitter_vals, 50), 2) if jitter_vals else None,
+        "jitter_p95_ms": _round_p(p95(jitter_vals)),
+        "jitter_samples": len(jitter_vals),
     }
 
 
