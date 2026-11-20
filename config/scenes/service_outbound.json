@@ -20,7 +20,7 @@
     "itn": true,
     "_timeout_why": "识别不再用单一超时值。实测两段几乎等长的音频（2080ms / 2040ms）耗时 398ms 与 5404ms，是云端长尾，与音频长度无关；而 urllib 的 timeout 只管单次 socket 操作，管不住总时长。现在改成两轮「socket 2s/墙钟 2s → socket 3s/墙钟 3s」，超时即重试，见 modules/voice.py 的 plan。",
     "hotwords": {
-     "vocabulary_id": "vocab-sc40-9ab526477fd3490eb36919c949962e8b",
+     "vocabulary_id": "vocab-scnn6-9df9c195fbcc4c0c801efc9a0a57aafa",
      "_why": "热词表 ID：先跑 scripts/setup_hotwords.py 建表（读 asr.hints 当词源），把返回的 vocabulary_id 填这里；留空=不启用，识别请求逐字节不变。paraformer-realtime-v2 用 vocabulary_id（v1 才用 phrase_id）。"
     },
     "hints": [

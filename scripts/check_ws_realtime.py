@@ -250,6 +250,7 @@ def main():
         ws.send_json({"type": "turn"})
         t_res, res = ws.wait_for("turn_result", timeout=25, since=t_turn)
         ok_all &= bool(res)
+        print("  [OK] 识别往返 %.0f ms（发 turn → 收完整结果）" % ((t_res - t_turn) * 1000))
 
         partials = [(t, m.get("text") or "") for t, m in ws.msgs
                     if m.get("type") == "partial"]
