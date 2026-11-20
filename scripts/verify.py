@@ -484,6 +484,18 @@ def main():
            "%d 字 → %s（首段 %d 字）" % (len(_long), p_long, len(p_long[0])),
            "切完拼回原句是否一致：%s" % ("".join(p_long) == _long)])
 
+    # 11-20 词语内部断开：窗口内没标点时扩窗找，不能在"这单|需要补交"硬切。
+    _phrase = "变更证明这块，我这边能查到的就是这单需要补交这一项，具体审核标准这边没有更细的说明。"
+    p_phrase = voice._split_for_tts(_phrase)
+    check("无就近切点扩窗找逗号，不把短语从中间切断",
+          len(p_phrase) >= 2 and p_phrase[0].endswith("，")
+          and len(p_phrase[0]) >= 6
+          and not (p_phrase[0].endswith("这单")
+                   and p_phrase[1].startswith("需要补交"))
+          and "".join(p_phrase) == _phrase,
+          ["首段=%s（%d 字）" % (p_phrase[0], len(p_phrase[0])),
+           "次段=%s" % (p_phrase[1] if len(p_phrase) > 1 else "")])
+
     _cosy_cfg = {"model": "cosyvoice-v3-flash", "voice_name": "longanhuan_v3",
                  "format": "mp3", "sample_rate": 24000, "rate": 1.05}
     _cosy_ep, _cosy_body = voice.tts_request_body(_cosy_cfg, "您好。")
