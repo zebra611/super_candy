@@ -179,7 +179,7 @@ class MerchantWordsTest(unittest.TestCase):
 
 
 class HotwordConfigTest(unittest.TestCase):
-    VID = "vocab-sc40-9ab526477fd3490eb36919c949962e8b"
+    VID = "vocab-scnn6-9df9c195fbcc4c0c801efc9a0a57aafa"
 
     def test_all_scenes_have_valid_hotwords_config(self):
         """四场景都有 asr.hotwords，vocabulary_id 要么为空要么是正确的表 ID。
@@ -203,6 +203,14 @@ class HotwordConfigTest(unittest.TestCase):
                         "%s 的 vocabulary_id 应是 vocab- 开头（v2），不是 %r" % (rel, vid))
                     self.assertEqual(vid, self.VID,
                                      "%s 应指向已建好的热词表" % rel)
+
+    def test_config_uses_full_merchant_table(self):
+        """当前默认应是 260 词全商家表——实测热词数量不影响识别时延，
+        没必要为了逐字字幕抖动牺牲覆盖度（见 e2e_first_audio 与 latency 对照实验）。"""
+        import config_loader
+        vid = config_loader.asr_config().get("hotwords", {}).get("vocabulary_id", "")
+        self.assertEqual(vid, self.VID,
+                         "默认应启用完整商家词表；若切到小表需在答辩说明覆盖度下降")
 
     def test_realtime_params_include_configured_id(self):
         """当前配置已启用热词：run-task 参数会带上 vocabulary_id。"""
