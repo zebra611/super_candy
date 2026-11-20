@@ -269,6 +269,10 @@ def main():
           and (ticket_v1.get("content") or {}).get("consent") is True,
           ["writeback 事件：%s" % json.dumps(wb1, ensure_ascii=False),
            "工单 %s v%s" % (ticket_v1.get("ticket_id"), ticket_v1.get("version"))])
+    check("回写成功那轮自带收尾信号（不等下一轮才排收线）",
+          done.get("end_reason") == "done" and done.get("hangup") is True,
+          ["end_reason=%r hangup=%r" % (done.get("end_reason"),
+                                        done.get("hangup"))])
 
     changed = handle_turn(sid_d, user_text="等等，我不要了")
     ticket_v2 = tools.ticket_for_session(sid_d) or {}
@@ -464,17 +468,29 @@ def main():
     # ---- TTS：真实请求构造 + 合成失败必须回落，不能静音 ----
     seen_tts = []
 
-    # 先测切句（纯逻辑，不联网）。切分的意义是让第一段短到几百毫秒就能出声，
-    # 所以这里盯的是"第一段有多短"，不是"分了几段"。
+    # 先测切句（纯逻辑，不联网）。11-20 修正：首段不能再落在「抱歉，」这种
+    # 弱标点碎段上——CosyVoice 对前后两段各合成一次，逗号后的尾静音 + 段间
+    # 调度会让客户听到明显长停顿。现在盯的是"弱标点不硬切、首段有语义"。
     _short = "好的。"
     _long = "实在抱歉，这边暂时核对不上，我稍后让专员联系您，感谢您的接听。"
     p_short, p_long = voice._split_for_tts(_short), voice._split_for_tts(_long)
-    check("短句不切，长句切开头且首段足够短",
-          p_short == [_short] and len(p_long) >= 2 and len(p_long[0]) <= 6
+    check("短句不切，长句首段不在弱标点硬切且拼回无损",
+          p_short == [_short] and len(p_long) >= 2
+          and 8 <= len(p_long[0]) <= 18
+          and not (len(p_long[0]) < 10
+                   and p_long[0].rstrip().endswith(("，", ",", "；", ";")))
           and "".join(p_long) == _long,
           ["%r → %s" % (_short, p_short),
            "%d 字 → %s（首段 %d 字）" % (len(_long), p_long, len(p_long[0])),
            "切完拼回原句是否一致：%s" % ("".join(p_long) == _long)])
+
+    _cosy_cfg = {"model": "cosyvoice-v3-flash", "voice_name": "longanhuan_v3",
+                 "format": "mp3", "sample_rate": 24000, "rate": 1.05}
+    _cosy_ep, _cosy_body = voice.tts_request_body(_cosy_cfg, "您好。")
+    check("CosyVoice 请求体带 rate（配置里的 1.05 不再是死参数）",
+          (_cosy_body.get("input") or {}).get("rate") == 1.05
+          and _cosy_ep == voice._TTS_ENDPOINT_COSY,
+          ["input=%s" % json.dumps(_cosy_body.get("input"), ensure_ascii=False)])
 
     class _FakeTTS(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
@@ -2372,6 +2388,19 @@ def main():
            % all(k in _html_v1 for k in ("analyzeFrame", "zcrMax", "tiltMin",
                                          "onsetFrames"))])
 
+    # 11-20 手机 Safari：自动播放被拒时给显式按钮，不再每轮刷一行回落日志。
+    check("移动端 Safari 播报被拦截时给解锁按钮（不是静默降级刷屏）",
+          'id="btnEnableAudio"' in _html_v1
+          and "function unlockAudio()" in _html_v1
+          and "isAutoplayBlocked" in _html_v1
+          and _html_v1.count("自动播放被拦截，改用浏览器播报") <= 1,
+          ["按钮/解锁函数/拦截判定都在=%s"
+           % all(k in _html_v1 for k in ('id="btnEnableAudio"',
+                                         "function unlockAudio()",
+                                         "isAutoplayBlocked")),
+           "旧刷屏文案出现 %d 次（只允许注释里 1 次）"
+           % _html_v1.count("自动播放被拦截，改用浏览器播报")])
+
     print()
     print("=" * 74)
     print("证据 30：L2 自进化——模拟用户受知/受听/受耐心，归因不冤枉系统，版本可回滚")
@@ -3290,6 +3319,17 @@ def main():
     check("PR #42：连接关闭时撤销收线定时器，避免重复记 call_ended",
           _timer_set and _wsx._hangup_timer is None,
           ["关闭前=%s 关闭后=%s" % (_timer_set, _wsx._hangup_timer)])
+
+    # 11-20 终态硬截止：ACK 轮次不得把收线时间往后推。
+    _ws2 = _wsc.WsCallSession(_FakeEndBackend(), send_text=lambda _t: None,
+                              close=lambda: None)
+    _ws2._schedule_hangup("done")
+    _deadline1 = _ws2._terminal_deadline
+    _ws2._schedule_hangup("done")   # 模拟用户又说了一句「嗯」
+    check("终态收线截止不被后续 ACK 轮续期（截图里空转 6 轮的根因）",
+          _deadline1 is not None and _ws2._terminal_deadline == _deadline1,
+          ["第一次=%s 第二次=%s" % (_deadline1, _ws2._terminal_deadline)])
+    _ws2.close()
 
     _adv = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
                                                         "adversarial_evolve.py"), "check"],

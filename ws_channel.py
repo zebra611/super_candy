@@ -76,6 +76,12 @@ class WsCallSession:
         # 服务端主动收线的定时器：说完结束语后等一小段（留出打断/改口的窗口），
         # 期间用户再说话就取消（新一轮 _run_turn 会 cancel）。
         self._hangup_timer = None
+        # 终态硬截止：第一次出现 hangup/end_reason 时锁定，之后任何 ACK 轮次
+        # 都不能把收线时间往后推。_hangup_timer 会被每轮 _run_turn 取消，
+        # 但这个 deadline 不会——截图里「嗯/好的/对」把 2.5s 缓冲无限续期，
+        # 就是因为它只存在于那个可取消的 Timer 里。
+        self._terminal_deadline = None
+        self._terminal_reason = None
         self._lock = threading.Lock()        # 下行串行化：读线程与推送线程共用
         self.sess = None
         self.session_id = None
@@ -208,7 +214,9 @@ class WsCallSession:
 
     def _run_turn(self):
         """跑一轮并把结果按协议推下去。TTS 分段是"就绪即推"，不再让前端来轮询。"""
-        self._cancel_hangup()      # 用户又说话了：刚才的收线计划作废
+        # 终态硬截止已经锁定时，ACK 轮次不得续期；非终态照旧取消旧计划。
+        if self._terminal_deadline is None:
+            self._cancel_hangup()      # 用户又说话了：刚才的收线计划作废
         sid = self.session_id
         override = None
         if self._rt is not None:
@@ -248,7 +256,8 @@ class WsCallSession:
         # 服务端主动给——这正是 S2 要解决"半句干等"的那一半。
         rest = self._backend.take_rest(self.sess, turn_id)
         if rest:
-            threading.Thread(target=self._push_rest, args=(turn_id, rest),
+            threading.Thread(target=self._push_rest,
+                             args=(turn_id, rest, tts.get("rate", 1.0)),
                              daemon=True).start()
         else:
             self.send_json({"type": "tts_done", "turn_id": turn_id})
@@ -263,18 +272,32 @@ class WsCallSession:
 
     def _schedule_hangup(self, reason):
         self._cancel_hangup()
-        timer = threading.Timer(self.AUTO_HANGUP_GRACE_S, self._auto_hangup, args=(reason,))
+        now = time.time()
+        # 第一次终态信号锁定绝对截止；后续轮次只重排到同一个截止点，
+        # 这样用户连说「嗯」也不能把挂断无限推后。
+        if self._terminal_deadline is None:
+            self._terminal_deadline = now + self.AUTO_HANGUP_GRACE_S
+            self._terminal_reason = reason
+        delay = max(0.05, self._terminal_deadline - time.time())
+        timer = threading.Timer(delay, self._auto_hangup,
+                                args=(self._terminal_reason,))
         timer.daemon = True
         self._hangup_timer = timer
         timer.start()
 
     def _cancel_hangup(self):
+        """只撤 Timer，不清终态截止——close() 才负责整体清。"""
         if self._hangup_timer is not None:
             try:
                 self._hangup_timer.cancel()
             except Exception:
                 pass
             self._hangup_timer = None
+
+    def _clear_hangup(self):
+        self._cancel_hangup()
+        self._terminal_deadline = None
+        self._terminal_reason = None
 
     def _auto_hangup(self, reason):
         """到点收线：记一条 call_ended → 通知前端 → 关连接。
@@ -299,7 +322,8 @@ class WsCallSession:
         """把 tts 结果转成协议消息。browser 回落也推——前端要的是"知道该播什么"。"""
         if tts.get("mode") == "browser":
             self.send_json({"type": "tts", "turn_id": turn_id, "seq": 0,
-                            "mode": "browser", "text": tts.get("text", "")})
+                            "mode": "browser", "text": tts.get("text", ""),
+                            "rate": tts.get("rate", 1.0)})
             self.send_json({"type": "tts_done", "turn_id": turn_id})
             return
         segs = tts.get("segments") or []
@@ -310,9 +334,10 @@ class WsCallSession:
                 continue
             self.send_json({"type": "tts", "turn_id": turn_id, "seq": i,
                             "mode": "url", "text": seg.get("text", ""),
-                            "audio_url": seg["audio_url"]})
+                            "audio_url": seg["audio_url"],
+                            "rate": tts.get("rate", 1.0)})
 
-    def _push_rest(self, turn_id, rest):
+    def _push_rest(self, turn_id, rest, rate=1.0):
         """后台推剩余段。voice 的句柄约定：([threads], urls, parts)。"""
         try:
             threads, urls, parts = rest
@@ -326,7 +351,7 @@ class WsCallSession:
                     continue                     # 这段失败：跳过，别让后面段跟着堵死
                 self.send_json({"type": "tts", "turn_id": turn_id, "seq": i,
                                 "mode": "url", "text": parts[i],
-                                "audio_url": urls[i]})
+                                "audio_url": urls[i], "rate": rate})
         finally:
             self.send_json({"type": "tts_done", "turn_id": turn_id})
 
@@ -375,7 +400,7 @@ class WsCallSession:
         """连接结束：清会话引用、关流式识别。幂等，读循环和上层都可调。"""
         # 上层（前端断开 / 超时 / 异常）先关连接时，收线定时器必须一起撤掉，
         # 否则 2.5 秒后 _auto_hangup 仍会对一个已结束的会话再记一次 call_ended。
-        self._cancel_hangup()
+        self._clear_hangup()
         if not self.alive:
             return
         self.alive = False

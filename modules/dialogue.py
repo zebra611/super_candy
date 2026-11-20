@@ -1446,8 +1446,17 @@ def _do_writeback(session, consent, changed=False):
     text = cfg.get(key) or cfg.get("reply", "已为您登记。")
     if consent is True and not changed and session["slots"].get("checklist_sent"):
         text = cfg.get("reply_checklist_done") or text
-    return _reply(session, text, next_stage="DONE", tool_call=tool_call,
-                  intent=intent, stage_label="WRITEBACK")
+    # 回写成功就是业务闭环：必须自带收尾信号。
+    # 之前这里只给 next_stage=DONE，ws_channel.should_auto_hangup() 判不到，
+    # 要等用户再说一句才进 _stage_done 第一次排收线；截图里那条
+    # 「已闭环并回写」之后又空转 6 轮才挂断，根因就在这里。
+    out = _reply(session, text, next_stage="DONE", tool_call=tool_call,
+                 intent=intent, stage_label="WRITEBACK")
+    # 只加收尾信号，不改 end_reason 参与的话术生成路径：回写成功那句仍按原规则出话，
+    # 否则 frozen skeleton 会把已验证的收尾措辞换掉（11-12 踩过一次）。
+    out["end_reason"] = "done"
+    out["hangup"] = True
+    return out
 
 
 # ---------------------------------------------------------------------------

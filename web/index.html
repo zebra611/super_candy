@@ -898,6 +898,7 @@
       <div class="ctrl">
         <button id="btnRec" hidden>暂停聆听</button>
         <button id="btnEnd" class="danger" disabled>挂断</button>
+        <button id="btnEnableAudio" class="primary" hidden>点此开启语音播报</button>
         <span id="phaseLine">未开始</span>
       </div>
     </section>
@@ -1054,7 +1055,12 @@ const S = { sessionId: null, token: null, pendingTarget: null, textOnly: false,
             currentAudio: null, playToken: 0,
             // 纯文字模式走 HTTP，没有服务端收线，只能靠前端定时器；
             // 定时器必须可取消，否则上一通的会把新开的通话挂掉。
-            hangupTimer: null };
+            hangupTimer: null,
+            // 移动端 Safari 自动播放限制：首次用户手势解锁音频后再播。
+            audioUnlocked: false, audioCtx: null, audioUnlockEl: null,
+            audioUnlockPrompted: false, pendingSpeak: null, pendingWs: null,
+            // 终态硬截止：第一次收到收尾信号就锁定，后续 ACK 轮不得续期。
+            terminalAt: null };
 
 // VAD 判定参数。逐帧（20ms）算特征，不起模型：这段链路在浏览器主线程上跑，
 // 一秒 50 次，必须便宜。
@@ -1071,13 +1077,13 @@ const VAD = {
   speechRms: 0.020,      // 一帧超过它 = 有人在说话（约 -34dBFS）
   silenceRms: 0.010,     // 低于它算静音
   endpointFrames: 35,    // 连续 35 帧静音 = 700ms，判"说完了"
-  bargeRms: 0.035,       // 疑似插话阈值，**故意高于说话阈值**
-  bargeFrames: 3,        // 连续 3 帧（60ms）才算"疑似"，挡瞬时碰撞声
+  bargeRms: 0.040,       // 疑似插话阈值：0.035→0.040，配合谱特征门挡噪声；0.050 会漏弱 AEC 插话
+  bargeFrames: 5,        // 连续 5 帧（100ms）才算疑似，原来 3 帧（60ms）太短
   // 以下是"疑似之后"的两段式参数。光有能量不算插话，要等这段说完、
   // 识别出实义文字才停播——否则清个嗓子就能把客服打断，而且不可逆。
   probeSilenceFrames: 18,  // 疑似之后静音 18 帧（360ms）= 这一句说完了
   bargeMaxFrames: 160,     // 最多攒 160 帧（3.2 秒），防止用户一直说导致永远不判
-  duckVolume: 0.12,        // 疑似期间把播报压到 12%（约 -18dB）
+  duckVolume: 0.45,        // 疑似期只轻压到 45%；真插话由 stopPlayback 直接停
   // Z6 新增：谱特征门与开口确认
   zcrMax: 0.45,          // 过零率上限，挡白噪/纸张摩擦（0.45 偏宽，只为不误伤真人）
   tiltMin: 0.35,         // 低频/高频能量比下限，挡键盘（实测键盘约 0.1）
@@ -1493,8 +1499,11 @@ async function boot() {
 // 命中后后端会把"本次外呼目标"档案回传，我们在右栏「外呼目标」面板展示，便于对照客服开场白。
 async function startCall(opts) {
   opts = opts || {};
+  // 必须在用户手势里先解锁音频；iOS Safari 的自动播放限制只在同步路径放行。
+  unlockAudio();
   clearTimeout(S.hangupTimer);
   S.hangupTimer = null;
+  S.terminalAt = null;
   const body = {};
   // 优先用"随机预览"锁定的公司；只有显式指定/随机时才覆盖
   if (S.pendingTarget && !opts.application_id && !opts.random) {
@@ -1944,13 +1953,14 @@ function vadTick(f) {
 // 所以能量只当"疑似"，真正停播要等这段说完、识别出实义文字。
 // 代价是"客服多说了半句"，但这在半双工电话里听起来像正常的反应延迟。
 function agentTick(f) {
-  const rms = f.rms;                        // 打断仍用能量：要快，宁可多探一次再否决
+  const rms = f.rms;                        // 快门仍用能量+谱特征，见下方空闲分支
   if (VAD_DEBUG) updateAudioLine(f);
   if (S.bargeState === "probing") return;   // 正在识别，等结果，别重复触发
 
   if (S.bargeState === "suspect") {
     // 已经在疑似状态：等这段说完（静音 360ms）或者攒满 3.2 秒
-    if (rms >= VAD.speechRms) S.silentFrames = 0;
+    // 端点只看能量：中途换个字音、音量略降时不能把一句话切成两半。
+    if (rms >= VAD.silenceRms) S.silentFrames = 0;
     else S.silentFrames += 1;
     S.bargeHits += 1;
     if (S.silentFrames >= VAD.probeSilenceFrames ||
@@ -1960,8 +1970,11 @@ function agentTick(f) {
     return;
   }
 
-  // 空闲：攒够 3 帧（60ms）超阈值的能量，进"疑似"
-  S.bargeHits = rms >= VAD.bargeRms ? S.bargeHits + 1 : 0;
+  // 空闲：连续 5 帧（100ms）既超阈值又"像人声"才进疑似。
+  // 只看能量时，键盘瞬态/椅子响/咳嗽都会让客服音量掉下去；
+  // 谱特征门（voiced）与开口检测同源，能挡住这些非语音瞬态。
+  const hit = rms >= VAD.bargeRms && f.voiced;
+  S.bargeHits = hit ? S.bargeHits + 1 : 0;
   if (S.bargeHits >= VAD.bargeFrames) startBargeSuspect();
 }
 
@@ -2284,11 +2297,14 @@ async function sendTurn(payload, t0) {
     // 只判 d.hangup 会让这些路径说完「再见」仍不挂断（PR43 实测）。
     // 语音走 WS 时服务端自己收；纯文字走 HTTP，只能前端定时收。
     if (d.hangup || d.end_reason) {
+      // 第一次终态信号锁定绝对截止；后续 ACK 轮只重排到同一个点，
+      // 不让「嗯/好的/对」把挂断无限推后（与服务端 ws_channel 同口径）。
+      if (!S.terminalAt) S.terminalAt = Date.now() + 2500;
       clearTimeout(S.hangupTimer);
       S.hangupTimer = setTimeout(() => {
         S.hangupTimer = null;
         if (S.sessionId) endCall();
-      }, 2500);
+      }, Math.max(0, S.terminalAt - Date.now()));
     }
     refreshMetrics();
     refreshEvents();
@@ -2307,6 +2323,76 @@ async function sendTurn(payload, t0) {
   }
 }
 
+// ---- 移动端 Safari 语音解锁 ---------------------------------------------
+// iOS Safari 不允许页面在没有用户手势时主动 play()。原来的处理是每次失败
+// 都打一行「自动播放被拦截，改用浏览器播报」，截图里连出 5 行——客服其实
+// 一句也没念出来。现在改成：首次手势里放一段静音解锁音频，失败才弹按钮。
+const SILENT_WAV = "data:audio/wav;base64,UklGRmQBAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YUABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
+
+function isAutoplayBlocked(err) {
+  const name = (err && err.name) || "";
+  const msg = String((err && err.message) || err || "");
+  return name === "NotAllowedError" || name === "NotSupportedError"
+      || /autoplay|user gesture|play\(\) failed/i.test(msg);
+}
+
+function showAudioUnlockButton(why) {
+  const b = $("btnEnableAudio");
+  if (b) b.hidden = false;
+  if (!S.audioUnlockPrompted) {
+    S.audioUnlockPrompted = true;
+    log("系统", why || "浏览器拦截了自动播放，请点「点此开启语音播报」。");
+  }
+}
+
+function hideAudioUnlockButton() {
+  const b = $("btnEnableAudio");
+  if (b) b.hidden = true;
+}
+
+// 必须在用户手势的同步路径里调用（按钮 click 里直接调，别 await 之后再调）。
+function unlockAudio() {
+  if (S.audioUnlocked) return Promise.resolve(true);
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx) {
+      if (!S.audioCtx) S.audioCtx = new Ctx();
+      if (S.audioCtx.state === "suspended") S.audioCtx.resume();
+    }
+  } catch (e) { /* 没有 WebAudio 也继续试静音音频 */ }
+  try {
+    if (!S.audioUnlockEl) {
+      S.audioUnlockEl = new Audio(SILENT_WAV);
+      S.audioUnlockEl.preload = "auto";
+    }
+    return S.audioUnlockEl.play().then(() => {
+      S.audioUnlocked = true;
+      hideAudioUnlockButton();
+      replayAfterUnlock();
+      return true;
+    }).catch(() => false);
+  } catch (e) {
+    return Promise.resolve(false);
+  }
+}
+
+// 被拦截时把这一轮存下来，用户点完按钮直接重播，不要求他再说一遍。
+function replayAfterUnlock() {
+  if (S.pendingSpeak) {
+    const p = S.pendingSpeak;
+    S.pendingSpeak = null;
+    speak(p.tts, p.turnId);
+  }
+  if (S.pendingWs) {
+    const p = S.pendingWs;
+    S.pendingWs = null;
+    WSP.queue.unshift(...p.queue);
+    WSP.text = p.text;
+    WSP.rate = p.rate;
+    wsPlayNext();
+  }
+}
+
 // 播报：服务端合成好音频就播它，没合成成功才退回浏览器自带 TTS。
 // 首字响应在这里测量：onplaying / onstart 触发时才是"用户真的听到声音"。
 // 注意这个数现在**包含云 TTS 的合成耗时**——那才是真实的端到端首字。
@@ -2320,11 +2406,12 @@ function speak(tts, turnId) {
     reportMetric(turnId, performance.now() - t0, estimate);
   };
 
+  const rate = Number((tts && tts.rate) || 1.05);
   S.agentText = text;                    // 回声比对用（见 confirmBargeIn）
 
   // 分段合成路线：第一段先出声，后面的段自动接上。
-  // 服务端把长回复切成 3–5 字的头段 + 若干尾段并发合成，
-  // 首字不用再等整句念完（30 字整句要 1.7 秒，切完头段约 0.35 秒）。
+  // 服务端把长回复按"句末标点优先"切成短头段 + 若干尾段，
+  // 首字不用再等整句念完；头段不再落在 3 字的「您好，」上。
   if (tts && tts.mode === "segments" && Array.isArray(tts.segments) && tts.segments.length) {
     playSegments(tts, turnId, report, text);
     return;
@@ -2333,16 +2420,24 @@ function speak(tts, turnId) {
   // 服务端整句合成路线：<audio> 播 OSS 链接。不 fetch，所以不受 CORS 限制。
   if (tts && tts.mode === "url" && tts.audio_url) {
     const a = new Audio(tts.audio_url);
+    a.preload = "auto";
+    a.playbackRate = rate;                // 与云端合成同速，回落/切段不突变
     S.currentAudio = a;                       // 留个句柄，打断时要能 pause
     if (S.ducked) a.volume = VAD.duckVolume;  // 疑似插话期间新起一段也要保持压低
     a.onplaying = () => report(false);
     a.onended = () => { S.currentAudio = null; afterPlayback(); };
-    a.onerror = () => { log("系统", "音频播放失败，改用浏览器播报"); browserSpeak(text, report); };
-    a.play().catch(() => { log("系统", "自动播放被拦截，改用浏览器播报"); browserSpeak(text, report); });
+    a.onerror = (e) => {
+      if (isAutoplayBlocked(e)) { S.pendingSpeak = { tts, turnId }; showAudioUnlockButton(); return; }
+      log("系统", "音频播放失败，改用浏览器播报"); browserSpeak(text, report, rate);
+    };
+    a.play().catch((e) => {
+      if (isAutoplayBlocked(e)) { S.pendingSpeak = { tts, turnId }; showAudioUnlockButton(); return; }
+      log("系统", "音频播放失败，改用浏览器播报"); browserSpeak(text, report, rate);
+    });
     return;
   }
 
-  browserSpeak(text, report);
+  browserSpeak(text, report, rate);
 }
 
 // 顺序播放分段音频。第一段出声就算"首字响应"。
@@ -2351,6 +2446,7 @@ function speak(tts, turnId) {
 // 任何一段失败就整体回落浏览器播报——只播半句话比不播更难解释。
 function playSegments(tts, turnId, report, fallbackText) {
   const queue = (tts.segments || []).slice();
+  const rate = Number(tts.rate || 1.05);
   const myToken = S.playToken;      // 打断时 playToken 会 +1，这里记住当初的值
   let restCount = tts.rest_count || 0;
   let reported = false;
@@ -2359,11 +2455,17 @@ function playSegments(tts, turnId, report, fallbackText) {
   // 被用户打断之后，这个队列必须整体作废——不能"停一下再接着念"
   const barged = () => myToken !== S.playToken;
 
-  const fallback = () => {
+  const fallback = (why, err) => {
     if (aborted || barged()) return;
+    if (isAutoplayBlocked(err)) {
+      // 一句都没播出来才重放整轮；已经播过前半段就不回头，避免重复。
+      if (!reported) S.pendingSpeak = { tts, turnId };
+      showAudioUnlockButton();
+      return;
+    }
     aborted = true;
     log("系统", "分段音频播放失败，改用浏览器播报");
-    browserSpeak(fallbackText, report);
+    browserSpeak(fallbackText, report, rate);
   };
 
   const playNext = () => {
@@ -2386,12 +2488,14 @@ function playSegments(tts, turnId, report, fallbackText) {
 
     const seg = queue.shift();
     const a = new Audio(seg.audio_url);
+    a.preload = "auto";
+    a.playbackRate = rate;
     S.currentAudio = a;
     if (S.ducked) a.volume = VAD.duckVolume;  // 切段时也要保持压低
     a.onplaying = () => { if (!reported) { reported = true; report(false); } };
     a.onended = () => { S.currentAudio = null; playNext(); };
-    a.onerror = fallback;
-    a.play().catch(fallback);
+    a.onerror = (e) => fallback("分段音频播放失败", e);
+    a.play().catch((e) => fallback("自动播放被拦截", e));
   };
 
   playNext();
@@ -2411,14 +2515,14 @@ async function fetchRestSegments(turnId) {
 }
 
 // 降级路线：浏览器 speechSynthesis。音色机械，但保证"有声音"。
-function browserSpeak(text, report) {
+function browserSpeak(text, report, rate) {
   if (!("speechSynthesis" in window)) {
     report(true);
     return;
   }
   const u = new SpeechSynthesisUtterance(text);
   u.lang = "zh-CN";
-  u.rate = 1.05;
+  u.rate = Number(rate || 1.05);   // 与云端请求同口径，不再写死 1.05
   u.onstart = () => report(false);
   // 播完要回到聆听状态。被打断时 cancel() 也会触发 onend，
   // 但那时 phase 已经是 user，afterPlayback 里的判断会把它挡掉。
@@ -2451,12 +2555,16 @@ async function reportMetric(turnId, ms, estimate) {
 async function endCall(opts) {
   clearTimeout(S.hangupTimer);
   S.hangupTimer = null;
+  S.terminalAt = null;
   if (!S.sessionId) return;
   const silent = !!(opts && opts.silent);   // 服务端已收线时不重复 POST
   // 挂断时先把状态机停掉，再关麦克风：否则正在播的声音会继续，
   // 而 VAD 还在拿"已结束会话"的音频做判定。
   S.autoMode = false;
   S.phase = "idle";
+  S.pendingSpeak = null;
+  S.pendingWs = null;
+  hideAudioUnlockButton();
   stopPlayback();
   if (WS.sock) { try { WS.sock.close(); } catch (e) { /* 已断 */ } WS.sock = null; WS.started = false; }
   $("liveSubtitle").textContent = "";
@@ -2629,7 +2737,7 @@ function wsSendTurn(t0) {
   if (!WS.started || !WS.sock || WS.sock.readyState !== 1) return false;
   S.busy = true;
   S.t0 = t0;
-  WSP.queue = []; WSP.done = false; WSP.reported = false; WSP.playing = false; WSP.text = "";
+  WSP.queue = []; WSP.done = false; WSP.reported = false; WSP.playing = false; WSP.text = ""; WSP.rate = 1.05;
   WS.sock.send(JSON.stringify({ type: "turn" }));
   return true;
 }
@@ -2637,7 +2745,7 @@ function wsSendTurn(t0) {
 // ===== WS 语音播放队列：段就绪即播，与 HTTP 版 playSegments 平行 =====
 // 为什么要平行实现：HTTP 版的队列是"一次拿一包"，WS 版的段是分批到达的，
 // 硬塞进同一个函数会让两条路线互相耦合，坏一处坏一双。
-const WSP = { queue: [], done: false, playing: false, reported: false, text: "" };
+const WSP = { queue: [], done: false, playing: false, reported: false, text: "", rate: 1.05 };
 
 function wsOnTts(m) {
   if (m.mode === "browser") {
@@ -2648,10 +2756,11 @@ function wsOnTts(m) {
     browserSpeak(m.text, (est) => {
       if (myToken !== S.playToken) return;
       reportMetric(m.turn_id, performance.now() - S.t0, est);
-    });
+    }, m.rate);
     return;
   }
   WSP.text = m.text || WSP.text;
+  WSP.rate = Number(m.rate || WSP.rate || 1.05);
   if (S.phase !== "agent") { S.phase = "agent"; S.bargeHits = 0; setPhaseLine(); }
   if (m.audio_url) WSP.queue.push(m);
   wsPlayNext();
@@ -2664,13 +2773,22 @@ function wsPlayNext() {
     WSP.playing = true;
     const myToken = S.playToken;
     const barged = () => myToken !== S.playToken;   // 被打断的队列整体作废
-    const fallback = (why) => {
+    const fallback = (why, err) => {
       WSP.playing = false;
       if (barged()) return;
+      if (isAutoplayBlocked(err)) {
+        if (!WSP.reported) {
+          S.pendingWs = { queue: [seg, ...WSP.queue], text: WSP.text, rate: WSP.rate };
+        }
+        showAudioUnlockButton();
+        return;
+      }
       log("系统", why + "，改用浏览器播报");
-      browserSpeak(WSP.text, (est) => reportMetric(seg.turn_id, performance.now() - S.t0, est));
+      browserSpeak(WSP.text, (est) => reportMetric(seg.turn_id, performance.now() - S.t0, est), seg.rate || WSP.rate);
     };
     const a = new Audio(seg.audio_url);
+    a.preload = "auto";
+    a.playbackRate = Number(seg.rate || WSP.rate || 1.05);
     S.currentAudio = a;
     if (S.ducked) a.volume = VAD.duckVolume;        // 插话疑似期新起段也保持压低
     a.onplaying = () => {
@@ -2685,12 +2803,12 @@ function wsPlayNext() {
       if (barged()) return;
       wsPlayNext();
     };
-    a.onerror = () => fallback("分段音频播放失败");
-    a.play().catch(() => fallback("自动播放被拦截"));
+    a.onerror = (e) => fallback("分段音频播放失败", e);
+    a.play().catch((e) => fallback("自动播放被拦截", e));
     return;
   }
   if (WSP.done) {
-    WSP.done = false; WSP.reported = false; WSP.text = "";
+    WSP.done = false; WSP.reported = false; WSP.text = ""; WSP.rate = 1.05;
     $("liveSubtitle").textContent = "";
     afterPlayback();
   }
@@ -2715,6 +2833,11 @@ $("browseList").addEventListener("click", (e) => {
 });
 $("btnRec").addEventListener("click", toggleRec);
 $("btnEnd").addEventListener("click", endCall);
+$("btnEnableAudio").addEventListener("click", () => {
+  unlockAudio().then((ok) => {
+    if (!ok) showAudioUnlockButton("解锁失败，请确认 Safari 允许播放声音后再点一次。");
+  });
+});
 $("btnEvents").addEventListener("click", refreshEvents);
 $("btnSend").addEventListener("click", () => {
   const t = $("textInput").value.trim();
