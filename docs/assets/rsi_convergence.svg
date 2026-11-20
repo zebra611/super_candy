@@ -1,0 +1,31 @@
+<svg viewBox="0 0 680 330" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>RSI 反馈闭环收敛曲线</title>
+<desc>同一场景连续四轮自进化，负面反馈从 8 条降到 1 条并保持，正面反馈稳定在 98 条。</desc>
+<text x="40" y="30" font-family="sans-serif" font-size="15" font-weight="500" fill="#1a1a1a">RSI 反馈闭环：同一批档案卡，负面反馈 8 → 1</text>
+<text x="40" y="52" font-family="sans-serif" font-size="12" fill="#555">分母锁定（176–180 条反馈/轮），正面稳定 98，降幅不是靠减少样本做出来的</text>
+<line x1="90" y1="240" x2="620" y2="240" stroke="#888" stroke-width="1"/>
+<line x1="90" y1="60" x2="90" y2="240" stroke="#888" stroke-width="1"/>
+<line x1="90" y1="60" x2="620" y2="60" stroke="#ddd" stroke-width="0.5" stroke-dasharray="4 4"/>
+<line x1="90" y1="172.5" x2="620" y2="172.5" stroke="#ddd" stroke-width="0.5" stroke-dasharray="4 4"/>
+<line x1="90" y1="217.5" x2="620" y2="217.5" stroke="#ddd" stroke-width="0.5" stroke-dasharray="4 4"/>
+<text x="78" y="64" font-family="sans-serif" font-size="11" fill="#555" text-anchor="end">8</text>
+<text x="78" y="176" font-family="sans-serif" font-size="11" fill="#555" text-anchor="end">3</text>
+<text x="78" y="221" font-family="sans-serif" font-size="11" fill="#555" text-anchor="end">1</text>
+<text x="78" y="244" font-family="sans-serif" font-size="11" fill="#555" text-anchor="end">0</text>
+<polyline points="120,60 285,172.5 450,217.5 600,217.5" fill="none" stroke="#A32D2D" stroke-width="2.5"/>
+<circle cx="120" cy="60" r="5" fill="#A32D2D"/>
+<circle cx="285" cy="172.5" r="5" fill="#A32D2D"/>
+<circle cx="450" cy="217.5" r="5" fill="#A32D2D"/>
+<circle cx="600" cy="217.5" r="5" fill="#A32D2D"/>
+<text x="120" y="48" font-family="sans-serif" font-size="13" font-weight="500" fill="#791F1F" text-anchor="middle">8</text>
+<text x="285" y="161" font-family="sans-serif" font-size="13" font-weight="500" fill="#791F1F" text-anchor="middle">3</text>
+<text x="450" y="206" font-family="sans-serif" font-size="13" font-weight="500" fill="#791F1F" text-anchor="middle">1</text>
+<text x="600" y="206" font-family="sans-serif" font-size="13" font-weight="500" fill="#791F1F" text-anchor="middle">1</text>
+<text x="120" y="262" font-family="sans-serif" font-size="11" fill="#444" text-anchor="middle">112933</text>
+<text x="285" y="262" font-family="sans-serif" font-size="11" fill="#444" text-anchor="middle">113227</text>
+<text x="450" y="262" font-family="sans-serif" font-size="11" fill="#444" text-anchor="middle">120005</text>
+<text x="600" y="262" font-family="sans-serif" font-size="11" fill="#444" text-anchor="middle">120216</text>
+<text x="360" y="286" font-family="sans-serif" font-size="12" fill="#555" text-anchor="middle">自进化 run 编号（2026-11-13）</text>
+<rect x="90" y="300" width="530" height="24" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="100" y="316" font-family="sans-serif" font-size="11" fill="#085041">证据：eval/reports/self_evolve/run_*/feedback.jsonl 的 polarity 字段 · training_log.md 记每轮改了哪一处开关</text>
+</svg>
