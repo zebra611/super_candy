@@ -393,26 +393,29 @@ def _extract_text(payload):
     return ""
 
 
-def _split_for_tts(text, single_max=16, head_max=12, seg_max=48, max_segs=12):
+def _split_for_tts(text, single_max=16, head_max=18, seg_max=48, max_segs=12):
     """把回复切段，让第一段尽量短、且**每一段都在云端超时预算内**。
 
     为什么要切（实测数据）：
         合成耗时随字数近似线性——3 字 344ms、14 字 694ms、24 字 1056ms、
         30 字 1684ms。整句合成意味着"第一个字要等最后一个字念完"。
 
-    切在哪：
-        优先在逗号/句号后切；**英文按词边界（空格）切**，不能把 "application"
-        切成 "applica|tion"——中文没有空格，标点就是唯一可切点，英文则必须
-        先找空格。第一段不少于 3 字（"好，"这种一字段没意义）。
+    切在哪（11-20 修正）：
+        中文的逗号是**弱停顿**，不是句子边界。旧逻辑把开场白
+        「您好，我是京东商家资质审核专员，请问您是……吗？」
+        在 3 字的「您好，」硬切成首段，CosyVoice 对这两段各合成一次，
+        前段尾部静音 + 后段调度空隙，客户听到的是"您好……（长停顿）……我是"。
+        现在首段优先句末标点（。！？），没有再看**位置足够靠后**的逗号，
+        最后才硬切；弱标点不再制造只有 3 字的碎首段。
+        英文按词边界（空格）切，不能把 "application" 切成 "applica|tion"。
 
     段数与上限（11-12 20:37 实测后改）：
         英文长句 415 字被切成 `[229, 48, 4, 48, 44, 42]`——**首段 229 字**，
         因为前 229 字里一个标点都没有（英文逗号在 229 字之后），而旧逻辑
         "找不到符合 head_max 的标点就取第一个标点"直接把它当首段：
         首字 3507ms，整轮 8.5 秒。两个毛病一起修：
-          ① 首段找不到近处的标点时，拉丁文回退到最近空格，仍找不到才硬切；
-          ② 尾段留下 `<4` 字的碎段（实测出现过一个只有 4 字的请求）
-             合并回上一段，白扔一次请求；
+          ① 首段找不到近处的标点时，拉丁文先在更宽一点的范围找空格，仍找不到才硬切；
+          ② 尾段留下 `<4` 字的碎段（实测出现过一个只有 4 字的请求）合并回上一段；
           ③ 段数上限 `max_segs`：切太碎会被接口按请求数限流（429），
              超限时把最短的相邻两段合并到均衡，而不是任由它切出十几段。
 
@@ -422,26 +425,26 @@ def _split_for_tts(text, single_max=16, head_max=12, seg_max=48, max_segs=12):
     if len(text) <= single_max:
         return [text]
 
-    punct = "，。！？；,.!?;"
+    STRONG = "。！？!?"
+    WEAK = "，,；;"
     is_latin = sum(1 for ch in text if ord(ch) < 128) > len(text) * 0.5
 
-    def _cut_at(seg, limit, floor):
+    def _cut_at(seg, limit, floor, chars):
         """在 seg[:limit] 里找一个 >=floor 的切点（返回切后长度，找不到返回 0）。"""
         best = 0
         for i, ch in enumerate(seg[:limit], 1):
-            if ch in punct or (is_latin and ch == " "):
+            if ch in chars or (is_latin and ch == " "):
                 if i >= floor:
                     best = i
         return best
 
-    head_end = 0
-    for i, ch in enumerate(text[:head_max], 1):
-        if (ch in punct or (is_latin and ch == " ")) and 3 <= i <= head_max:
-            head_end = i
-            break
-    if not head_end:
-        # 前面 head_max 字里没有任何可切点：拉丁文先在更宽一点的范围找空格
-        head_end = _cut_at(text, head_max, 3) or head_max
+    # 首段：句末标点 > 足够靠后的逗号 > 英文空格 > 硬切。
+    # floor 从 3 提到 8/10，是为了杜绝"您好，"这种一字段。
+    head_end = (_cut_at(text, head_max, 8, STRONG)
+                or _cut_at(text, head_max, 10, WEAK)
+                or (is_latin and _cut_at(text, head_max, 8, " "))
+                or head_max)
+    head_end = min(head_end, head_max)
 
     head, tail = text[:head_end], text[head_end:]
     if not tail:
@@ -449,7 +452,10 @@ def _split_for_tts(text, single_max=16, head_max=12, seg_max=48, max_segs=12):
 
     parts = [head]
     while len(tail) > seg_max:
-        cut = _cut_at(tail, seg_max, seg_max // 2) or seg_max
+        cut = (_cut_at(tail, seg_max, seg_max // 3, STRONG)
+               or _cut_at(tail, seg_max, seg_max // 2, WEAK)
+               or (is_latin and _cut_at(tail, seg_max, seg_max // 2, " "))
+               or seg_max)
         parts.append(tail[:cut])
         tail = tail[cut:]
     if tail:
@@ -658,6 +664,8 @@ def tts_request_body(cfg, text):
        非法参数的风险。
     3. `format` / `sample_rate` 是可选参数（默认 mp3 / 22050）；显式给
        mp3 / 24000，与真跑验证过的一致。
+    4. `rate` 是 `input.rate`（0.5~2.0）。11-20 前漏传，配置里的 1.05
+       只进了返回体元数据，云端仍按 1.0 合成——属于"以为调了其实没调"。
 
     老模型（qwen3-tts-flash）的分支原样留着：换音色属于配置决策，
     万一线上音色效果不对，改回配置就能回滚，不需要再动代码。
@@ -675,6 +683,10 @@ def tts_request_body(cfg, text):
             inp["language_hints"] = ["en"]
         inp["format"] = cfg.get("format") or "mp3"
         inp["sample_rate"] = int(cfg.get("sample_rate") or 24000)
+        # rate 在 CosyVoice v3 是 input.rate（0.5~2.0）。之前只在返回体里
+        # 带了 config 的 1.05 给前端看，云端请求根本没传——配置是死参数。
+        # 各段必须显式传同一个值，否则段间语速由模型各自决定，衔接会突变。
+        inp["rate"] = float(cfg.get("rate") or 1.0)
         endpoint = cfg.get("endpoint") or _TTS_ENDPOINT_COSY
     else:
         inp["language_type"] = ("English" if english
