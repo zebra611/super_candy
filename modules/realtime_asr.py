@@ -48,6 +48,26 @@ _DEFAULT_ENDPOINT = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
 _FEED_CHUNK_BYTES = 3200        # 16kHz × 16bit = 每毫秒 32 字节 → 100ms 一片
 
 
+def build_run_params(cfg):
+    """构造 run-task 的 payload.parameters（纯函数，可离线测）。
+
+    热词（P1-热词）：paraformer-realtime-v2 官方支持 vocabulary_id，
+    放在 parameters 里、与 format/sample_rate 同级（官方文档 paraformer-client-events）。
+    配了才发——没配时 parameters 与改动前逐字节一致，行为不变。
+    注意：vocabulary_id 指向的是云端已创建并 DEPLOY 的热词表，
+    target_model 必须是 paraformer-realtime-v2，否则被静默忽略。
+    建表见 scripts/setup_hotwords.py。
+    """
+    params = {"format": "pcm", "sample_rate": 16000}
+    if (cfg or {}).get("speaker_diarization"):
+        params["speaker_diarization_enabled"] = True
+    vid = ((cfg or {}).get("hotwords") or {}).get("vocabulary_id")
+    vid = (vid or "").strip() if isinstance(vid, str) else ""
+    if vid:
+        params["vocabulary_id"] = vid
+    return params
+
+
 class RealtimeAsr:
     """一条到 paraformer-realtime-v2 的长连接。坏了自己标记，不抛给通话。"""
 
@@ -118,11 +138,8 @@ class RealtimeAsr:
         # streaming 必须是 "duplex"（官方文档原文，三条指令都一样）。
         # 旧 NLS 协议的 "out"/"in" 在这里会得到一个诡异的 NO_VALID_AUDIO_ERROR：
         # task-started 照样回，但音频全被当作不存在——错得一点都不响。
-        # 说话人分离（diarization）：开了才有 speaker_id，用来区分"本人/旁人"。
-        # 默认关——多一项能力也多一份计费与兼容风险，等实测确认可用再默认开。
-        _params = {"format": "pcm", "sample_rate": 16000}
-        if config_loader.asr_config().get("speaker_diarization"):
-            _params["speaker_diarization_enabled"] = True
+        # 参数（含说话人分离、热词 vocabulary_id）由纯函数构造，可离线测。
+        _params = build_run_params(config_loader.asr_config())
 
         run_task = {
             "header": {"action": "run-task", "task_id": task_id,
