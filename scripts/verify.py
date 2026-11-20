@@ -1260,6 +1260,25 @@ def main():
           ["校验了 %d 份：%s" % (len(_rows), ", ".join(l for l, _p, _x in _rows))]
           + ["%s: %s" % (l, "; ".join(ps[:2])) for l, ps in _bad])
 
+    # 11-20：agent_free 失败后再让 nlg/assist 补一次，线上 1500+900ms 叠加。
+    # 生产场景必须只留一条模型改写路径；自检本来就强制 template，光看它抓不到。
+    import glob as _glob
+    _active_scenes = [os.path.join(ROOT, "config", "scene.json")] + sorted(
+        p for p in _glob.glob(os.path.join(ROOT, "config", "scenes", "*.json"))
+        if ".bak_" not in p)
+    _nlg_on = []
+    for _p in _active_scenes:
+        try:
+            _n = (json.load(open(_p, encoding="utf-8")).get("nlg") or {})
+            if str(_n.get("provider") or "").lower() != "template" or _n.get("assist") is True:
+                _nlg_on.append(os.path.relpath(_p, ROOT))
+        except Exception:
+            _nlg_on.append(os.path.relpath(_p, ROOT))
+    check("生产场景不再双重调模型（nlg 固定 template、assist 关）",
+          not _nlg_on,
+          ["检查 %d 份；仍开启二次改写的：%s"
+           % (len(_active_scenes), ", ".join(_nlg_on) or "无")])
+
     _cfg = json.loads(json.dumps(config_loader.load()))
     _flat = json.loads(json.dumps(_cfg))
     _flat["writeback_template"] = {"call_result": "connected", "need": "待填写"}
@@ -3342,6 +3361,20 @@ def main():
           _deadline1 is not None and _ws2._terminal_deadline == _deadline1,
           ["第一次=%s 第二次=%s" % (_deadline1, _ws2._terminal_deadline)])
     _ws2.close()
+
+    # 11-20：播报完成前不许按固定 2.5s 收线；playback_done 后才短缓冲收。
+    import time as _time
+    _ws3 = _wsc.WsCallSession(_FakeEndBackend(), send_text=lambda _t: None,
+                              close=lambda: None)
+    _ws3._terminal_reason = "done"
+    _ws3._terminal_deadline = _time.time() + _wsc.WsCallSession.TERMINAL_MAX_WAIT_S
+    _ws3._on_playback_done({})
+    check("终态收线等播报完成（playback_done），不再固定 2.5 秒切断结束语",
+          _ws3._hangup_timer is not None
+          and _ws3._hangup_timer.interval <= _wsc.WsCallSession.PLAYBACK_DONE_GRACE_S + 0.05,
+          ["计时器间隔=%s" % (_ws3._hangup_timer.interval
+                              if _ws3._hangup_timer else None)])
+    _ws3.close()
 
     _adv = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
                                                         "adversarial_evolve.py"), "check"],

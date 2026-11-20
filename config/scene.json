@@ -69,16 +69,16 @@
   "_why": "模型客服开关：true 时由 modules/agent_free 决定这一句说什么（输入是本环节目标+本单事实+最近对话，不是骨架）。命中官方 QA 的轮次、核身问句、收线话术仍冻结，不让模型碰。跑批与自检强制关掉，保证可复现。"
  },
  "nlg": {
-  "provider": "dashscope",
+  "provider": "template",
   "model": "qwen-flash",
   "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
   "timeout_ms": 900,
   "max_chars": 45,
   "temperature": 0.3,
-  "assist": true,
+  "assist": false,
   "assist_max": 6,
   "_assist": "assist=true 表示：客户追问/带情绪/命中官方口径的那一轮，改由 modules/agent_llm 用本单档案+官方口径组织 1-2 句（<=70 字，2.5s 超时，单通最多 assist_max 次）；其余轮次仍走 600ms 快速改写。关掉它即退回纯改写，行为与接入前一致。",
-  "_why": "provider=template 表示不改写，直接用 config 里的骨架话术。默认必须关着：队友 clone 下来没密钥也要能跑，自检和跑批也不能每跑一次调 30 次模型。",
+  "_why": "11-20 改回 template：agent_free 失败后再让 nlg/assist 补一次，线上实测 1500+900ms 叠加。provider=template 表示不改写，直接用 config 里的骨架话术。默认必须关着：队友 clone 下来没密钥也要能跑，自检和跑批也不能每跑一次调 30 次模型。",
   "_how_to_enable": "要打开改写：把 provider 改成 dashscope（注意这里填厂商名，不是模型名——写成 qwen-flash 会被静默跳过、等于没开），重启生效；跑批与自检请保持 template。打开后模型超时/返回空/跑题长篇/编造数字金额日期等异常都会自动降级回骨架话术，不会把话说错。",
   "_budget": "400ms 是硬上限不是参考值：服务端 P50 现在 974ms，加上 P50<=1300ms 才留得住余量。超了就降级回骨架话术，别等。",
   "_doc": "完整契约（prompt 结构、降级顺序、验收标准）见 docs/17_任务2接口契约.md"
