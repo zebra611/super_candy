@@ -122,6 +122,12 @@ class RealAdapter(BaseAdapter):
             "order_id": content.get("order_id", ""),
             "consent": content.get("consent"),
             "need": content.get("need", ""),
+            # P0-1：reject_category / reject_summary / merchant_understood /
+            # checklist_sent / corrections 这些场景字段不在上面四个固定键里，
+            # 必须把整个 content 透传给对端。对端 mock_business/service.py:274-284
+            # 支持 content 原样整段存；不带它，real 模式回写等于只记了"电话打通了"，
+            # 而本地副本照样显示成功——这是最典型的假绿。
+            "content": content,
         }
         _, data = self._request("POST", "/mock/ticket", body=body)
         ticket = data.get("ticket") or {}

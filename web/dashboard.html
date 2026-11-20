@@ -42,6 +42,15 @@
     border: 1px solid var(--line); border-radius: 999px;
     padding: 2px 10px;
   }
+  /* P3-4：持久数据源徽标，贴在 sticky header 上，截图脱离上下文也能看出是不是演示数据 */
+  header .source-badge {
+    font-size: 12px; font-weight: 600;
+    border-radius: 999px; padding: 3px 12px;
+    border: 1px solid var(--line); color: var(--sub); background: transparent;
+  }
+  header .source-badge.demo {
+    color: #fff; background: var(--red); border-color: var(--red);
+  }
   header .spacer { flex: 1; }
   select, button {
     font: inherit; font-size: 13px;
@@ -125,6 +134,7 @@
 <header>
   <h1>指标看板</h1>
   <span class="scene" id="scene">加载中…</span>
+  <span class="source-badge" id="source-badge" title="当前数据来源：真实通话或演示种子库">数据源加载中…</span>
   <span class="spacer"></span>
   <label style="font-size:12px;color:var(--sub)">窗口</label>
   <select id="days">
@@ -339,7 +349,11 @@ function render(d) {
     <div class="note">${esc(q.note || "")}</div>`;
 
   const demo = $("demo-banner");
-  if (d.data_source === "demo") {
+  const isDemo = d.data_source === "demo" || d.is_demo === true;
+  const badge = $("source-badge");
+  badge.textContent = d.source_label || (isDemo ? "演示数据（非真实通话）" : "真实通话数据");
+  badge.classList.toggle("demo", isDemo);
+  if (isDemo) {
     demo.style.display = "block";
     demo.textContent = "当前查看的是演示种子库（data/demo_events.db，只读）："
       + "数字由 scripts/make_demo_db.py 生成，用于演示流程，不是真实通话统计。"

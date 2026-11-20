@@ -86,7 +86,8 @@ import config_loader              # noqa: E402
 def _scan_argv(argv):
     """一次性解析参数。main() 与模块级都读它，避免两处口径漂移。"""
     opts = {"scene": "", "cases": "", "report": "",
-            "strict": False, "fresh": False, "ids": []}
+            "strict": False, "fresh": False, "judge": "",
+            "ids": []}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -104,6 +105,14 @@ def _scan_argv(argv):
                 matched = True
                 break
         if matched:
+            continue
+        if a == "--judge" and i + 1 < len(argv):
+            opts["judge"] = argv[i + 1]
+            i += 2
+            continue
+        if a.startswith("--judge="):
+            opts["judge"] = a.split("=", 1)[1]
+            i += 1
             continue
         if a == "--strict":
             opts["strict"] = True
@@ -330,14 +339,38 @@ def main():
         return 1
 
     rows = []
+    # P1-1：--judge=both/llm 时多跑一路 LLM-as-Judge，默认 rule 时这段完全不执行。
+    # 绝不上实时链路：这里只在离线跑批里，模型往返不影响外呼 2s 预算。
+    _judge_mode = (_OPTS["judge"] or "").strip()
+    if not _judge_mode:
+        try:
+            _judge_mode = (config_loader.load().get("eval") or {}).get("judge", {}).get("mode", "rule")
+        except Exception:
+            _judge_mode = "rule"
+    _use_llm_judge = _judge_mode in ("llm", "both")
+    _llm_judge = None
+    if _use_llm_judge:
+        from modules import llm_judge as _lj
+        _cfg = _lj.judge_config()
+        _cfg["mode"] = _judge_mode
+        _llm_judge = _lj.LlmJudge(_cfg)
+        print("LLM-as-Judge：已开启（model=%s，rubric=%s，temperature=0，仅离线）"
+              % (_cfg["model"], _cfg["rubric_version"]))
+
     for case in cases:
         last, evs = run_case(case)
         ok, problems, closed, consent = judge(case, last, evs)
-        rows.append({
+        row = {
             "id": case["id"], "category": case["category"],
             "ok": ok, "closed": closed, "consent": consent, "problems": problems,
             "holdout": bool(case.get("holdout")),
-        })
+        }
+        if _llm_judge is not None:
+            rule_result = {"closed": closed, "compliance_ok": not problems,
+                           "quality_score": 100 if ok else 0, "ok": ok}
+            verdict = _llm_judge.judge(evs, rule_result)
+            row["llm_verdict"] = verdict
+        rows.append(row)
 
     # ---- 输出表格 ----
     print("%-5s %-13s %-6s %-6s %-10s %s" % ("ID", "类别", "结论", "闭环", "意向", "问题"))
@@ -373,6 +406,29 @@ def main():
         t, p = by_cat.get(r["category"], (0, 0))
         by_cat[r["category"]] = (t + 1, p + (1 if r["ok"] else 0))
     print("分类通过：", "  ".join("%s %d/%d" % (k, v[1], v[0]) for k, v in by_cat.items()))
+
+    # P1-1：LLM-as-Judge 与规则分并列展示。rule 模式（默认）这里一个字都不打印。
+    if _llm_judge is not None:
+        verdicts = [r["llm_verdict"] for r in rows if r.get("llm_verdict")]
+        real = [v for v in verdicts if v.get("judge") == "llm"]
+        fell = [v for v in verdicts if v.get("judge_fallback")]
+        agree = sum(1 for r in rows
+                    if r.get("llm_verdict") and
+                    bool(r["llm_verdict"].get("closed")) == bool(r["closed"]))
+        print("\nLLM-as-Judge（离线，与规则分并列）：")
+        print("  实判 %d 条｜回落规则 %d 条｜与规则闭环判定一致 %d/%d"
+              % (len(real), len(fell), agree, len(verdicts)))
+        for r in rows:
+            v = r.get("llm_verdict")
+            if not v:
+                continue
+            print("  %s：规则 %s / 模型 %s（分数 %s，%s）%s" % (
+                r["id"], "闭环" if r["closed"] else "未闭环",
+                "闭环" if v.get("closed") else "未闭环",
+                v.get("quality_score"), v.get("judge"),
+                "｜%s" % v["reason"] if v.get("reason") else ""))
+        if fell:
+            print("  回落原因（首条）：%s" % fell[0].get("fallback_reason", ""))
 
     print("\n注意：这批用例是**文字驱动**的，不经过语音识别，也不测时延。"
           "它只证明业务流水线（环节推进、回写、纠错、合规）通了；"

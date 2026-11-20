@@ -603,5 +603,14 @@
  "reply_unclear_need": "不好意思，我这边没太听清。您是想问没通过的原因，还是想问要补哪些材料？",
  "reply_unclear_need_2": "我再说一遍重点：原因是{reason}，要补{materials}。您接着问就行。",
  "reply_unclear_offer": "我这边可能没讲清楚。您是想让我再讲一遍这个方案，还是有别的顾虑？",
- "reply_unclear_offer_2": "我换种说法：要补{materials}，在商家后台重新提交。清单我直接发到您后台了，您照着准备就行。"
+ "reply_unclear_offer_2": "我换种说法：要补{materials}，在商家后台重新提交。清单我直接发到您后台了，您照着准备就行。",
+ "eval": {
+  "judge": {
+   "mode": "rule",
+   "model": "qwen-flash",
+   "rubric_version": "r1",
+   "timeout_s": 20,
+   "_why_mode": "rule=只用规则判定（默认，线上行为逐字节不变）；llm/both=离线评测时多跑一路 LLM-as-Judge，绝不上实时链路（2s 预算不允许）"
+  }
+ }
 }
