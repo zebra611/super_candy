@@ -383,7 +383,12 @@ class ReviewFixes(unittest.TestCase):
         self.assertTrue(tools.validate_writeback(ok)["ok"])
 
     def test_real_ticket_for_session_returns_content(self):
-        """P6：real 模式以前固定返回 content={} version=0，断言在静默错值。"""
+        """P6：real 模式以前固定返回 content={} version=0，断言在静默错值。
+
+        这条只验本地副本（ad._last_ticket）；对端 /mock/tickets 是否真的
+        存下了 content，由 test_real_writeback_content.py 单独守——
+        两者缺一不可，本地副本绿不代表回写真的到了对端。
+        """
         ad = RealAdapter({"provider": "real", "base_url": "http://127.0.0.1:1",
                           "timeout_ms": 300})
         ad._session_tickets["s-r"] = "T0001"
