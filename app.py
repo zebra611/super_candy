@@ -462,6 +462,12 @@ def _audio_state(sess):
             "duplicates": 0,     # 重复分片的次数（seq 倒退）
             "buf": bytearray(),  # 累积的 PCM16LE 原始字节
             "started_ts": 0.0,
+            # 到达间隔抖动（老师 11-20 点名要的指标）：
+            # WebSocket 走 TCP，不丢包，gaps/duplicates 在 WS 下恒为 0，
+            # 拿着当质量指标没有意义。真正能反映"音频流稳不稳"的是帧到达间隔的抖动。
+            "last_arrival_ts": 0.0,   # 上一片到达时刻（time.time()）
+            "transit": 0.0,           # RFC3550 平滑抖动状态
+            "jitter_samples": 0,      # 参与抖动计算的间隔数
         }
         sess["audio"] = st
     return st
@@ -507,12 +513,29 @@ def ingest_audio_chunk(sess, seq, pcm, sample_rate=contracts.PCM_SAMPLE_RATE):
             st["samples"] += len(pcm) // contracts.PCM_SAMPLE_WIDTH
             st["frames"] += frames
             st["expect_seq"] = seq + frames
+
+            # 到达间隔抖动：只对有效新片算，重复片不参与（它不是真实到达节奏）。
+            # RFC3550 附录 A.8 的平滑公式：
+            #   D(i,j) = 到达间隔差；J += (|D| - J) / 16
+            # 这里没有 RTP 时间戳，用"相邻两片到达时间差"相对"标称帧时长"的偏差：
+            #   nominal = frames * FRAME_MS / 1000（这批应花的时间）
+            #   transit = |实际到达间隔 - nominal|，再指数平滑
+            now = time.time()
+            if st["last_arrival_ts"]:
+                actual = now - st["last_arrival_ts"]
+                nominal = frames * contracts.FRAME_MS / 1000.0
+                d = abs(actual - nominal) * 1000.0        # 毫秒
+                st["transit"] += (d - st["transit"]) / 16.0
+                st["jitter_samples"] += 1
+            st["last_arrival_ts"] = now
             if not st["started_ts"]:
-                st["started_ts"] = time.time()
+                st["started_ts"] = now
 
         return {"seq": seq, "bytes": len(pcm),
                 "received_frames": st["frames"], "received_samples": st["samples"],
-                "gaps": st["gaps"], "duplicates": st["duplicates"]}
+                "gaps": st["gaps"], "duplicates": st["duplicates"],
+                "jitter_ms": round(st["transit"], 2),
+                "jitter_samples": st["jitter_samples"]}
 
 
 def flush_audio(sess, dropped=0):
@@ -533,6 +556,10 @@ def flush_audio(sess, dropped=0):
         "duration_ms": round(st["samples"] * 1000.0 / contracts.PCM_SAMPLE_RATE, 1),
         "gaps": st["gaps"],
         "duplicates": st["duplicates"],
+        # TCP 不丢包，gaps/duplicates 在 WS 路径恒为 0；
+        # 真正的质量指标是到达间隔抖动（老师 11-20 口径纠正）。
+        "jitter_ms": round(st["transit"], 2),
+        "jitter_samples": st["jitter_samples"],
         "dropped_at_client": int(dropped or 0),
         "sample_rate": contracts.PCM_SAMPLE_RATE,
         "frame_ms": contracts.FRAME_MS,
@@ -546,6 +573,9 @@ def flush_audio(sess, dropped=0):
     st["gaps"] = 0
     st["duplicates"] = 0
     st["started_ts"] = 0.0
+    st["last_arrival_ts"] = 0.0
+    st["transit"] = 0.0
+    st["jitter_samples"] = 0
     return pcm, stat
 
 
@@ -564,6 +594,9 @@ def reset_audio_buffer(sess):
     st["gaps"] = 0
     st["duplicates"] = 0
     st["started_ts"] = 0.0
+    st["last_arrival_ts"] = 0.0
+    st["transit"] = 0.0
+    st["jitter_samples"] = 0
     return n
 
 
