@@ -393,7 +393,8 @@ def _extract_text(payload):
     return ""
 
 
-def _split_for_tts(text, single_max=16, head_max=18, seg_max=48, max_segs=12):
+def _split_for_tts(text, single_max=16, head_max=18, head_soft_max=34,
+                   seg_max=48, seg_soft_max=64, max_segs=12):
     """把回复切段，让第一段尽量短、且**每一段都在云端超时预算内**。
 
     为什么要切（实测数据）：
@@ -405,8 +406,14 @@ def _split_for_tts(text, single_max=16, head_max=18, seg_max=48, max_segs=12):
         「您好，我是京东商家资质审核专员，请问您是……吗？」
         在 3 字的「您好，」硬切成首段，CosyVoice 对这两段各合成一次，
         前段尾部静音 + 后段调度空隙，客户听到的是"您好……（长停顿）……我是"。
-        现在首段优先句末标点（。！？），没有再看**位置足够靠后**的逗号，
-        最后才硬切；弱标点不再制造只有 3 字的碎首段。
+    现在首段优先句末标点（。！？），没有再看**位置足够靠后**的逗号，
+    最后才硬切；弱标点不再制造只有 3 字的碎首段。
+
+    11-20 又补一条：窗口内没有"够靠后"的标点时，不要直接在 head_max
+    硬切。「变更证明这块，我这边能查到的就是这单需要补交这一项，……」
+    原先切成「…就是这单 | 需要补交这一项，」——切点落在短语中间，
+    听力上就是"词语内部断"。现在先在 2 倍窗口里找弱标点，找不到才硬切。
+    首段因此从 18 字变成 25 字，实测合成约 0.8 秒，仍低于 2 秒门槛。
         英文按词边界（空格）切，不能把 "application" 切成 "applica|tion"。
 
     段数与上限（11-12 20:37 实测后改）：
@@ -439,12 +446,16 @@ def _split_for_tts(text, single_max=16, head_max=18, seg_max=48, max_segs=12):
         return best
 
     # 首段：句末标点 > 足够靠后的逗号 > 英文空格 > 硬切。
-    # floor 从 3 提到 8/10，是为了杜绝"您好，"这种一字段。
+    # floor 从 3 提到 8/6，是为了杜绝"您好，"这种一字段，同时允许
+    # "变更证明这块，"这类 7 字完整小句（它比硬切 18 字更快也更自然）。
+    # 找不到就近切点时先扩到 head_soft_max，避免切断短语。
     head_end = (_cut_at(text, head_max, 8, STRONG)
-                or _cut_at(text, head_max, 10, WEAK)
-                or (is_latin and _cut_at(text, head_max, 8, " "))
+                or _cut_at(text, head_max, 6, WEAK)
+                or _cut_at(text, head_soft_max, head_max, STRONG)
+                or _cut_at(text, head_soft_max, head_max, WEAK)
+                or (is_latin and _cut_at(text, head_soft_max, 8, " "))
                 or head_max)
-    head_end = min(head_end, head_max)
+    head_end = min(head_end, head_soft_max)
 
     head, tail = text[:head_end], text[head_end:]
     if not tail:
@@ -454,6 +465,8 @@ def _split_for_tts(text, single_max=16, head_max=18, seg_max=48, max_segs=12):
     while len(tail) > seg_max:
         cut = (_cut_at(tail, seg_max, seg_max // 3, STRONG)
                or _cut_at(tail, seg_max, seg_max // 2, WEAK)
+               or _cut_at(tail, seg_soft_max, seg_max, STRONG)
+               or _cut_at(tail, seg_soft_max, seg_max, WEAK)
                or (is_latin and _cut_at(tail, seg_max, seg_max // 2, " "))
                or seg_max)
         parts.append(tail[:cut])
