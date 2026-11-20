@@ -2117,6 +2117,11 @@ function afterPlayback() {
   S.ducked = false;
   S.agentText = "";
   setPhaseLine();
+  // 服务端只有在收到这条消息后才收线：结束语再长也等播完，
+  // 不再按固定 2.5 秒把最后一句切断。
+  if (WS.sock && WS.started && WS.sock.readyState === 1) {
+    WS.sock.send(JSON.stringify({ type: "playback_done" }));
+  }
   // 播报期间麦克风一直开着（为了能打断），这段音频里混着客服自己的声音，
   // 不清掉的话下一轮识别会把它们当成用户说的话。
   const sid = S.sessionId, tok = S.token;
@@ -2299,7 +2304,11 @@ async function sendTurn(payload, t0) {
     if (d.hangup || d.end_reason) {
       // 第一次终态信号锁定绝对截止；后续 ACK 轮只重排到同一个点，
       // 不让「嗯/好的/对」把挂断无限推后（与服务端 ws_channel 同口径）。
-      if (!S.terminalAt) S.terminalAt = Date.now() + 2500;
+      // 11-20 截图里结束语很长，固定 2.5s 会把最后一句截断：
+      // HTTP 路线按回复长度留够阅读/播放时间（约 130ms/字，上限 15s）。
+      const replyLen = (d.reply_text || "").length;
+      const graceMs = Math.min(15000, Math.max(2500, 600 + replyLen * 130));
+      if (!S.terminalAt) S.terminalAt = Date.now() + graceMs;
       clearTimeout(S.hangupTimer);
       S.hangupTimer = setTimeout(() => {
         S.hangupTimer = null;

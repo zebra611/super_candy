@@ -157,6 +157,7 @@ class WsCallSession:
             "start": self._on_start,
             "turn": self._on_turn,
             "barge_in": self._on_barge_in,
+            "playback_done": self._on_playback_done,
             "ping": self._on_ping,
             "end": self._on_end,
         }.get(mtype)
@@ -262,24 +263,34 @@ class WsCallSession:
         else:
             self.send_json({"type": "tts_done", "turn_id": turn_id})
 
-        # 这一轮是"说完就结束"（终态/拒绝/挂断）：给一小段缓冲后主动收线。
-        # 没有这一步，通话会一直挂着——前端不点挂断就永远不结束。
+        # 这一轮是终态：先挂一个"最长等待"兜底（前端不报播放完成也要收线），
+        # 真正收线由前端播完后的 playback_done 触发，绝不在音频播到一半时切。
         if should_auto_hangup(out):
-            self._schedule_hangup(out.get("end_reason") or "done")
+            reason = out.get("end_reason") or "done"
+            self._terminal_reason = reason
+            if self._terminal_deadline is None:
+                self._terminal_deadline = time.time() + self.TERMINAL_MAX_WAIT_S
+            self._schedule_hangup(reason, self.TERMINAL_MAX_WAIT_S)
 
     # ---- 服务端主动收线 ---------------------------------------------------
-    AUTO_HANGUP_GRACE_S = 2.5      # 结束语说完到收线的缓冲，留出"等等我改一下"的窗口
+    AUTO_HANGUP_GRACE_S = 2.5      # 兼容直接调用；正常终态走下面的 MAX/PLAYBACK 两档
+    TERMINAL_MAX_WAIT_S = 12.0     # 前端没报 playback_done 时的兜底上限
+    PLAYBACK_DONE_GRACE_S = 0.4    # 播完到收线的短缓冲
 
-    def _schedule_hangup(self, reason):
+    def _schedule_hangup(self, reason, delay=None):
         self._cancel_hangup()
         now = time.time()
         # 第一次终态信号锁定绝对截止；后续轮次只重排到同一个截止点，
         # 这样用户连说「嗯」也不能把挂断无限推后。
         if self._terminal_deadline is None:
-            self._terminal_deadline = now + self.AUTO_HANGUP_GRACE_S
+            self._terminal_deadline = now + (delay if delay is not None
+                                             else self.AUTO_HANGUP_GRACE_S)
             self._terminal_reason = reason
-        delay = max(0.05, self._terminal_deadline - time.time())
-        timer = threading.Timer(delay, self._auto_hangup,
+        wait = self._terminal_deadline - now
+        if delay is not None:
+            wait = min(wait, delay)
+        delay_s = max(0.05, wait)
+        timer = threading.Timer(delay_s, self._auto_hangup,
                                 args=(self._terminal_reason,))
         timer.daemon = True
         self._hangup_timer = timer
@@ -371,6 +382,16 @@ class WsCallSession:
         if self._rt is not None:
             self._rt.restart()
         self.send_json({"type": "barge_ack", "turn_id": turn_id})
+
+    def _on_playback_done(self, msg):
+        """前端把这一轮音频播完了才收线。
+
+        11-20 截图：结束语很长，服务端按固定 2.5s 收线，客户还没听完最后一句
+        就断。这里不重开一轮业务，只把已经标记的终态计时器改到"播完后短缓冲"。
+        """
+        if self._terminal_reason and self.alive:
+            self._schedule_hangup(self._terminal_reason,
+                                  self.PLAYBACK_DONE_GRACE_S)
 
     def _on_ping(self, msg):
         self.send_json({"type": "pong", "ts": msg.get("ts")})
