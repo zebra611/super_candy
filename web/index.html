@@ -2601,23 +2601,40 @@ async function endCall(opts) {
 }
 
 async function refreshMetrics() {
+  // 指标面板的死规矩：宁可显示「—」，绝不把 undefined / null 直接铺到界面上。
+  // 11-20 线上事故：部署包带了半写的 events.db，接口回错误对象，这里读字段
+  // 全是 undefined，用户看到「undefined 通（共 undefined 轮）」。
+  const n = (v) => (v === null || v === undefined || v === "" ? "—" : v);
   try {
     const r = await fetch("/api/metrics");
     const d = await r.json();
+    if (!d || typeof d !== "object" || d.error) {
+      $("mPct").textContent = "—";
+      $("mClosed").textContent = "—";
+      $("metricNote").textContent = "指标暂不可用：服务返回异常，正在恢复";
+      return;
+    }
     const p95 = d.first_audio_p95_ms ? d.first_audio_p95_ms + " ms" : "样本不足";
     $("mPct").textContent = d.first_audio_samples
       ? d.first_audio_p50_ms + " / " + p95
       : "— （暂无语音样本）";
-    $("mClosed").textContent = d.closed_sessions + " 通（共 " + d.turns + " 轮）";
+    $("mClosed").textContent = n(d.closed_sessions) + " 通（共 " + n(d.turns) + " 轮）";
 
     const bits = [];
-    bits.push("语音样本 " + d.first_audio_samples + (d.first_audio_estimated ? "（其中估算 " + d.first_audio_estimated + "）" : ""));
-    bits.push("超时 " + d.first_audio_timeouts);
-    if (d.first_audio_text_samples) bits.push("打字轮参考 P50 " + d.first_audio_text_p50_ms + "ms（不计入门槛）");
-    bits.push("处理耗时 P50 " + d.processing_p50_ms + "ms");
-    bits.push("估算成本 ¥" + d.est_cost_cny);
-    $("metricNote").textContent = "门槛 " + d.gate_ms + "ms · " + bits.join(" · ");
-  } catch (e) { /* 指标拉取失败不影响通话 */ }
+    bits.push("语音样本 " + n(d.first_audio_samples) +
+              (d.first_audio_estimated ? "（其中估算 " + d.first_audio_estimated + "）" : ""));
+    bits.push("超时 " + n(d.first_audio_timeouts));
+    if (d.first_audio_text_samples) bits.push("打字轮参考 P50 " + n(d.first_audio_text_p50_ms) + "ms（不计入门槛）");
+    bits.push("处理耗时 P50 " + n(d.processing_p50_ms) + "ms");
+    bits.push("估算成本 ¥" + n(d.est_cost_cny));
+    let note = "门槛 " + n(d.gate_ms) + "ms · " + bits.join(" · ");
+    if (d.degraded) note = "指标暂不可用（数据读取失败）· " + note;
+    $("metricNote").textContent = note;
+  } catch (e) {
+    $("mPct").textContent = "—";
+    $("mClosed").textContent = "—";
+    $("metricNote").textContent = "指标暂不可用：连接失败";
+  }
 }
 
 async function refreshEvents() {
