@@ -2010,10 +2010,17 @@ def main():
     本地跑会自动打开浏览器；部署环境不打开（没有显示器，也没必要）。
     不想自动打开就设 NO_BROWSER=1。
     """
+    # P3-3：部署模式（有 PORT）下，data/ 里若带进旧幂等库就拒绝启动。
+    # 必须赶在 events.init_db() 之前——一旦开始写，旧库就"被接管"了，
+    # 看起来正常、实则读的是别的通话留下的单，正是最难查的假绿。
+    # 本地开发（无 PORT）不检查，行为逐字节不变。
+    deployed = "PORT" in os.environ
+    import runtime_db_guard
+    runtime_db_guard.check(os.path.join(_ROOT, "data"), deployed)
+
     events.init_db()
     setup_logging()
     port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", "8000"))
-    deployed = "PORT" in os.environ
     host = os.environ.get("HOST") or ("0.0.0.0" if deployed else "127.0.0.1")
 
     server = ThreadingHTTPServer((host, port), Handler)
