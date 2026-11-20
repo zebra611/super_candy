@@ -1853,6 +1853,33 @@ _DONE_ACK_MARKS = ("清楚了", "知道了", "明白了", "没有了", "不用�
 _DONE_ACK_NEG = ("不清楚", "没清楚", "不知道", "没明白", "不明白", "没懂", "还有")
 _SCAM_MARKS = ("诈骗", "骗子", "骗人", "真假", "真的假的", "是不是官方", "是不是京东")
 _WHAT_AUTH_MARKS = ("什么授权", "啥授权", "授权是什么", "什么叫授权", "授权指的")
+
+# P4-1：来电身份/号码来源质疑的识别词。
+# docs/60 挂账 #4：「你哪来的我号码，怎么信你」被答成驳回原因——
+# 根因是所有 ask 都落进 _RESULT_ASK_MARKS（问驳回原因）那条分支，
+# 而"号码哪来的"根本不在结果类问题里。这里是专门的一类：**质疑来电可信度**。
+# 必须能被"你怎么知道我电话/你哪来的号码/你怎么联系到我的/我怎么信你"这些口语打中。
+_CALLER_SOURCE_MARKS = (
+    "哪来的", "哪里来的", "哪儿来的", "哪来得",        # 你哪来的我号码
+    "怎么知道", "咋知道", "从哪里知道", "从哪知道", "哪儿知道",
+    "怎么找到", "怎么联系到", "怎么会打到我", "怎么打到我这",
+    "谁给你的", "哪得来的", "哪弄到的", "从哪儿弄到",
+)
+_CALLER_LEGIT_MARKS = (
+    "怎么信", "我怎么信", "凭什么信", "可靠的吗", "靠谱吗", "是真的吗",
+    "官方吗", "是官方的吧", "你们是京东吗", "确认一下你们",
+)
+# 修饰后的官方口径（用户给的"我们是京东官方的、这是官方电话、您放心"）：
+#  ① 正面确认官方来电；② 说明号码来源（入驻预留）；③ 给可核实的官方热线；
+#  ④ 顺带接住同句里的业务问（多问题分诊：先答身份、业务问题许在核身后答）；
+#  ⑤ 不承诺审核结果、索要信息只到后四位/姓名。
+_CALLER_LEGIT_FALLBACK = (
+    "您问得对，我先跟您说明白：这通电话是京东官方商家审核专线打来的，"
+    "您的号码是商家入驻时预留的联系方式，我们只用来核对这笔资质申请，"
+    "不会外传，也不会向您索要转账或验证码。您要是不放心，可以挂断后拨打"
+    "京东商家热线 4006180092 核实我们的来电。您报一下预留手机号后四位，"
+    "或者联系人姓名，我核对完，您想问的驳回原因和要补的材料，马上给您说清楚。"
+)
 _CHECKLIST_SENT_FALLBACK = ("好，清单我已经发到您商家后台了：{materials}。"
                             "后面哪一步不清楚、或者忘了要补什么，直接翻后台清单就行。")
 _SCAM_FALLBACK = ("理解您谨慎。我们是京东官方资质审核，不会要您转账或报密码，"
@@ -1910,6 +1937,20 @@ def _is_done_ack(session, text, flags):
 
 def _is_scam_worry(text):
     return any(w in (text or "") for w in _SCAM_MARKS)
+
+
+def _is_caller_legit_question(text):
+    """客户在质疑"这电话哪来的 / 我怎么信你是官方"（P4-1）。
+
+    与 `_is_scam_worry` 分开：那是明确说"诈骗/骗子"，语气更冲；
+    这里是中性追问号码来源或可信度，很多客户只是谨慎、并非拒绝。
+    两者都要正面答，但触发词不同，分函数便于各自测试与调词表。
+    """
+    t = re.sub(r"[\s，,。.!！?？、…～~]", "", text or "")
+    if not t:
+        return False
+    return (any(w in t for w in _CALLER_SOURCE_MARKS)
+            or any(w in t for w in _CALLER_LEGIT_MARKS))
 
 
 def _is_what_auth(text):
@@ -2049,6 +2090,57 @@ def _early_answer(session, text, flags):
         _reset_ambiguity(session, True)
         return _scope_reply(session, stage, flags, _scope)
     return None
+
+
+def _caller_legit_answer(session, text, flags):
+    """P4-1：质疑来电身份/号码来源时正面作答，且顺带接住同句的业务问。
+
+    为什么做成独立全局守卫（而不是塞进 _early_answer）：
+        - _early_answer 只覆盖 NEED/OFFER/CONFIRM，而"你哪来的号码"最常发生在
+          IDENTITY（还没核身、客户先警觉）——放那里接不住；
+        - 这类问题与阶段无关，属于"客户在确认你是不是骗子"，必须先答再谈业务。
+    行为约束：
+        - 不推进阶段、不消耗 slot_asks / identity_ask_n，不回写；
+        - 话术里主动把同句业务问（驳回原因/材料）许在核身后答——这就是
+          多问题分诊："一句话三个问题先答身份可信度，再答应业务问题回头答"；
+        - 同一通重复问最多两种说法，避免逐字复读。
+    返回 _reply 结果或 None（不是本类问题，交回阶段逻辑）。
+    """
+    if not _is_caller_legit_question(text):
+        return None
+    # 同一句里客户还在报身份信息（如性格用例 T10 的"怎么信你，我说，…0086"——
+    # "怎么信你"是那套画像的口头禅，真正在做的是报尾号）时，守卫必须让路，
+    # 否则把数字吞掉、答一堆官方口径，客户报了信息却没被接收（agent_slot_loss）。
+    # 对话第一原则：客户给了数据就先接数据，不能被质疑词干掉。
+    if flags.get("digits"):
+        return None
+    # 质疑词混在口头禅/抱怨里出现时（如性格画像 T10 每句都带"怎么信你，我说，"），
+    # 它不是在问身份，而是在报信息或抱怨"你怎么还问"。这类交回原阶段处理，
+    # 否则客户的信息被吞、流程卡死（深检实测 12/12→11/12 的根因）。
+    _filler = ("我说", "我看看", "你说", "我报过", "刚不是说了", "怎么还问", "不是说了")
+    if any(w in (text or "") for w in _filler):
+        return None
+    stage = session["stage"]
+    # 只在核身早期（IDENTITY / NEED）接这类质疑——这才是"客户还不确定你是不是
+    # 骗子"的真实场景。CONFIRM 是最后确认环节，客户这时反复问身份，往往是在
+    # 拖着不表态；那里有 confirm_engaged「两次提问转专员」的防循环机制，
+    # 不能被本守卫绕过（verify 有一条专门守它）。OFFER 同理交回原阶段。
+    if stage not in ("IDENTITY", "NEED"):
+        return None
+    # 话术优先取当前阶段配置，缺键用统一兜底（四场景都补了键，这里主要是防御）。
+    cfg = config_loader.stage_config(stage) if stage in ("IDENTITY", "NEED", "OFFER", "CONFIRM") else {}
+    n = int(session.get("caller_legit_n", 0)) + 1
+    session["caller_legit_n"] = n
+    key = "reply_caller_identity" if n % 2 == 1 else "reply_caller_identity_2"
+    default = _CALLER_LEGIT_FALLBACK if n % 2 == 1 else (
+        "是的，这是京东官方的来电，号码取自您入驻时预留的联系方式，"
+        "我们只核对这一笔申请。您拨官方热线 4006180092 一问就能核实。"
+        "核对完身份，驳回原因和要补的材料我一次说清楚——先报后四位或联系人姓名就行。")
+    text_out = cfg.get(key) or default
+    app = session["slots"].get("application")
+    if app:
+        text_out = _fill_application(text_out, app)
+    return _reply(session, text_out, intent="caller_identity")
 
 
 def _re_explain(session, stage, text, flags):
@@ -5264,9 +5356,15 @@ def respond(session, user_text):
     elif flags["hangup"] and not flags["no"] and session["stage"] not in ("WRITEBACK", "DONE"):
         out = _finish(session, config_loader.stage_config("GREETING").get("reply_hangup", ""), "hangup")
     else:
-        # 记忆回溯放在挂断之后、阶段处理之前：它是"回答问题"，
-        # 不该改变流程；也不该被某个阶段的处理器截走当成新诉求。
-        out = _recall(session, text) if _is_recall_question(text) else None
+        # 质疑来电身份/号码来源（P4-1）：先正面答"官方来电、您放心"，
+        # 再答应核身后答业务问题。必须在 _early_answer 和阶段分支之前——
+        # 否则"你哪来的号码"会被 _stage_identity 当成 ask 落到"记下了等专员"，
+        # 或当成 no 直接收掉。它不推进阶段，只回答，行为等同 _recall。
+        out = None
+        if out is None:
+            out = _caller_legit_answer(session, text, flags)
+        if out is None:
+            out = _recall(session, text) if _is_recall_question(text) else None
         # 11-12：追问范围 / 质疑 / 明确说清楚了 / 要清单，都必须在**所有阶段
         # 分支之前**处理。NEED 最前面的 flags["no"] 会先把质疑收成 declined，
         # CONFIRM 的含糊梯子会把「清楚了」再问一遍——放阶段里都拦不住。
