@@ -350,6 +350,76 @@ class RestateFactInDialogue(unittest.TestCase):
                          out["reply_text"].replace("商标注册证这一项", ""))
 
 
+class LogTurnRecovery(unittest.TestCase):
+    """11-21 运行日志 8 个失败点的回归。
+
+    这轮不是补一句话，是四类结构问题：反问兜底、投诉欠账、术语解释、
+    转人工虚假承诺（改为客户自拨热线）。
+    """
+
+    def _sess(self, stage="CONFIRM", prev=""):
+        s = _session(stage, application=_app())
+        s["slots"]["application"]["reject_reason"] = \
+            "授权书内容不完整（包含盖章及个人身份证复印件、无独占性等问题）"
+        s["slots"]["consent"] = True
+        s["last_reply_text"] = prev
+        return s
+
+    def test_term_question_names_the_term_no_reverse_ask(self):
+        """'无独占性是啥意思'点名术语正面收口，不再反问'您想先问哪一步'。"""
+        for q in ("无独占性是啥意思", "盖章是啥意思", "个人身份证复印件指什么"):
+            out = dialogue.respond(self._sess("OFFER"), q)
+            self.assertEqual(out["intent"], "term_detail", q)
+            self.assertIn("无独占性" if "无独占" in q else ("盖章" if "盖章" in q else "个人身份证"),
+                          out["reply_text"])
+            self.assertNotIn("您想先问哪一步", out["reply_text"])
+
+    def test_complaints_get_apology_and_facts(self):
+        """'没回答/态度差/我忘了'→道歉+补答本单原因材料，不推进不回写。"""
+        for q in ("为什么不回答我问题", "你这客服啥态度", "我都忘了要干啥了", "我说了啊"):
+            s = self._sess("CONFIRM")
+            out = dialogue.respond(s, q)
+            self.assertEqual(out["intent"], "complaint_recovery", q)
+            self.assertIn("抱歉", out["reply_text"])
+            self.assertIn("驳回原因", out["reply_text"])
+            self.assertIsNone(out.get("tool_call"))
+            self.assertEqual(out["next_stage"], "CONFIRM")
+
+    def test_doubt_fallback_is_answer_not_question(self):
+        """'啥意思'不再反问，改为明说边界+后台路径+热线。"""
+        out = dialogue.respond(self._sess("OFFER"), "啥意思")
+        self.assertNotIn("您想先问哪一步", out["reply_text"])
+        self.assertIn("4006180092", out["reply_text"])
+
+    def test_need_after_statement_is_not_consent(self):
+        """陈述句后答'需要'不再被当同意回写；确认问句后仍可正常同意。"""
+        s = self._sess("CONFIRM", prev="…然后在后台重新提交。")
+        out = dialogue.respond(s, "需要")
+        self.assertIsNone(out.get("tool_call"),
+                          "上一轮没问确认，'需要'不该触发回写")
+        s2 = self._sess("CONFIRM", prev="…这样可以吗？")
+        out2 = dialogue.respond(s2, "需要")
+        self.assertTrue(out2.get("tool_call"),
+                        "上一轮确实问了确认，'需要'应能正常同意")
+
+    def test_no_fake_handoff_promise(self):
+        """所有对客话术不得再承诺转人工/专员回电，只引导自拨热线。"""
+        import glob
+        import json as _json
+        files = ["config/scene.json"] + glob.glob("config/scenes/*.json")
+        bad = []
+        pat_ok = ("转人工能力", "是否引导客户自拨热线")  # 注释里的说明允许
+        for f in files:
+            with open(f, encoding="utf-8") as fh:
+                txt = fh.read()
+            for kw in ("需要我帮您转接人工客服", "我现在就给您转", "让专员回电",
+                       "专员会用官方号码给您回电", "稍后会有专员", "让专员联系",
+                       "稍后让专员", "专员再和您对接"):
+                if kw in txt and not all(p in txt for p in pat_ok):
+                    bad.append((f, kw))
+        self.assertEqual(bad, [], "仍有虚假转人工承诺：%s" % bad)
+
+
 class QaHelpers(unittest.TestCase):
     """两个纯函数的边界，单独钉一下。"""
 

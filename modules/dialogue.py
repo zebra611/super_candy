@@ -2159,11 +2159,73 @@ def _material_in_text(session, text):
     return max(hits, key=len) if hits else ""
 
 
-def _restate_fact_answer(session, text, flags):
-    """客户要求重述"你说过的"本单事实，或换动词追问具体材料时，正面答本单事实。
+#: 11-21 日志 turn6/7/9/10：客户抗议"你没答/我说了啊/态度差"。
+#: 这些此前落进 ambiguous 的通用句，语气像命令、又不补答，越聊越糟。
+_COMPLAINT_NO_ANSWER = ("为什么不回答", "你没回答", "没回答我", "不回答我",
+                        "我说了啊", "我都说了", "说了多少遍", "你听不懂",
+                        "听不懂话", "什么态度", "啥态度", "你这客服", "态度太差",
+                        "我都忘了要干啥", "我都忘了", "搞不明白你")
+_COMPLAINT_APOLOGY = ("实在抱歉，刚才绕着没答到点上，是我没说明白。"
+                     "我直接说：您这笔申请驳回原因是{reason}，需要补{materials}，"
+                     "在商家后台逐张上传后重新提交就行。"
+                     "还没讲清楚的，您自己拨打 4006180092 找人工客服核对。")
 
-    返回 _reply 结果或 None。放在 _detail_gap_answer 之前——否则
-    "细说商标注册证"会被通用缺口兜底吞掉，只说"这一项"不点材料。
+
+def _complaint_recovery(session, text, flags):
+    """客户抗议"你没回答/态度差/我忘了要干啥"时，道歉 + 正面补答 + 热线。
+
+    不推进阶段、不回写、不复读命令式句子。放在全局前置，早于阶段处理器——
+    否则这些话在 CONFIRM 会落进含糊梯子，回"您回一句要不要转人工就行"。
+    """
+    t = text or ""
+    if not any(w in t for w in _COMPLAINT_NO_ANSWER):
+        return None
+    app = session["slots"].get("application")
+    if app:
+        return _reply(session, _fill_application(_COMPLAINT_APOLOGY, app),
+                      intent="complaint_recovery")
+    return _reply(session,
+                  "实在抱歉，刚才绕着没答到点上。您把想问的直接说一句，我这就给您答；"
+                  "要人工服务，您自己拨打 4006180092。",
+                  intent="complaint_recovery")
+
+
+def _term_in_reason(session, text):
+    """用户话里问的，是不是本单驳回原因里的某个术语？返回该术语，否则空串。
+
+    11-21 日志 turn5"无独占性是啥意思"：'无独占性'就写在 reject_reason 的括号里。
+    这类问题此前命中"啥意思"掉进 _DOUBT_MARKS 反问"您想先问哪一步"，答非所问。
+    这里从原因文本里切出词，找出现在用户话里的最长一段——术语解释类追问一律
+    按"点名术语 + 统一缺口口径"正面收口，不再反问用户。
+    """
+    app = _app_of(session)
+    reason = str(app.get("reject_reason") or app.get("reason") or "")
+    if not reason:
+        return ""
+    t = re.sub(r"[\s，,。.!！?？、…～~（）()]", "", text or "")
+    if not t:
+        return ""
+    # 按标点/括号切成候选词，再对每段做滑窗取"既在原因里、又在用户话里"的最长子串。
+    # 只做整段匹配会漏掉"无独占性等问题"——用户说的是"无独占性"，带后缀就对不上。
+    segs = [re.sub(r"[\s，,。.!！?？、…～~]", "", w)
+            for w in re.split(r"[，,。.!！?？、…～~（）()：:]", reason)]
+    segs += [re.sub(r"(等问题|问题|等|类问题)$", "", s) for s in segs]
+    best = ""
+    for seg in segs:
+        for n in range(min(8, len(seg)), 1, -1):
+            for i in range(len(seg) - n + 1):
+                sub = seg[i:i + n]
+                if sub in t and len(sub) > len(best):
+                    best = sub
+    return best
+
+
+def _restate_fact_answer(session, text, flags):
+    """客户要求重述"你说过的"本单事实，或换动词追问具体材料/原因术语时，正面答本单事实。
+
+    返回 _reply 结果或 None。放在 _detail_gap_answer 和 _early_answer 之前——
+    否则"细说商标注册证"会被通用缺口兜底吞掉、"无独占性是啥意思"会被 doubt
+    反问"您想先问哪一步"。
     """
     app = _app_of(session)
     if not app:
@@ -2171,11 +2233,16 @@ def _restate_fact_answer(session, text, flags):
     t = text or ""
     asks_agent = any(w in t for w in _RESTATE_AGENT_MARKS)
     mat = _material_in_text(session, t)
+    term = _term_in_reason(session, t)
     reason_word = any(w in t for w in ("原因", "驳回", "为啥", "为什么", "没通过", "不过"))
-    # 三类命中：① 问我方讲过的原因 ② 换动词追问本单材料 ③ 问我方讲过的材料
+    asks_detail = any(w in t for w in ("啥意思", "什么意思", "是啥", "什么意",
+                                       "啥意", "解释", "指什么", "啥叫", "什么叫"))
+    # 四类命中：① 问我方讲过的原因 ② 换动词追问本单材料 ③ 问我方讲过的材料
+    #           ④ 追问驳回原因里的具体术语（"无独占性是啥意思"）
     if not ((asks_agent and reason_word)
             or (mat and any(v in t for v in _MATERIAL_DETAIL_VERBS))
-            or (asks_agent and any(w in t for w in ("材料", "补")))):
+            or (asks_agent and any(w in t for w in ("材料", "补")))
+            or (term and asks_detail)):
         return None
     cfg = config_loader.stage_config(session["stage"]) or {}
     # 点到具体材料：先点名再给统一口径，问答对得上，也不把"补X"复读成整张清单。
@@ -2192,6 +2259,14 @@ def _restate_fact_answer(session, text, flags):
             gap = gap[len(_lead):]
         return _reply(session, "%s这一项我这边能查到的就是这单需要补交，%s"
                       % (mat, gap), intent="material_detail")
+    # ④ 原因术语追问：点名术语 + 承认没有更细说明 + 后台路径 + 热线，不反问用户。
+    if term and asks_detail:
+        return _reply(session,
+                      "您问的'%s'，我这边能查到的就是这单原因里写了这一条，"
+                      "更细的判定标准系统里没有说明，我不能替审核下结论。"
+                      "您按商家后台提示把材料备齐传上去，以完整审核结果为准；"
+                      "要人工核对，自己拨打 4006180092。" % term,
+                      intent="term_detail")
     tpl = cfg.get("reply_application_detail") or (
         "您这笔申请的驳回原因和需补材料我这边都有记录：{reason}，需要补充{materials}。")
     return _reply(session, _fill_application(_soothe(tpl, flags), app),
@@ -4810,6 +4885,28 @@ def _fact_ack_reply(session, text, cfg, flags):
                   next_stage="CONFIRM", intent="ambiguous")
 
 
+def _weak_yes_without_question(session, text):
+    """'需要/要'这类弱肯定，在上一轮没问任何事时不能当同意回写。
+
+    11-21 日志 turn12：客服说完"…在后台重新提交。"（陈述句），用户答"需要"，
+    意图层判成强 yes（conf 0.95）直接回写同意。但"需要"此时答的是什么不明确
+    （可能是想要材料、想要人工），当同意是编结论。
+    只对"需要/要"这类**依赖上文问句才有意义**的答语设闸；
+    "好吧/行/同意/清楚了"是独立成立的明确肯定，不受影响——否则会挡断正常闭环
+    （test_intent 的弱肯定转正用例就是这样被挡红的）。
+    """
+    t = re.sub(r"[\s，,。.!！?？]", "", text or "")
+    if not any(w == t or (len(t) <= 3 and w in t)
+               for w in ("需要", "要", "要的")):
+        return False
+    prev = str(session.get("last_reply_text") or "")
+    if not prev:
+        return False
+    tail = re.split(r"[。！!；;]", prev)[-1]
+    # 上一轮确实在等答复（问句）时，"需要"可当肯定；否则不算。
+    return not any(w in tail for w in ("吗", "可以吗", "行吗", "好不好", "对吧", "？", "?"))
+
+
 def _stage_confirm(session, text, flags):
     """CONFIRM：拿到明确答复。
 
@@ -4925,7 +5022,8 @@ def _stage_confirm(session, text, flags):
             and not any(_negated(w) for w in _yes_marks):
         return _do_writeback(session, True)
 
-    if flags["yes"] and flags.get("conf", 1.0) >= YES_MIN_CONF:
+    if flags["yes"] and flags.get("conf", 1.0) >= YES_MIN_CONF \
+            and not _weak_yes_without_question(session, text):
         return _do_writeback(session, True)
 
     # 「不需要转人工」是收尾问句的答复，不是拒绝整改（见 _no_handoff 的说明）。
@@ -5558,6 +5656,9 @@ def respond(session, user_text):
         out = None
         if out is None:
             out = _caller_legit_answer(session, text, flags)
+        if out is None:
+            # 11-21：客户抗议"没回答/态度差"时先道歉补答，不能落进含糊梯子。
+            out = _complaint_recovery(session, text, flags)
         if out is None:
             # 11-21：要求重述本单事实 / 换动词追问具体材料，必须在缺口兜底之前——
             # "细说商标注册证"若不先接住，会被 _detail_gap_answer 吞成通用"这一项"。
