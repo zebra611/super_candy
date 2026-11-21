@@ -2122,6 +2122,82 @@ def _detail_gap_topic(text):
     return None
 
 
+# ---------------------------------------------------------------------------
+# 11-21：客户换一个动词（补 → 细说）就识别不出来 / 追问"你说过的原因"
+#
+# 截图两轮实证：
+#   "补商标注册证"   → 点了材料名，答得对；
+#   "细说商标注册证" → 只换动词就掉进通用缺口兜底，只说"这一项"，不点材料；
+#   "你不是跟我说过原因了吗" → 命中回溯词，复述了用户上一轮的"哦"。
+# 三句的共同点：客户在追问**本单档案里就有的事实**（要补的具体材料 / 驳回原因），
+# 不是真的"无据细节"，更不是"我刚才说了什么"。统一在这里按类识别、按本单事实答。
+# ---------------------------------------------------------------------------
+#: 问"你（客服）刚才讲过的事实"的句式——主语是我方，答案在本单档案里。
+_RESTATE_AGENT_MARKS = ("你不是跟我说过", "你没跟我说过", "你跟我说过",
+                        "你说过", "你刚说", "你刚才说", "你说的", "你不是说",
+                        "你跟我讲过", "你讲过")
+# 换动词追问同一材料的说法：动词不同、对象相同，必须走同一答案。
+_MATERIAL_DETAIL_VERBS = ("细说", "细讲", "详细说", "具体说", "说明", "说说",
+                          "讲讲", "补", "要补", "哪样", "哪一样", "什么是")
+
+
+def _material_in_text(session, text):
+    """这句话点到了本单要补的哪一项材料？返回材料名（原文），否则空串。
+
+    从本单 required_materials 里找出现在用户话里的最长一项——
+    "细说商标注册证"要点出"商标注册证"，"细说国家商标网状态截图"点出后者。
+    兼容部分场景把材料放在 materials 字符串字段里（脚本直调、测试）。
+    """
+    app = _app_of(session)
+    mats = list(app.get("required_materials") or [])
+    raw = app.get("materials")
+    if isinstance(raw, str) and raw:
+        mats += [m for m in re.split(r"[、，,；;]+", raw) if m]
+    t = re.sub(r"[\s，,。.!！?？、…～~]", "", text or "")
+    hits = [str(m).strip() for m in mats
+            if str(m).strip() and re.sub(r"[\s，,。.!！?？、…～~]", "", str(m)) in t]
+    return max(hits, key=len) if hits else ""
+
+
+def _restate_fact_answer(session, text, flags):
+    """客户要求重述"你说过的"本单事实，或换动词追问具体材料时，正面答本单事实。
+
+    返回 _reply 结果或 None。放在 _detail_gap_answer 之前——否则
+    "细说商标注册证"会被通用缺口兜底吞掉，只说"这一项"不点材料。
+    """
+    app = _app_of(session)
+    if not app:
+        return None
+    t = text or ""
+    asks_agent = any(w in t for w in _RESTATE_AGENT_MARKS)
+    mat = _material_in_text(session, t)
+    reason_word = any(w in t for w in ("原因", "驳回", "为啥", "为什么", "没通过", "不过"))
+    # 三类命中：① 问我方讲过的原因 ② 换动词追问本单材料 ③ 问我方讲过的材料
+    if not ((asks_agent and reason_word)
+            or (mat and any(v in t for v in _MATERIAL_DETAIL_VERBS))
+            or (asks_agent and any(w in t for w in ("材料", "补")))):
+        return None
+    cfg = config_loader.stage_config(session["stage"]) or {}
+    # 点到具体材料：先点名再给统一口径，问答对得上，也不把"补X"复读成整张清单。
+    if mat:
+        cfg_all = config_loader.load() or {}
+        gap = cfg_all.get("reply_detail_gap") or (
+            "具体审核标准系统里没有更细的说明，我不能替审核同事下结论。"
+            "您按商家后台的提示上传就行，传完以后以完整审核结果为准。"
+            "着急的话拨打 4006180092，让专员按您这单核对。")
+        # 配置里的 gap 话术以"这一项我这边能查到的就是这单需要补交"开头，
+        # 这里已经点名材料，去掉重复的半句，避免"商标注册证这一项…这一项我这边…"。
+        _lead = "这一项我这边能查到的就是这单需要补交，"
+        if gap.startswith(_lead):
+            gap = gap[len(_lead):]
+        return _reply(session, "%s这一项我这边能查到的就是这单需要补交，%s"
+                      % (mat, gap), intent="material_detail")
+    tpl = cfg.get("reply_application_detail") or (
+        "您这笔申请的驳回原因和需补材料我这边都有记录：{reason}，需要补充{materials}。")
+    return _reply(session, _fill_application(_soothe(tpl, flags), app),
+                  intent="restate_fact")
+
+
 def _detail_gap_answer(session, text, flags):
     """全局守卫：无据细节追问统一用一段话收口，答不了也不岔题。
 
@@ -3321,6 +3397,15 @@ def _is_recall_question(text):
     """
     t = text or ""
     if not any(w in t for w in RECALL_MARKS):
+        return False
+    # 11-21 截图："你不是跟我说过原因了吗"里的"我说过"其实是"你（客服）跟我说过"，
+    # 主语是**客服**——商家在问"你刚才讲的原因是什么"，要的是正面答原因，
+    # 而不是复述商家自己上一轮的填充词"哦"（实测复述成"您刚才提到的是：哦"）。
+    # 这类"你说过 / 你不是跟我说过 / 你刚说"结构一律不算回溯问句，
+    # 交回正常路径去答原因/材料。
+    _asks_agent = ("你不是跟我说过", "你没跟我说过", "你跟我说过",
+                   "你说过", "你刚说", "你刚才说", "你说的", "你不是说")
+    if any(w in t for w in _asks_agent):
         return False
     return any(h in t for h in RECALL_HINTS)
 
@@ -5473,6 +5558,10 @@ def respond(session, user_text):
         out = None
         if out is None:
             out = _caller_legit_answer(session, text, flags)
+        if out is None:
+            # 11-21：要求重述本单事实 / 换动词追问具体材料，必须在缺口兜底之前——
+            # "细说商标注册证"若不先接住，会被 _detail_gap_answer 吞成通用"这一项"。
+            out = _restate_fact_answer(session, text, flags)
         if out is None:
             # 11-20：无据细节统一收口。必须在 _early_answer / 各阶段分支之前——
             # 岔题（复读驳回原因、误判情绪、催确认）都发生在那些分支里。

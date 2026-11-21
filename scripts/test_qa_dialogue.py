@@ -56,6 +56,8 @@ def _app():
             "application_desc": "某某旗舰店 品牌入驻",
             "reason": "商标状态不符合要求",
             "materials": "注册商标证、授权书",
+            "reject_reason": "商标状态不符合要求",
+            "required_materials": ["商标注册证", "国家商标网状态截图", "商标转让证明"],
             "close_mode": "电话", "call_status": "待外呼"}
 
 
@@ -291,6 +293,61 @@ class DetailGapUnifiedReply(unittest.TestCase):
         self.assertIsNone(out.get("tool_call"), "无据细节不该触发回写")
         self.assertNotIn(out.get("next_stage"), ("DONE", "WRITEBACK"))
         self.assertFalse(out.get("hangup"))
+
+
+class RestateFactInDialogue(unittest.TestCase):
+    """11-21 截图两轮：问答对应 + 换个动词识别不翻转。
+
+    轮1「你不是跟我说过原因了吗」曾被判成回溯问句，复述用户上一轮的"哦"；
+    轮2「补商标注册证」点了材料名、「细说商标注册证」只换动词却掉进通用兜底
+    只说"这一项"。两类都改成按本单事实正面答。
+    """
+
+    def _with_recent(self, stage="NEED"):
+        s = _session(stage, application=_app())
+        s["memory"] = {"facts": {}, "recent": [
+            {"user": "什么？"}, {"user": "哦"}]}
+        return s
+
+    def test_reason_question_answers_reason_not_repeats_user(self):
+        """问"你说过的原因"→ 正面答驳回原因，绝不复述上一轮的"哦"。"""
+        for q in ("你不是跟我说过原因了吗", "你说过原因啊", "你刚才说的啥原因"):
+            s = self._with_recent()
+            out = dialogue.respond(s, q)
+            self.assertNotIn("您刚才提到的是", out["reply_text"],
+                             "%s 被当成回溯问句，复述了用户的填充词" % q)
+            self.assertIn("驳回原因", out["reply_text"],
+                         "%s 没有正面答原因" % q)
+
+    def test_genuine_recall_still_works(self):
+        """真正的回溯问句（"我刚才说啥来着"）不能被上面的排除逻辑误伤。"""
+        s = self._with_recent()
+        s["memory"]["facts"]["need"] = "我要改店铺名"
+        out = dialogue.respond(s, "我刚才说啥来着")
+        self.assertEqual(out["intent"], "recall")
+        self.assertIn("改店铺名", out["reply_text"])
+
+    def test_material_verbs_all_name_the_material(self):
+        """补/细说同一材料只换动词，intent 与话术都一致、都点名材料。"""
+        outs = []
+        for q in ("补商标注册证", "细说商标注册证", "商标注册证细说一下"):
+            s = self._with_recent()
+            out = dialogue.respond(s, q)
+            self.assertEqual(out["intent"], "material_detail",
+                             "%s 没走材料点名路径" % q)
+            self.assertIn("商标注册证", out["reply_text"],
+                         "%s 没点出材料名" % q)
+            outs.append(out["reply_text"])
+        self.assertEqual(len(set(outs)), 1,
+                         "只换动词不该让答案不同：%s" % outs)
+
+    def test_named_material_not_swallowed_by_gap(self):
+        """点到本单材料时不能被通用缺口兜底吞掉（只说"这一项"）。"""
+        s = self._with_recent()
+        out = dialogue.respond(s, "细说商标注册证")
+        self.assertNotEqual(out["intent"], "detail_gap")
+        self.assertNotIn("这一项我这边能查到的就是这单需要补交，具体",
+                         out["reply_text"].replace("商标注册证这一项", ""))
 
 
 class QaHelpers(unittest.TestCase):
