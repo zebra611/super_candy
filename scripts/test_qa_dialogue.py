@@ -466,7 +466,9 @@ class HowToPathAndTextHygiene(unittest.TestCase):
         import glob
         bad = ("4006180092，自己拨打 4006180092",
                "4006180092，让专员",
-               "拨打 4006180092，自己拨打")
+               "拨打 4006180092，自己拨打",
+               # 批量替换把主语换错："我让专员…联系您" → "我自己拨打"
+               "我自己拨打")
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         targets = [os.path.join(root, "config", "scene.json")]
         targets += sorted(glob.glob(os.path.join(root, "config", "scenes", "*.json")))
@@ -475,6 +477,75 @@ class HowToPathAndTextHygiene(unittest.TestCase):
                 txt = fh.read()
             for b in bad:
                 self.assertNotIn(b, txt, "%s 里有重复/残留热线措辞：%s" % (f, b))
+
+
+class IdentityNotAskedTwice(unittest.TestCase):
+    """已核对过身份后，绝不能再让客户报尾号/姓名（11-21 截图）。
+
+    截图那通：客户第 1 轮报了姓名+公司，第 5 轮问"这号哪来的"，客服又要
+    "手机号后四位或联系人姓名"，客户只好反复报 0497、郭军，第 10 轮才听到
+    "对上了"。客户视角就是"我说过三遍你还问"。
+    """
+
+    def test_source_question_after_confirmed_does_not_ask_again(self):
+        s = _session("NEED", application=_app())
+        s["slots"]["identity_confirmed"] = True
+        out = dialogue.respond(s, "你这号哪来的？谁让你打我手机的？")
+        self.assertEqual(out["intent"], "caller_identity_known")
+        self.assertIn("不用再报", out["reply_text"])
+        for bad in ("报一下后四位", "报一下预留", "或者联系人姓名"):
+            self.assertNotIn(bad, out["reply_text"],
+                             "身份已核对还索要信息：%s" % bad)
+
+    def test_repeated_tail_is_echoed_and_told_enough(self):
+        s = _session("NEED", application=_app())
+        s["slots"]["identity_confirmed"] = True
+        out = dialogue.respond(s, "0497！")
+        self.assertIn("0497", out["reply_text"], "没有复述客户报的尾号")
+        self.assertIn("不用再报", out["reply_text"])
+        # 第二次起不许再用问句逼表态
+        out2 = dialogue.respond(s, "0497！")
+        self.assertNotIn("？", out2["reply_text"])
+        self.assertNotIn("吗", out2["reply_text"])
+
+    def test_company_answer_is_company_not_person(self):
+        s = _session("NEED", application=_app())
+        s["slots"]["identity_confirmed"] = True
+        s["outbound_target"] = {"contact_name": "郭军", "company_name": "安源商贸中心"}
+        out = dialogue.respond(s, "对，是我公司。")
+        self.assertIn("公司", out["reply_text"])
+        self.assertNotIn("本人", out["reply_text"])
+
+
+class PoliteTone(unittest.TestCase):
+    """敬语层：称呼统一、命令式软化，且不许叠词、不许动官方结束语。"""
+
+    def test_softens_requests_without_duplication(self):
+        for raw, want in (
+            ("麻烦报一下申请时预留手机号的后四位", "麻烦您报一下申请时预留手机号的后四位"),
+            ("您报一下预留手机号后四位", "麻烦您报一下预留手机号后四位"),
+            ("您说一声就行。", "您吩咐一声就好。"),
+            ("说四个数字就行。", "说四个数字就好。"),
+        ):
+            got = dialogue.politeness.polish(raw)
+            self.assertEqual(got, want)
+            self.assertNotIn("麻烦麻烦", got)
+            self.assertNotIn("您麻烦您", got)
+
+    def test_official_close_is_untouched(self):
+        close = "感谢您的接听，祝您生活愉快，再见！"
+        self.assertEqual(dialogue.politeness.polish(close), close)
+
+    def test_politeness_is_wired_into_reply(self):
+        """接线验证：问候/索要信息这类骨架句，出话时必须已经过敬语层。
+
+        只测纯函数不够——把 _reply 里的调用删掉，纯函数测试照样全绿（变异实测）。
+        """
+        s = _session("NEED", application=_app())
+        s["slots"]["identity_confirmed"] = False   # 还没核身，才会走到"报后四位"
+        out = dialogue.respond(s, "你这号哪来的？")
+        self.assertIn("麻烦您报一下", out["reply_text"])
+        self.assertNotIn("您报一下", out["reply_text"].replace("麻烦您报一下", ""))
 
 
 if __name__ == "__main__":
