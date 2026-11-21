@@ -106,7 +106,7 @@ def main():
     # 3) 客户说后台打不开时，回复得接住"打不开"，不能只念材料清单
     blocked = [(u, a) for u, a, _ in pairs if "打不开" in u]
     ok_blocked = blocked and all(
-        any(w in a for w in ("打不开", "浏览器", "专员", "页面")) for _, a in blocked)
+        any(w in a for w in ("打不开", "浏览器", "专员", "页面", "4006180092")) for _, a in blocked)
     check("客户说「页面打不开」时，客服要接住这堵墙（不能只念材料清单）",
           ok_blocked, "共 %d 轮；首句：%s" % (len(blocked), (blocked[0][1][:40] if blocked else "")))
 

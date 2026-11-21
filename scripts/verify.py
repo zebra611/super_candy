@@ -3066,7 +3066,8 @@ def main():
     check("客户说没听明白/搞不懂：不回写同意；步骤→升级→收尾全程无回写",
           _r1["next_stage"] == "CONFIRM"
           and not _r1.get("end_reason")
-          and "转接人工" in _r1["reply_text"]
+          # 11-21：系统没有转人工功能，口径改为"客户自拨热线"，不再承诺转接。
+          and "4006180092" in _r1["reply_text"]
           and _r2["intent"] == "help_steps" and not _r2.get("end_reason")
           and _r3["intent"] == "help_escalate"
           and _r4.get("end_reason") == "help_escalated"
