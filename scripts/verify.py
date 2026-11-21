@@ -3407,6 +3407,35 @@ def main():
                               if _ws3._hangup_timer else None)])
     _ws3.close()
 
+    # 11-22：结束语 60-90 字（`reply_help_bye` 85 字），音频 20 秒以上。
+    # 固定 12 秒兜底一到就 _auto_hangup，客户听到的是"最后一句没讲完、
+    # 后台强制挂断"。兜底必须按这一轮实际要播多久来算，不能写死。
+    _ws4 = _wsc.WsCallSession(_FakeEndBackend(), send_text=lambda _t: None,
+                              close=lambda: None)
+    _long_out = {"tts": {"text": "感" * 85}}
+    _wait = _ws4._terminal_wait_s(_long_out)
+    check("长结束语（85 字）收线兜底跟着实际播放时长走，不再固定 12 秒切断",
+          _wait > 24.0 and _wait <= 40.0,
+          ["兜底=%.1fs（12 秒是旧值，按 4.2 字/秒 + 8 秒余量应为 28s 左右）" % _wait])
+
+    # 每段开播上报进度就续期：估算再保守，只要还在出声就不能收线。
+    _ws4._terminal_reason = "done"
+    _ws4._terminal_deadline = _time.time() + _wsc.WsCallSession.TERMINAL_HARD_CAP_S
+    _ws4._on_playback_progress({})
+    check("每段开播报一次进度就续期，播到一半不会触发收线",
+          _ws4._hangup_timer is not None
+          and _ws4._hangup_timer.interval <= _wsc.WsCallSession.PLAYBACK_STALL_S + 0.05,
+          ["续期间隔=%s" % (_ws4._hangup_timer.interval
+                            if _ws4._hangup_timer else None)])
+    # 但绝对上限仍锁死：进度续期不能把通话拖到无限长。
+    _ws4._terminal_deadline = _time.time() + 1.0
+    _ws4._on_playback_progress({})
+    check("播放进度续期受绝对上限约束，不会无限推后收线",
+          _ws4._hangup_timer is not None and _ws4._hangup_timer.interval <= 1.05,
+          ["剩余上限=%.2fs 实际排期=%.2fs"
+           % (1.0, _ws4._hangup_timer.interval if _ws4._hangup_timer else -1)])
+    _ws4.close()
+
     _adv = subprocess.run([sys.executable, os.path.join(ROOT, "scripts",
                                                         "adversarial_evolve.py"), "check"],
                           cwd=ROOT, capture_output=True, text=True, timeout=180)

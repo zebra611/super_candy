@@ -2719,7 +2719,14 @@ function wsOnMessage(m) {
       // 服务端说完结束语后主动收线。这里不能直接调 endCall()：
       // 它还会 POST /api/call/end，服务端已经记过一次，会重复记账。
       log("系统", "通话已结束（" + (m.reason || "done") + "），服务端已收线。");
-      endCall({ silent: true });
+      // 但队列里可能还有已到本地的段：先把这一句播完再收界面。
+      // 以前这里无条件 endCall()，stopPlayback() 会把正在念的最后一句当场掐掉，
+      // 与"后台强制挂断"是同一件事的两个现场。
+      if (WSP.playing || WSP.queue.length) {
+        WSP.endAfterDrain = true;
+      } else {
+        endCall({ silent: true });
+      }
       return;
     case "barge_ack":
       return;                       // 服务端已记账；停播在前端早已完成
@@ -2764,6 +2771,7 @@ function wsSendTurn(t0) {
   S.busy = true;
   S.t0 = t0;
   WSP.queue = []; WSP.done = false; WSP.reported = false; WSP.playing = false; WSP.text = ""; WSP.rate = 1.05;
+  WSP.endAfterDrain = false;      // 新一轮开始，上一轮残留的"播完就收线"必须清掉
   WS.sock.send(JSON.stringify({ type: "turn" }));
   return true;
 }
@@ -2771,7 +2779,7 @@ function wsSendTurn(t0) {
 // ===== WS 语音播放队列：段就绪即播，与 HTTP 版 playSegments 平行 =====
 // 为什么要平行实现：HTTP 版的队列是"一次拿一包"，WS 版的段是分批到达的，
 // 硬塞进同一个函数会让两条路线互相耦合，坏一处坏一双。
-const WSP = { queue: [], done: false, playing: false, reported: false, text: "", rate: 1.05 };
+const WSP = { queue: [], done: false, playing: false, reported: false, text: "", rate: 1.05, endAfterDrain: false };
 
 function wsOnTts(m) {
   if (m.mode === "browser") {
@@ -2822,6 +2830,12 @@ function wsPlayNext() {
         WSP.reported = true;
         reportMetric(seg.turn_id, performance.now() - S.t0, false);
       }
+      // 每开播一段就告诉服务端"还在出声"。服务端据此续期收线计时器：
+      // 只按字数估时长会偏短，结束语恰恰最长，没有这条就必被切在半句上。
+      if (WS.sock && WS.sock.readyState === 1) {
+        try { WS.sock.send(JSON.stringify({ type: "playback_progress", turn_id: seg.turn_id })); }
+        catch (e) { /* 通道已断：服务端会按兜底时长收线 */ }
+      }
     };
     a.onended = () => {
       S.currentAudio = null;
@@ -2837,6 +2851,12 @@ function wsPlayNext() {
     WSP.done = false; WSP.reported = false; WSP.text = ""; WSP.rate = 1.05;
     $("liveSubtitle").textContent = "";
     afterPlayback();
+  }
+  // 服务端已经收线、但队列里还剩几段（收到 call_ended 时正在播）：
+  // 等这段播完再收界面，不能把已经到本地的最后一句扔掉。
+  if (WSP.endAfterDrain) {
+    WSP.endAfterDrain = false;
+    endCall({ silent: true });
   }
 }
 

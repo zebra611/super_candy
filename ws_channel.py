@@ -158,6 +158,7 @@ class WsCallSession:
             "turn": self._on_turn,
             "barge_in": self._on_barge_in,
             "playback_done": self._on_playback_done,
+            "playback_progress": self._on_playback_progress,
             "ping": self._on_ping,
             "end": self._on_end,
         }.get(mtype)
@@ -268,23 +269,46 @@ class WsCallSession:
         if should_auto_hangup(out):
             reason = out.get("end_reason") or "done"
             self._terminal_reason = reason
-            if self._terminal_deadline is None:
-                self._terminal_deadline = time.time() + self.TERMINAL_MAX_WAIT_S
-            self._schedule_hangup(reason, self.TERMINAL_MAX_WAIT_S)
+            self._schedule_hangup(reason, self._terminal_wait_s(out))
 
     # ---- 服务端主动收线 ---------------------------------------------------
-    AUTO_HANGUP_GRACE_S = 2.5      # 兼容直接调用；正常终态走下面的 MAX/PLAYBACK 两档
-    TERMINAL_MAX_WAIT_S = 12.0     # 前端没报 playback_done 时的兜底上限
+    AUTO_HANGUP_GRACE_S = 2.5      # 兼容直接调用；正常终态走下面的估算/续期两档
+    TERMINAL_MAX_WAIT_S = 12.0     # 估不出时长时的下限（不能比这更早切）
+    TERMINAL_HARD_CAP_S = 240.0    # 绝对上限：再长的话术也必须收线
+    PLAYBACK_STALL_S = 8.0         # 有播放进度就续期；卡住这么久才认定前端没在播
     PLAYBACK_DONE_GRACE_S = 0.4    # 播完到收线的短缓冲
+    _CHARS_PER_SEC = 4.2           # 实测：龙应聆 V3 + rate 1.05 约 4.2 字/秒
+    _SEG_GAP_S = 0.35              # 段间新建 <audio> + 加载 + 起势的实测空档
+
+    @classmethod
+    def _estimate_playback_s(cls, out):
+        """按本轮 TTS 的文本估算播放时长（秒）。
+
+        为什么不能继续用固定 12 秒：结束语本来就有 60-90 字
+        （`reply_help_bye` 85 字），合成出来 20 秒以上，12 秒兜底一到，
+        服务端就把话说到一半的电话掐了——这正是"最后一句话没讲完、
+        后台强制挂断"的直接原因。兜底必须跟着这一轮要播多久走。
+        """
+        tts = (out or {}).get("tts") or {}
+        text = tts.get("text") or ""
+        segs = tts.get("segments") or []
+        chars = len(text) or sum(len((s or {}).get("text") or "") for s in segs)
+        gaps = max(0, len(segs) - 1)
+        return chars / cls._CHARS_PER_SEC + gaps * cls._SEG_GAP_S
+
+    def _terminal_wait_s(self, out):
+        """终态兜底时长：估算播放时长 + 8 秒余量，且不低于 12 秒。"""
+        est = self._estimate_playback_s(out)
+        return max(self.TERMINAL_MAX_WAIT_S, est + 8.0)
 
     def _schedule_hangup(self, reason, delay=None):
         self._cancel_hangup()
         now = time.time()
-        # 第一次终态信号锁定绝对截止；后续轮次只重排到同一个截止点，
-        # 这样用户连说「嗯」也不能把挂断无限推后。
+        # 第一次终态信号锁定一个**绝对上限**；后续轮次只重排到不超过它。
+        # 这里用 240 秒而不是本轮的估算值：估算值只是"这一轮该等多久"，
+        # 跟着播放进度续期时不能把它当成天花板，否则长结束语照样被切。
         if self._terminal_deadline is None:
-            self._terminal_deadline = now + (delay if delay is not None
-                                             else self.AUTO_HANGUP_GRACE_S)
+            self._terminal_deadline = now + self.TERMINAL_HARD_CAP_S
             self._terminal_reason = reason
         wait = self._terminal_deadline - now
         if delay is not None:
@@ -353,13 +377,16 @@ class WsCallSession:
         try:
             threads, urls, parts = rest
             for i in range(1, len(parts)):
-                deadline = time.time() + 6.0     # 单段合成最长 ~2s，6s 是三倍余量
+                deadline = time.time() + 10.0    # 单段合成一般 ~2s；长段+云端抖动要留足
                 while urls[i] is None and time.time() < deadline:
                     if not self.alive:
                         return
                     time.sleep(0.05)
                 if urls[i] is None:
-                    continue                     # 这段失败：跳过，别让后面段跟着堵死
+                    # 这段没合成出来：跳过，别让后面段跟着堵死。但要留痕——
+                    # 用户听到的是"最后一句少了一截"，事后必须能查到是哪一段。
+                    print("  [ws] 第 %d 段合成超时，已跳过：%r" % (i, parts[i][:24]))
+                    continue
                 self.send_json({"type": "tts", "turn_id": turn_id, "seq": i,
                                 "mode": "url", "text": parts[i],
                                 "audio_url": urls[i], "rate": rate})
@@ -392,6 +419,17 @@ class WsCallSession:
         if self._terminal_reason and self.alive:
             self._schedule_hangup(self._terminal_reason,
                                   self.PLAYBACK_DONE_GRACE_S)
+
+    def _on_playback_progress(self, msg):
+        """前端每开播一段就报一次：只要还在出声，就不许收线。
+
+        为什么需要这条：兜底时长只能按字数估算，估算会偏短（停顿、数字逐位念、
+        语速抖动）；而结束语恰恰是整通电话里最长的一句。没有进度信号时，
+        服务端只能"猜它该播完了"然后挂断——以前就是这么把最后一句掐掉的。
+        有进度就按段续期，连续 PLAYBACK_STALL_S 没有新段才认定前端卡死。
+        """
+        if self._terminal_reason and self.alive:
+            self._schedule_hangup(self._terminal_reason, self.PLAYBACK_STALL_S)
 
     def _on_ping(self, msg):
         self.send_json({"type": "pong", "ts": msg.get("ts")})
