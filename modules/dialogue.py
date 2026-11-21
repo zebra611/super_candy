@@ -25,7 +25,8 @@ import difflib
 import re
 
 import config_loader
-from modules import i18n, intent, kb, nlg, official_script, persona, policy, tools
+from modules import (i18n, intent, kb, nlg, official_script, persona, policy,
+                     politeness, tools)
 
 # ---------------------------------------------------------------------------
 # 意图关键词表
@@ -874,6 +875,10 @@ def _reply(session, text, next_stage=None, tool_call=None, intent="unknown",
         session, text, stage_now, freeze=_persona_freeze)
     text = _strip_user_echo(text, session.get("last_user_text") or "")
     text = _with_hotline(text, session, next_stage)
+    # 敬语层（11-21）：统一"您 / 麻烦您 / 您看"，把命令式请求软化成敬语请求。
+    # 只动称呼与语气，不动事实/数字/材料名/热线，所以不改核对结论；
+    # 官方原话与结束语整句跳过（转述就不是原话了）。
+    text = politeness.polish(text, frozen=_freeze_official)
     # 骨架复读：同一句话连着说两遍，客户听到的就是"它根本没在听"。
     # 11-11 截图那通：客户「你不是知道吗？」「到底要补啥」两轮，客服逐字
     # 回了两遍「您可以简单回我一句清楚了或者还有疑问就行」。
@@ -2318,6 +2323,71 @@ def _detail_gap_answer(session, text, flags):
     return _reply(session, _soothe(tpl, flags), intent="detail_gap")
 
 
+def _redundant_identity_info(session, text):
+    """身份已核对过，客户却还在报尾号/姓名/单号——返回要复述的短串，否则 None。
+
+    11-21 截图：客户第 1 轮报了姓名+公司，之后又报 0497 两次、郭军一次，
+    客服每次都当新信息处理，从没说一句"您的身份已经核对过了"。客户视角
+    就是"我说过三遍你还问"，比复读更伤信任。
+
+    两条硬约束（逐句复盘 13/14/18 守）：
+        ① 必须**复述那个值**（"尾号9403，记下了"），只回"清楚了"等于没接住；
+        ② 含"公司"的不在这里接（"是我公司"要接成"是您公司"，不是"是您本人"）。
+    """
+    if not session["slots"].get("identity_confirmed"):
+        return None
+    raw = text or ""
+    if "公司" in raw or "企业" in raw:
+        # 「是我公司」要接成「是您公司」，不是「是您本人」（逐句复盘 18）。
+        _co = str((session.get("outbound_target") or {}).get("company_name") or "").strip()
+        if _co:
+            return "对，%s就是您公司" % _co
+        return None
+    t = re.sub(r"[\s，,。.!！?？、…～~]", "", raw)
+    if not t:
+        return None
+    app = _app_of(session) or {}
+    aid = str(app.get("application_id") or "").strip()
+    # 单号：客户把申请单号又背一遍（"QZ…，这单号我早背熟了"）
+    if aid and aid in raw:
+        return "单号%s" % aid
+    # 纯数字 / 带"尾号/后四位"：复述尾号
+    digits = re.sub(r"\D", "", raw)
+    if digits and len(digits) >= 3 and len(re.sub(r"[0-9]", "", t)) <= 6:
+        return "尾号%s" % digits[-4:]
+    # 姓名
+    _nm = str((session.get("outbound_target") or {}).get("contact_name") or "").strip()
+    if _nm and len(_nm) >= 2 and (_nm in raw or t in _nm):
+        return "联系人%s" % _nm
+    # "对，是我 / 我就是"：在回答一个早就答完的身份确认（截图第 8 轮）。
+    # 只认完整短句，不认光秃秃的"对"——那个是理解确认，收到这里会打断四段式④。
+    if len(t) <= 8 and re.fullmatch(r"(对|是|嗯|哦)*(是我|我就是|我本人|本人)(啊|呀|的)?", t):
+        return "是您本人"
+    return None
+
+
+def _redundant_identity_reply(session, flags, echo):
+    """确认"够了不用再报"，再把当前唯一要做的事说一遍，避免客户继续报。
+
+    第二次起换短句：客户反复报本来就是不耐烦，同一段长句念三遍等于没在听；
+    且**不许再用问句逼表态**（逐句复盘 14）。
+    """
+    app = _app_of(session)
+    mats = "、".join(str(m) for m in (app.get("required_materials") or []) if m) \
+        or str(app.get("materials") or "要补的材料")
+    n = int(session.get("identity_redundant_n", 0)) + 1
+    session["identity_redundant_n"] = n
+    if n == 1:
+        line = ("%s，我记下了。您的身份刚才已经核对过了，号码和姓名都不用再报。"
+                "现在要做的就一件事：把%s备齐，在商家后台的资质审核页逐张上传，再重新提交。"
+                % (echo, mats))
+    else:
+        line = ("%s，记下了。身份早核对过了，号码和姓名都不用再报。"
+                "您照着后台清单把材料备齐、重新提交就行；要人工核对，"
+                "您自己拨打 4006180092。" % echo)
+    return _reply(session, _soothe(line, flags), intent="identity_redundant")
+
+
 def _early_answer(session, text, flags):
     """所有阶段分支之前的统一早段入口。返回回复或 None（交回原阶段逻辑）。"""
     stage = session["stage"]
@@ -2331,6 +2401,13 @@ def _early_answer(session, text, flags):
     def say(key, fallback, intent):
         return _reply(session, _fill_application(cfg.get(key) or fallback, app),
                       intent=intent)
+
+    # 身份已核对过、客户还在补报号码/姓名：先明确"够了"，并复述他报的值，
+    # 再给当前唯一要做的事。排在其它分支之前——客户反复报信息时，
+    # 任何"要不要再确认"的追问都是折磨。
+    _echo = _redundant_identity_info(session, text)
+    if _echo:
+        return _redundant_identity_reply(session, flags, _echo)
 
     if _is_scam_worry(text):
         return say("reply_scam_reassure", _SCAM_FALLBACK, "scam_reassure")
@@ -2396,6 +2473,31 @@ def _caller_legit_answer(session, text, flags):
         return None
     # 话术优先取当前阶段配置，缺键用统一兜底（四场景都补了键，这里主要是防御）。
     cfg = config_loader.stage_config(stage) if stage in ("IDENTITY", "NEED", "OFFER", "CONFIRM") else {}
+    # 身份已经核对过：**绝不能再让客户报后四位或姓名**。
+    # 11-21 截图：客户第 1 轮就报了"江西省安源商贸中心 郭军 + 店铺名"，第 5 轮
+    # 问"你这号哪来的"，客服却又说"您报一下预留手机号后四位，或者联系人姓名"
+    # ——客户只好反复报 0497、郭军，第 10 轮才听到一句"对上了"。
+    # 客户视角就是"我说过三遍了你还问"，这是最伤信任的一种复读。
+    if session["slots"].get("identity_confirmed"):
+        # 第二遍起换短句：同一段官方口径连播两次，客户只会觉得"它没在听"。
+        _kn = int(session.get("caller_identity_known_n", 0)) + 1
+        session["caller_identity_known_n"] = _kn
+        if _kn >= 2:
+            text_out = (cfg.get("reply_caller_identity_known_2")
+                        or "这号是您入驻时预留的，只用于核对这一笔申请；"
+                           "您的身份刚才也核对过了，号码和姓名都不用再报。"
+                           "要核实来电，打 4006180092 就行。")
+        else:
+            text_out = (cfg.get("reply_caller_identity_known")
+                        or "您问得对：这通电话是京东官方商家审核专线打来的，您的号码是"
+                           "入驻时预留的联系方式，只用来核对这笔资质申请，不会外传，"
+                           "也不会向您要转账或验证码。您的身份我刚才已经核对过了，"
+                           "您不用再报号码或姓名；要核实来电，可以挂断后拨打京东商家"
+                           "热线 4006180092。")
+        _app = session["slots"].get("application")
+        if _app:
+            text_out = _fill_application(text_out, _app)
+        return _reply(session, text_out, intent="caller_identity_known")
     n = int(session.get("caller_legit_n", 0)) + 1
     session["caller_legit_n"] = n
     key = "reply_caller_identity" if n % 2 == 1 else "reply_caller_identity_2"
@@ -4289,7 +4391,8 @@ def _asks_how_to_submit(text):
 #: 那类仍要先让官方 QA / 本单档案答，不能被路径话术抢走。
 _HOW_PATH_MARKS = ("怎么补", "如何补", "怎么提交", "怎么上传", "在哪提交",
                    "哪里提交", "哪个入口", "在哪儿传", "怎么弄", "怎么重新提交",
-                   "上哪儿补", "在哪补")
+                   "上哪儿补", "在哪补", "上哪儿弄", "上哪弄", "去哪儿弄",
+                   "哪儿弄", "上哪补")
 
 
 def _asks_submit_path(text):
@@ -4677,7 +4780,7 @@ def _blocked_ui_reply(session, text, cfg, flags):
     # 那条「记下」，业务侧据此派单，比一句空承诺可查得多。
     return _finish(session, cfg.get("reply_blocked_ui_handoff") or
                    "后台的问题我这边确实处理不了，也不占用您时间了：材料您先备着，"
-                   "我把这情况交给专员，稍后用官方号码联系您一起看，再见。",
+                   "需要人工协助的话，您自己拨打 4006180092 找人工客服，再见。",
                    "blocked_ui")
 
 # 「客户还在谈」的信号：提问、质疑来电或费用、重复报已给过的核身信息。
