@@ -1,6 +1,6 @@
 {
- "active": "p14",
- "baseline_json": "eval/reports/sim_persona_base_p14.json",
+ "active": "p15",
+ "baseline_json": "eval/reports/sim_persona_base_p15.json",
  "scene_sha": "fab29eaa363394f7",
  "personas_path": "eval/personas_temperament.json",
  "history": [
@@ -1403,7 +1403,7 @@
    "version": "p14",
    "parent": "p13",
    "created": "2026-11-13 22:46:08",
-   "status": "active",
+   "status": "superseded",
    "source": "rebase：线上规则表/对话代码变更，重定基线",
    "candidate": null,
    "metrics": {
@@ -1465,6 +1465,105 @@
       "T05"
      ],
      "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "forgetful": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T06",
+      "T11"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "cooperative": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T07"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "neutral": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T08"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    }
+   },
+   "rules_sha": "b2b1ae44dd805c72"
+  },
+  {
+   "version": "p15",
+   "parent": "p14",
+   "created": "2026-11-21 16:01:21",
+   "status": "active",
+   "source": "rebase：线上规则表/对话代码变更，重定基线",
+   "candidate": null,
+   "metrics": {
+    "all_ok": 10,
+    "all_total": 12,
+    "train_ok": 7,
+    "train_total": 8,
+    "holdout_ok": 3,
+    "holdout_total": 4,
+    "agent_defect_sessions": 0,
+    "case_defect_sessions": 0,
+    "codes": {},
+    "defect_total": 0
+   },
+   "by_temper": {
+    "impatient": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T01",
+      "T09"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "skeptical": {
+     "total": 2,
+     "ok": 1,
+     "ids": [
+      "T02",
+      "T10"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "quiet": {
+     "total": 2,
+     "ok": 2,
+     "ids": [
+      "T03",
+      "T12"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 1
+    },
+    "talkative": {
+     "total": 1,
+     "ok": 1,
+     "ids": [
+      "T04"
+     ],
+     "train_ok": 1,
+     "holdout_ok": 0
+    },
+    "hard_of_hearing": {
+     "total": 1,
+     "ok": 0,
+     "ids": [
+      "T05"
+     ],
+     "train_ok": 0,
      "holdout_ok": 0
     },
     "forgetful": {
