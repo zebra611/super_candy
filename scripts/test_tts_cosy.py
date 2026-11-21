@@ -1,7 +1,7 @@
 """换成 cosyvoice-v3-flash / 龙安欢 V3 的配置与请求体约束（11-13）。
 
 用户截图是百炼「cosyvoice-v3-flash 音色列表」里的「龙安欢（V3）」
-`longanhuan_v3`。换它**确实要换模型**：端点、参数名、单价全变了。
+`longyingling_v3`。换它**确实要换模型**：端点、参数名、单价全变了。
 
 这个文件不联网。真跑（用 config/secrets.json 里的 key 打一次接口、
 下载音频确认是合法 mp3）单独做，结果记在 docs/61。
@@ -20,10 +20,12 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCENES = ["config/scene.json", "config/scenes/pop_reject.json",
           "config/scenes/retail_recall.json", "config/scenes/service_outbound.json"]
 
+VOICE = "longyingling_v3"   # 龙应聆 V3：温和共情女（客服场景）
+
 COSY = {
     "provider": "dashscope",
     "model": "cosyvoice-v3-flash",
-    "voice_name": "longanhuan_v3",
+    "voice_name": VOICE,
     "format": "mp3",
     "sample_rate": 24000,
 }
@@ -47,7 +49,7 @@ class TestAllFourScenesAgree(unittest.TestCase):
             d = json.load(open(os.path.join(_ROOT, p), encoding="utf-8"))
             t = d.get("tts") or {}
             self.assertEqual(t.get("model"), "cosyvoice-v3-flash", p)
-            self.assertEqual(t.get("voice_name"), "longanhuan_v3", p)
+            self.assertEqual(t.get("voice_name"), VOICE, p)
             self.assertIn("audio/tts/SpeechSynthesizer", t.get("endpoint") or "", p)
             self.assertNotIn("language_type", t,
                              "CosyVoice 没有 language_type：%s" % p)
@@ -76,7 +78,7 @@ class TestRequestBody(unittest.TestCase):
         self.assertIn("audio/tts/SpeechSynthesizer", ep)
         self.assertEqual(body["model"], "cosyvoice-v3-flash")
         inp = body["input"]
-        self.assertEqual(inp["voice"], "longanhuan_v3")
+        self.assertEqual(inp["voice"], VOICE)
         self.assertNotIn("language_type", inp,
                          "CosyVoice 不认 language_type，照旧塞进去有被判非法参数的风险")
         self.assertNotIn("language_hints", inp, "中文让模型自己判，不强行指定")
@@ -143,8 +145,9 @@ class TestAuditionTool(unittest.TestCase):
 
     def test_candidates_follow_model_family(self):
         cosy = [n for n, _ in self.A.pick_candidates({"model": "cosyvoice-v3-flash"})]
-        self.assertEqual(cosy, ["longanhuan_v3"],
-                         "线上音色必须在默认表里，否则连当前音色都试听不了")
+        self.assertEqual(cosy[0], VOICE,
+                         "线上音色必须排在默认表第一位，否则试听默认听不到它")
+        self.assertIn(VOICE, cosy, "线上音色必须在默认表里")
         qwen = [n for n, _ in self.A.pick_candidates({"model": "qwen3-tts-flash"})]
         self.assertIn("Serena", qwen, "回滚到 qwen3-tts 时旧表要还能用")
         self.assertNotIn("Serena", cosy, "跨族音色会被接口拒，不许混进 CosyVoice 表")
