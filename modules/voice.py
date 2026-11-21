@@ -7,7 +7,7 @@
 当前状态（每一条都经实测，不是照设计写的）：
     asr()        真识别，走 qwen3-asr-flash 的 HTTP 接口（整段上传，非流式）；
                  送识别前过 VAD（见 vad_detect），噪声不当人话送模型；
-    tts()        真合成，走 cosyvoice-v3-flash（音色 longanhuan_v3 龙安欢 V3），
+    tts()        真合成，走 cosyvoice-v3-flash（音色 longyingling_v3 龙应聆 V3），
                  返回 OSS 音频链接给前端播；
                  合成失败回落到浏览器播报，不允许静默；
     vad_detect() Z6 已换掉"有字节就算说完"：逐帧判定 + 起止聚合，
@@ -665,7 +665,7 @@ def _is_cosyvoice(model):
 def tts_request_body(cfg, text):
     """按模型族构造 (endpoint, body)。纯函数、不发网络，便于单测与回滚。
 
-    11-13 换 cosyvoice-v3-flash + longanhuan_v3（龙安欢 V3）时踩到的三个差别：
+    11-13 换 cosyvoice-v3-flash + longyingling_v3（龙应聆 V3）时踩到的三个差别：
 
     1. 端点是 `audio/tts/SpeechSynthesizer`，不是
        `aigc/multimodal-generation/generation`。官方主推

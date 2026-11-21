@@ -514,7 +514,7 @@ def main():
           ["首段=%s（%d 字）" % (p_phrase[0], len(p_phrase[0])),
            "次段=%s" % (p_phrase[1] if len(p_phrase) > 1 else "")])
 
-    _cosy_cfg = {"model": "cosyvoice-v3-flash", "voice_name": "longanhuan_v3",
+    _cosy_cfg = {"model": "cosyvoice-v3-flash", "voice_name": "longyingling_v3",
                  "format": "mp3", "sample_rate": 24000, "rate": 1.05}
     _cosy_ep, _cosy_body = voice.tts_request_body(_cosy_cfg, "您好。")
     check("CosyVoice 请求体带 rate（配置里的 1.05 不再是死参数）",
@@ -3748,7 +3748,7 @@ def main():
         return 1
     print("全部通过。这只证明上面这些行为是真的，不代表整个系统都完成了：")
     print("  已经是真的：云端识别（qwen3-asr-flash）、云端合成（cosyvoice-v3-flash / "
-          "龙安欢 V3）、")
+          "龙应聆 V3）、")
     print("            采集分帧上传、墙钟闸门、断连/429 重试、合成失败回落、")
     print("            长句切段只等首段、三段式打断（疑似压低音量→探针识别→认出文字才停）、")
     print("            服务端端点检测（Z6：Silero / 谱特征双引擎，九类噪声 0/9 触发）、")
