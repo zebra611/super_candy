@@ -433,5 +433,49 @@ class QaHelpers(unittest.TestCase):
         self.assertFalse(dialogue._unreadable("可在单据中授权书位置上传"))
 
 
+class HowToPathAndTextHygiene(unittest.TestCase):
+    """「怎么补」必须给操作步骤，不能被材料细说/知识库抢成"标准未知"。
+
+    11-21 日志 turn4：商家问「商标注册证怎么补」，客服答"具体审核标准系统里
+    没有更细说明"——问怎么补、答标准未知。根因是 _restate_fact_answer 的
+    「材料名 + 补」把操作路径问句一起收走了，而三步走话术本来就在档案里。
+    """
+
+    def test_material_howto_answers_with_steps(self):
+        for st in ("NEED", "OFFER"):
+            s = _session(st, application=_app())
+            out = dialogue.respond(s, "商标注册证怎么补")
+            self.assertEqual(out["intent"], "help_steps",
+                             "%s 阶段把'怎么补'答成了 %s" % (st, out["intent"]))
+            self.assertIn("第一步", out["reply_text"], "没给操作步骤")
+            self.assertNotIn("审核标准系统里没有", out["reply_text"],
+                             "问怎么补却答标准未知，答非所问")
+
+    def test_submit_path_questions_give_entry(self):
+        for q in ("怎么提交", "在哪里提交"):
+            for st in ("NEED", "OFFER"):
+                s = _session(st, application=_app())
+                out = dialogue.respond(s, q)
+                self.assertIn("后台", out["reply_text"],
+                              "%s/%s 没给后台入口" % (st, q))
+                self.assertNotIn("没有通过审核，驳回原因是", out["reply_text"][:12],
+                                 "%s/%s 又落回复读驳回原因" % (st, q))
+
+    def test_no_duplicated_hotline_wording(self):
+        """话术里不许出现"4006180092，自己拨打 4006180092"这类改写残渣。"""
+        import glob
+        bad = ("4006180092，自己拨打 4006180092",
+               "4006180092，让专员",
+               "拨打 4006180092，自己拨打")
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        targets = [os.path.join(root, "config", "scene.json")]
+        targets += sorted(glob.glob(os.path.join(root, "config", "scenes", "*.json")))
+        for f in targets:
+            with open(f, encoding="utf-8") as fh:
+                txt = fh.read()
+            for b in bad:
+                self.assertNotIn(b, txt, "%s 里有重复/残留热线措辞：%s" % (f, b))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

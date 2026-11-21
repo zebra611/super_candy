@@ -2231,6 +2231,12 @@ def _restate_fact_answer(session, text, flags):
     if not app:
         return None
     t = text or ""
+    # "X怎么补 / 怎么提交 / 在哪上传"问的是**操作路径**，答案在阶段处理器的
+    # help_steps / _how_to_submit_reply 里（三步走 + 后台入口）。这里抢走就会
+    # 答成"具体审核标准系统里没有更细说明"——问怎么补、答标准未知，正是
+    # 11-21 日志 turn4「商标注册证怎么补」的答非所问。
+    if _asks_submit_path(t):
+        return None
     asks_agent = any(w in t for w in _RESTATE_AGENT_MARKS)
     mat = _material_in_text(session, t)
     term = _term_in_reason(session, t)
@@ -2251,7 +2257,7 @@ def _restate_fact_answer(session, text, flags):
         gap = cfg_all.get("reply_detail_gap") or (
             "具体审核标准系统里没有更细的说明，我不能替审核同事下结论。"
             "您按商家后台的提示上传就行，传完以后以完整审核结果为准。"
-            "着急的话拨打 4006180092，让专员按您这单核对。")
+            "着急的话自己拨打 4006180092 找人工客服核对。")
         # 配置里的 gap 话术以"这一项我这边能查到的就是这单需要补交"开头，
         # 这里已经点名材料，去掉重复的半句，避免"商标注册证这一项…这一项我这边…"。
         _lead = "这一项我这边能查到的就是这单需要补交，"
@@ -2307,7 +2313,7 @@ def _detail_gap_answer(session, text, flags):
         or cfg_all.get("reply_detail_gap") \
         or ("这一项我这边能查到的就是这单需要补交，具体审核标准系统里没有更细的"
             "说明，我不能替审核下结论。您按商家后台的提示上传对应材料就行，"
-            "有问题会再跟您联系。着急的话拨打 4006180092，让专员按您这单核对。")
+            "有问题会再跟您联系。着急的话自己拨打 4006180092 找人工客服核对。")
     session.setdefault("detail_gaps", []).append(topic)   # 留痕：缺口项供质检/资料评审
     return _reply(session, _soothe(tpl, flags), intent="detail_gap")
 
@@ -4178,6 +4184,13 @@ def _stage_need(session, text, flags):
         blocked = _promise_block(session, text, flags)
         if blocked:
             return blocked
+        # 「怎么补 / 怎么提交 / 在哪上传」问的是操作路径，档案和步骤话术里就有
+        # 答案；不能先交给 _answer_official，否则会答成"驳回原因是…"（问怎么
+        # 提交、答为什么驳回），11-21 日志实测。
+        if _asks_submit_path(text):
+            _how = _how_to_submit_reply(session, cfg, flags)
+            if _how:
+                return _how
         # 这里的顺序是「具体问题优先于通用事实」：
         # "在职证明有哪些"（官方 QA 能逐字答）必须先于"您这笔申请是…驳回原因是…"，
         # 否则用户问的是 A，听到的是 B——11-07 那批分诊里 20/24 条挂断都是这个形状。
@@ -4269,6 +4282,18 @@ _HOW_TO_SUBMIT_MARKS = ("怎么补", "如何补", "怎么提交", "怎么上传"
 
 def _asks_how_to_submit(text):
     return any(w in (text or "") for w in _HOW_TO_SUBMIT_MARKS)
+
+
+#: 更窄的一类：只问**操作路径**（怎么补 / 怎么提交 / 在哪传）。
+#: 与 _HOW_TO_SUBMIT_MARKS 的区别：不含"补哪些/补什么"这种问清单的，
+#: 那类仍要先让官方 QA / 本单档案答，不能被路径话术抢走。
+_HOW_PATH_MARKS = ("怎么补", "如何补", "怎么提交", "怎么上传", "在哪提交",
+                   "哪里提交", "哪个入口", "在哪儿传", "怎么弄", "怎么重新提交",
+                   "上哪儿补", "在哪补")
+
+
+def _asks_submit_path(text):
+    return any(w in (text or "") for w in _HOW_PATH_MARKS)
 
 
 def _how_to_submit_reply(session, cfg, flags):
@@ -4441,6 +4466,11 @@ def _stage_offer(session, text, flags):
         blocked = _promise_block(session, text, flags)
         if blocked:
             return blocked
+        # 同 NEED：操作路径问句先给步骤/入口，不能被知识库答成驳回原因。
+        if _asks_submit_path(text):
+            _how = _how_to_submit_reply(session, cfg, flags)
+            if _how:
+                return _how
         _ans, _qa_hit, _kb_hit = _answer_official(session, text, flags)
         if _ans:
             # 官方原话用 intent="qa"：_reply 会因此冻结措辞层，保证逐字可复述。
