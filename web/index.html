@@ -78,6 +78,15 @@
     white-space: nowrap; max-width: 230px;
     overflow: hidden; text-overflow: ellipsis;
   }
+  /* 数据看板入口：之前只有 /dashboard 这一个地址，主页上没有任何链接，
+     评审和队友都找不到，只能靠口口相传。入口放在顶栏，不占对话区。 */
+  .topbar-link {
+    flex: none; font-size: 11.5px; color: var(--ink-2); text-decoration: none;
+    border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px;
+    white-space: nowrap; transition: color .13s, border-color .13s, background .13s;
+  }
+  .topbar-link:hover { color: var(--brand); border-color: #bfdbfe; background: #f8fbff; }
+  .topbar-link:focus-visible { outline: none; box-shadow: var(--ring); }
 
   /* ---------- 版心 ---------- */
   .wrap { max-width: 1080px; margin: 0 auto; padding: 22px 22px 80px; }
@@ -724,10 +733,10 @@
     padding: 0 8px; white-space: nowrap;
   }
   .tab {
-    flex: 1 1 0; min-width: 54px; position: relative;
+    flex: 1 1 0; min-width: 48px; position: relative;
     padding: 11px 2px 10px;
     border: 0; border-radius: 0; background: none;
-    font: inherit; font-size: 12.5px; color: var(--ink-2);
+    font: inherit; font-size: 12px; color: var(--ink-2);
     white-space: nowrap; cursor: pointer;
     transition: color .13s;
   }
@@ -756,10 +765,31 @@
   .pane .sel { min-width: 0; flex: 1 1 0; font-size: 12px; padding: 6px 9px; }
   .pane .row button { padding: 6px 12px; font-size: 12.5px; }
   .pane .hint { font-size: 11.5px; line-height: 1.5; }
-  .pane .meters { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  .pane .meter { padding: 9px 10px; }
-  .pane .meter .k { font-size: 11px; }
-  .pane .meter .v { font-size: 17px; }
+  .pane .meters { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .pane .meter { padding: 14px 14px 13px; }
+  .pane .meter .k { font-size: 12px; }
+  .pane .meter .v { font-size: 22px; line-height: 1.25; }
+  /* 指标页：四张卡撑到面板约 2/3 高，别让右栏下面空一大片。
+     卡片内部改成纵向居中，拉高后数字不会贴顶。 */
+  /* 只对当前页生效：直接写 #paneMetric{display:flex} 会盖掉 .pane:not(.is-on){display:none}，
+     结果训练页和指标页同时显示、互相叠住。 */
+  #paneMetric.is-on { display: flex; flex-direction: column; }
+  #paneMetric .meters {
+    flex: 0 0 auto; height: 56%; min-height: 176px;
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+  #paneMetric .meter { display: flex; flex-direction: column; justify-content: space-between; gap: 4px; }
+  #paneMetric .meter .k { margin-top: 2px; }
+  #paneMetric .meter .v { margin: 0; }
+  #paneMetric .meter .s { font-size: 11px; color: var(--ink-3); line-height: 1.35; }
+  /* 面板内分区标题：把「训练」和「回放」分开，别让模型扮演看着像回放的一部分 */
+  .pane-sec {
+    display: flex; align-items: center; gap: 8px;
+    margin: 16px 0 8px; font-size: 11px; color: var(--ink-3);
+    letter-spacing: .04em;
+  }
+  .pane-sec::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .pane-sec:first-child { margin-top: 0; }
 
   /* 空态放在标题行之后（::after），否则"本次外呼目标"会被顶到提示语下面。
      文案里不写方位：宽屏时三个入口在左栏、窄屏时在上方，写"上方/左侧"必有一边是错的。 */
@@ -783,7 +813,7 @@
       max-width: 1560px; margin: 0 auto;
       padding: 14px 18px 16px;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(380px, .46fr);
+      grid-template-columns: minmax(0, 1fr) minmax(440px, .7fr);
       gap: 14px; align-items: stretch;
     }
     .col-main, .col-side { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
@@ -833,6 +863,8 @@
   </div>
   <span id="sceneLine">正在连接服务…</span>
   <span class="spacer"></span>
+  <a class="topbar-link" href="/dashboard" target="_blank" rel="noopener"
+     title="独立的数据看板：会话数、闭环率、首字 P50/P95、事件类型分布">数据看板</a>
   <span id="sessionLine">未开始</span>
 </header>
 
@@ -951,7 +983,7 @@
         <button class="tab" role="tab" aria-selected="false" data-pane="paneMetric" title="首字响应、处理耗时、P50 / P95、闭环通话数">运行指标</button>
         <button class="tab" role="tab" aria-selected="false" data-pane="eventsPane" title="这通电话在系统里到底发生了什么">事件链</button>
         <span class="tgroup">离线评测</span>
-        <button class="tab" role="tab" aria-selected="false" data-pane="trainCard" title="模型扮客户、真链路当客服：客户按自己的档案开口，红标是客服露怯处">训练回放</button>
+        <button class="tab" role="tab" aria-selected="false" data-pane="trainCard" title="模型或规则扮客户，对真链路做对抗训练；训练过程在下方逐轮回放">训练</button>
         <button class="tab" role="tab" aria-selected="false" data-pane="evolveCard" title="每轮只改一个策略开关，指标双降才采纳">自进化</button>
       </div>
 
@@ -977,10 +1009,26 @@
 
         <div class="pane" role="tabpanel" aria-label="paneMetric" id="paneMetric">
           <div class="meters">
-            <div class="meter"><div class="k" title="本轮首字响应（T4−T0）">首字响应</div><div class="v" id="mFirst">—</div></div>
-            <div class="meter"><div class="k" title="本轮处理耗时（服务端）">处理耗时</div><div class="v" id="mTotal">—</div></div>
-            <div class="meter"><div class="k" title="首字 P50 / P95（语音轮）">P50 / P95</div><div class="v" id="mPct" style="font-size:13px">—</div></div>
-            <div class="meter"><div class="k" title="闭环通话数">闭环通话</div><div class="v" id="mClosed">—</div></div>
+            <div class="meter">
+              <div class="k" title="本轮首字响应（T4−T0）">首字响应</div>
+              <div class="v" id="mFirst">—</div>
+              <div class="s">本轮，说完到第一声</div>
+            </div>
+            <div class="meter">
+              <div class="k" title="本轮处理耗时（服务端）">处理耗时</div>
+              <div class="v" id="mTotal">—</div>
+              <div class="s">服务端：识别＋生成＋合成</div>
+            </div>
+            <div class="meter">
+              <div class="k" title="首字 P50 / P95（语音轮）">P50 / P95</div>
+              <div class="v" id="mPct" style="font-size:17px">—</div>
+              <div class="s">语音轮，门槛 2000ms</div>
+            </div>
+            <div class="meter">
+              <div class="k" title="闭环通话数">闭环通话</div>
+              <div class="v" id="mClosed">—</div>
+              <div class="s">已回写工单的通话</div>
+            </div>
           </div>
           <div id="metricNote">门槛 2000ms。首字口径要等第一通语音电话才有样本。</div>
         </div>
@@ -997,6 +1045,7 @@
             <span>让 AI 扮客户给客服上难度</span>
             <span class="p-state" id="trainState">未开始</span>
           </div>
+          <div class="pane-sec">训练方式</div>
           <div class="row">
             <select id="trainPersona" class="sel"></select>
             <select id="trainUser" class="sel" style="max-width:150px">
@@ -1006,6 +1055,7 @@
             <button id="btnTrain" class="primary">开始训练</button>
           </div>
           <div class="hint" id="trainTarget" style="margin-top:8px">正在读取画像…</div>
+          <div class="pane-sec">训练回放</div>
           <div id="trainFlow"></div>
           <div id="trainSummary"></div>
         </div>
@@ -1205,6 +1255,12 @@ function initTabs() {
     if (pane) pane.classList.toggle("is-on", on);
   });
   tabs.forEach(t => t.addEventListener("click", () => pick(t)));
+  // 深链：地址后面带 #paneMetric / #trainCard 就直接打开那一页。
+  // 以前只能手动点，给别人发"去看运行指标"时说不清怎么点进去；
+  // 独立看板 /dashboard 也是同一个问题，入口已经补在顶栏。
+  const want = (location.hash || "").replace(/^#/, "");
+  const hit = want && tabs.filter(t => t.dataset.pane === want)[0];
+  if (hit) pick(hit);
 }
 
 // 微信式滚动：停在底部就跟随新消息；用户往上翻就不抢位置，只留一个「有新消息」。
