@@ -37,16 +37,64 @@ python app.py 8000
 # 浏览器打开 http://127.0.0.1:8000
 ```
 
-**语音要真出声，需要配一个 DashScope key**（识别与合成是外部服务）：
+### 2.1 配语音 key（只有这一步需要密钥）
 
-```bash
-# 方式 A：环境变量
-export DASHSCOPE_API_KEY=sk-xxxx        # Windows: set DASHSCOPE_API_KEY=sk-xxxx
-# 方式 B：config/secrets.json  {"dashscope_api_key": "sk-xxxx"}
+识别与合成调的是阿里云百炼（DashScope），**一个 key 同时管 ASR 和 TTS**，
+不需要别的账号、别的服务。交付包里不含任何密钥，要自己配一把。
+
+**第 1 步：拿 key（约 5 分钟，只有实名不能省）**
+
+1. 打开 https://bailian.console.aliyun.com ，首次进入点「开通服务」（免费，不开通建不了 key）；
+2. 控制台右上角头像 →「实名认证」，个人认证支付宝扫码即可（**没实名的话 key 建得出来但每次调用都 401**）；
+3. 头像 →「API-KEY 管理」→「创建新的 API Key」，得到一串 `sk-` 开头的字符串。
+   它只显示一次，关掉就看不到，直接粘进下一步。
+
+> 要的是**百炼的 API Key（`sk-` 开头）**，不是账号 AccessKey（`LTAI` 开头）。
+> 后者是账号级最高权限，本项目一次都用不到，`scripts/check_key.py` 会拦住这种填法。
+
+**第 2 步：放进项目（二选一，环境变量优先）**
+
+方式 A —— 写文件（本地推荐，一次配好不用每次开终端）：
+
+```bat
+:: Windows（在项目根目录，cmd 或 PowerShell 都行）
+copy config\secrets.example.json config\secrets.json
 ```
 
-不配 key 也能跑：ASR 降级为占位识别、TTS 降级为浏览器朗读，**业务流程、状态机、
-事件流、评测全部正常**——只是音色与识别质量不同。交付包里不含任何密钥。
+```bash
+# macOS / Linux
+cp config/secrets.example.json config/secrets.json
+```
+
+然后用任意编辑器打开 `config/secrets.json`，只改这一行：
+
+```json
+"dashscope_api_key": "sk-你的真实key"
+```
+
+方式 B —— 环境变量（临时试一次、或不想落文件）：
+
+```bat
+:: Windows
+set DASHSCOPE_API_KEY=sk-xxxx
+```
+```bash
+# macOS / Linux
+export DASHSCOPE_API_KEY=sk-xxxx
+```
+
+**第 3 步：验一下（别跳过，30 秒分清是哪种问题）**
+
+```bash
+python scripts/check_key.py
+```
+
+它只用标准库，会直接给结论：key 有效 / key 无效 / 账号没实名 / 网络不通 /
+模型名不对。看到「key 有效」再启动服务。
+
+**不配 key 会怎样**：ASR 降级成占位识别（返回固定句）、TTS 降级成浏览器朗读，
+**业务流程、状态机、事件流、评测、看板全部照常**——所以就算不配，也能验完
+业务逻辑，只是听不到真人音色、也没法自由说话。
 
 可选增强（离线 VAD，端点更稳）：
 
