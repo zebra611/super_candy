@@ -45,6 +45,9 @@ INCLUDE_FILES = (
     "app.py", "contracts.py", "config_loader.py", "events.py", "dashboard.py",
     "cost_guard.py", "runtime_db_guard.py", "ws_channel.py",
     "config/scene.json", "config/kb_pop.json", "config/evolution/versions.json",
+    # 只发模板不发真 key：评委照 README 第二节复制成 secrets.json 再填自己的。
+    # 漏了这个文件，包里就没有密钥模板，README 那步"复制 example"会直接失败。
+    "config/secrets.example.json",
     "config/evolution/versions/v74/", "requirements.txt", "requirements-vad.txt",
     "README_评审.md", "启动.bat", "启动.command",
     "data/customer_cards.json", "data/demo_events.db",
