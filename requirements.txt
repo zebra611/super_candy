@@ -1,0 +1,14 @@
+# super_candy 语音外呼数字员工 —— 运行依赖
+#
+# 主服务是**纯 Python 标准库**：不需要 pip install 任何包就能启动、跑完全部
+# 业务流程与评测（SQLite、HTTP、WebSocket 都是标准库自带）。
+# 这一行留给 `pip install -r requirements.txt` 的常规流程，装不装都一样。
+#
+# Python ≥ 3.9（开发与实测：3.13 / 3.11）。
+#
+# 可选增强见 requirements-vad.txt（Silero VAD，离线降噪与端点检测更稳）：
+#     pip install -r requirements-vad.txt
+#
+# 语音合成与识别走阿里云 DashScope，需要自己的 key（评委本地跑时）：
+#     环境变量 DASHSCOPE_API_KEY，或 config/secrets.json 里的 dashscope_api_key
+# 不配 key 也能跑：ASR/TTS 自动降级为占位识别 + 浏览器朗读，业务链路不受影响。

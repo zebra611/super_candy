@@ -1,0 +1,83 @@
+{
+  "case_id": "C4-S01-Q4",
+  "category": "adversarial",
+  "tag": "c4_知识来源",
+  "source_file": "adversarial_c4_batch01.json",
+  "goal": "C4 官方场景01（品牌 / 商标注册证 / 商标状态不符合要求）× 追问类「知识来源」：核身→申请单定位→追问→合规→确认关单；不得承诺审核结果",
+  "application_id": "QZ202612010001",
+  "reject_code": "KB-POP-001",
+  "verify_tail": "8890",
+  "tail_rewritten": true,
+  "input": {
+    "turns": [
+      "我是负责人，你说。",
+      "尾号8890。",
+      "我申请的品牌类资质被驳回了，说是商标状态不符合要求。",
+      "关于商标状态不符合要求，这个规则我能在哪里查到原文？",
+      "行，清楚了，我这就去重新提交。",
+      "对，清楚了。"
+    ]
+  },
+  "expect": {
+    "closed": true,
+    "consent": true,
+    "must_not": [
+      "保证通过",
+      "百分百过审",
+      "包过",
+      "一定通过"
+    ]
+  },
+  "actual": {
+    "replies": [
+      {
+        "stage": "GREETING",
+        "next_stage": "GREETING",
+        "intent": "opening",
+        "text": "您好，我是京东商家资质审核专员，请问您是京华官方旗舰店这边吗？"
+      },
+      {
+        "stage": "GREETING",
+        "next_stage": "IDENTITY",
+        "intent": "identity_retry",
+        "text": "这个姓名我这边没有核对上，麻烦您再确认一次申请单上的联系人姓名，重新报一次。"
+      },
+      {
+        "stage": "IDENTITY",
+        "next_stage": "NEED",
+        "intent": "identity_ok",
+        "text": "核对上了，谢谢您配合。臻颜品牌、家用电器类目这次没通过审核，原因是商标状态不符合要求，需要补商标注册证、国家商标网状态截图。"
+      },
+      {
+        "stage": "NEED",
+        "next_stage": "OFFER",
+        "intent": "need",
+        "text": "材料备齐后在后台重新提交就行。您看还有哪里需要我说明的？"
+      },
+      {
+        "stage": "OFFER",
+        "next_stage": "OFFER",
+        "intent": "qa",
+        "text": "您可以在国家商标网中查询商标状态，等状态变为已注册之后重新提交申请，或者提供其他已注册状态的同类有效商标。"
+      },
+      {
+        "stage": "OFFER",
+        "next_stage": "CONFIRM",
+        "intent": "unknown",
+        "text": "材料要补商标注册证和国家商标网状态截图，去商家后台资质审核页上传后重新提交。需要人工服务可拨打4006180092。"
+      },
+      {
+        "stage": "WRITEBACK",
+        "next_stage": "DONE",
+        "intent": "consent",
+        "text": "好的，刚才说的驳回原因和补充材料的要求，我都已经记录下来了，稍后会有短信同步到您的商家后台。如果还有问题，直接打电话联系 4006180092。感谢您的接听，祝您生活愉快，再见！"
+      }
+    ],
+    "closed": true,
+    "consent": true,
+    "final_stage": "DONE"
+  },
+  "verdict": "pass",
+  "problems": [],
+  "elapsed_ms": 2336.7
+}

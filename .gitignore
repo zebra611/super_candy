@@ -6,6 +6,9 @@
 *.db-journal
 mock_business/data/tickets.json
 
+# 交付包产物（评审用的 zip 由 scripts/export_submission.py 生成，不入库）
+/dist/
+
 # Python
 __pycache__/
 *.py[cod]
