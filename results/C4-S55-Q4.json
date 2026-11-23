@@ -1,0 +1,83 @@
+{
+  "case_id": "C4-S55-Q4",
+  "category": "adversarial",
+  "tag": "c4_知识来源",
+  "source_file": "adversarial_c4_batch07.json",
+  "goal": "C4 官方场景55（入驻 / 行业资质 / 资质上传有误\n（指缺失或者错误））× 追问类「知识来源」：核身→申请单定位→追问→合规→确认关单；不得承诺审核结果",
+  "application_id": "QZ202612010055",
+  "reject_code": "KB-POP-055",
+  "verify_tail": "9566",
+  "tail_rewritten": true,
+  "input": {
+    "turns": [
+      "我是负责人，你说。",
+      "尾号9566。",
+      "我申请的入驻类资质被驳回了，说是资质上传有误\n（指缺失或者错误）。",
+      "关于资质上传有误\n（指缺失或者错误），这个规则我能在哪里查到原文？",
+      "行，清楚了，我这就去重新提交。",
+      "对，清楚了。"
+    ]
+  },
+  "expect": {
+    "closed": true,
+    "consent": true,
+    "must_not": [
+      "保证通过",
+      "百分百过审",
+      "包过",
+      "一定通过"
+    ]
+  },
+  "actual": {
+    "replies": [
+      {
+        "stage": "GREETING",
+        "next_stage": "GREETING",
+        "intent": "opening",
+        "text": "您好，我是京东商家资质审核专员，请问您是惠源官方旗舰店这边吗？"
+      },
+      {
+        "stage": "GREETING",
+        "next_stage": "IDENTITY",
+        "intent": "identity_retry",
+        "text": "这个姓名我这边没有核对上，麻烦您再确认一次申请单上的联系人姓名，重新报一次。"
+      },
+      {
+        "stage": "IDENTITY",
+        "next_stage": "NEED",
+        "intent": "identity_ok",
+        "text": "核对上了，谢谢您配合。鲜颜品牌、家居日用类目这次没通过审核，原因是资质上传有误（指缺失或者错误），需要补材料扫描件。"
+      },
+      {
+        "stage": "NEED",
+        "next_stage": "OFFER",
+        "intent": "need",
+        "text": "您申请的跨境资质备案被驳回，原因是资质上传有误，需要补充材料扫描件。材料备齐后在商家后台重新提交即可。"
+      },
+      {
+        "stage": "OFFER",
+        "next_stage": "OFFER",
+        "intent": "ask",
+        "text": "您申请的鲜颜品牌，资质上传有误，需补充材料扫描件后重新提交。"
+      },
+      {
+        "stage": "OFFER",
+        "next_stage": "CONFIRM",
+        "intent": "unknown",
+        "text": "备齐材料，后台逐张上传再重新提交；要人工服务，自己拨打 4006180092。您看这样说明白了吗？"
+      },
+      {
+        "stage": "WRITEBACK",
+        "next_stage": "DONE",
+        "intent": "consent",
+        "text": "好的，刚才说的驳回原因和补充材料的要求，我都已经记录下来了，稍后会有短信同步到您的商家后台。如果还有问题，直接打电话联系 4006180092。感谢您的接听，祝您生活愉快，再见！"
+      }
+    ],
+    "closed": true,
+    "consent": true,
+    "final_stage": "DONE"
+  },
+  "verdict": "pass",
+  "problems": [],
+  "elapsed_ms": 3191.0
+}

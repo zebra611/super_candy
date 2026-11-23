@@ -1,0 +1,83 @@
+{
+  "case_id": "C4-S23-Q1",
+  "category": "adversarial",
+  "tag": "c4_操作路径",
+  "source_file": "adversarial_c4_batch03.json",
+  "goal": "C4 官方场景23（品牌 / 新增产品线 / 品牌不一致）× 追问类「操作路径」：核身→申请单定位→追问→合规→确认关单；不得承诺审核结果",
+  "application_id": "QZ202612010023",
+  "reject_code": "KB-POP-023",
+  "verify_tail": "8299",
+  "tail_rewritten": true,
+  "input": {
+    "turns": [
+      "我是负责人，你说。",
+      "尾号8299。",
+      "我申请的品牌类资质被驳回了，说是品牌不一致。",
+      "那品牌不一致这种情况，具体在后台哪个位置上传补充材料？",
+      "行，清楚了，我这就去重新提交。",
+      "对，清楚了。"
+    ]
+  },
+  "expect": {
+    "closed": true,
+    "consent": true,
+    "must_not": [
+      "保证通过",
+      "百分百过审",
+      "包过",
+      "一定通过"
+    ]
+  },
+  "actual": {
+    "replies": [
+      {
+        "stage": "GREETING",
+        "next_stage": "GREETING",
+        "intent": "opening",
+        "text": "您好，我是京东商家资质审核专员，请问您是天通官方旗舰店这边吗？"
+      },
+      {
+        "stage": "GREETING",
+        "next_stage": "IDENTITY",
+        "intent": "identity_retry",
+        "text": "这个姓名我这边没有核对上，麻烦您再确认一次申请单上的联系人姓名，重新报一次。"
+      },
+      {
+        "stage": "IDENTITY",
+        "next_stage": "NEED",
+        "intent": "identity_ok",
+        "text": "核对上了，谢谢您配合。朴选品牌、图书文娱类目这次没通过审核，原因是品牌不一致，需要补材料扫描件。"
+      },
+      {
+        "stage": "NEED",
+        "next_stage": "OFFER",
+        "intent": "need",
+        "text": "材料备齐后在后台重新提交就行。您看还有哪里需要我说明的？"
+      },
+      {
+        "stage": "OFFER",
+        "next_stage": "OFFER",
+        "intent": "ask",
+        "text": "您申请的朴选品牌，和当前类目不一致被驳回，建议您在商家后台资质审核页，上传补充材料扫描件后重新提交。"
+      },
+      {
+        "stage": "OFFER",
+        "next_stage": "CONFIRM",
+        "intent": "unknown",
+        "text": "材料备齐后，去商家后台的资质审核页，逐张上传再重新提交。需要人工服务的话，自己拨打4006180092。"
+      },
+      {
+        "stage": "WRITEBACK",
+        "next_stage": "DONE",
+        "intent": "consent",
+        "text": "好的，刚才说的驳回原因和补充材料的要求，我都已经记录下来了，稍后会有短信同步到您的商家后台。如果还有问题，直接打电话联系 4006180092。感谢您的接听，祝您生活愉快，再见！"
+      }
+    ],
+    "closed": true,
+    "consent": true,
+    "final_stage": "DONE"
+  },
+  "verdict": "pass",
+  "problems": [],
+  "elapsed_ms": 2920.3
+}

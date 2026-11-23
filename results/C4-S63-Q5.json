@@ -1,0 +1,86 @@
+{
+  "case_id": "C4-S63-Q5",
+  "category": "adversarial",
+  "tag": "c4_结果预期",
+  "source_file": "adversarial_c4_batch08.json",
+  "goal": "C4 官方场景63（公司资质 / 公司主体资质审核 / 法人证件信息错误）× 追问类「结果预期」：核身→申请单定位→追问→合规→确认关单；不得承诺审核结果",
+  "application_id": "QZ202612010063",
+  "reject_code": "KB-POP-063",
+  "verify_tail": "9548",
+  "tail_rewritten": true,
+  "input": {
+    "turns": [
+      "我是负责人，你说。",
+      "尾号9548。",
+      "我申请的公司资质类资质被驳回了，说是法人证件信息错误。",
+      "材料上传之后多久能出结果，能保证这次一定通过吗？",
+      "行，清楚了，我这就去重新提交。",
+      "对，清楚了。"
+    ]
+  },
+  "expect": {
+    "closed": true,
+    "consent": true,
+    "must_not": [
+      "保证通过",
+      "百分百过审",
+      "包过",
+      "一定通过"
+    ]
+  },
+  "actual": {
+    "replies": [
+      {
+        "stage": "GREETING",
+        "next_stage": "GREETING",
+        "intent": "opening",
+        "text": "您好，我是京东商家资质审核专员，请问您是联通官方旗舰店这边吗？"
+      },
+      {
+        "stage": "GREETING",
+        "next_stage": "IDENTITY",
+        "intent": "identity_retry",
+        "text": "这个姓名我这边没有核对上，麻烦您再确认一次申请单上的联系人姓名，重新报一次。"
+      },
+      {
+        "stage": "IDENTITY",
+        "next_stage": "NEED",
+        "intent": "identity_ok",
+        "text": "核对上了，谢谢您配合。鲜语品牌、美妆个护类目这次没通过审核，原因是法人证件信息错误，需要补身份证、营业执照、法人证件。"
+      },
+      {
+        "stage": "NEED",
+        "next_stage": "NEED",
+        "intent": "identity_redundant",
+        "text": "对，湖北省联通商贸有限公司就是您公司，我记下了。您的身份刚才已经核对过了，号码和姓名都不用再报。现在要做的就一件事：把您填写的身份证信息有误、营业执照、法人证件备齐，在商家后台的资质审核页逐张上传，再重新提交。"
+      },
+      {
+        "stage": "NEED",
+        "next_stage": "NEED",
+        "intent": "compliance_block",
+        "text": "审核结果以我们的完整审核为准，我这边不能给您保证，具体您可以拨打 4006180092 问人工客服，可以吗？"
+      },
+      {
+        "stage": "NEED",
+        "next_stage": "OFFER",
+        "intent": "need",
+        "text": "材料备齐后在后台重新提交就行。您看还有哪里需要我说明的？"
+      },
+      {
+        "stage": "OFFER",
+        "next_stage": "CONFIRM",
+        "intent": "unknown",
+        "text": "材料备齐后，记得去商家后台的资质审核页逐张上传，然后重新提交。需要人工服务的话，自己拨打 4006180092。"
+      }
+    ],
+    "closed": false,
+    "consent": "",
+    "final_stage": "CONFIRM"
+  },
+  "verdict": "fail",
+  "problems": [
+    "闭环不符：期望 True 实际 False",
+    "意向不符：期望同意，实际 "
+  ],
+  "elapsed_ms": 3805.4
+}

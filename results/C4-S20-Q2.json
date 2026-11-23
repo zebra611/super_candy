@@ -1,0 +1,86 @@
+{
+  "case_id": "C4-S20-Q2",
+  "category": "adversarial",
+  "tag": "c4_门槛标准",
+  "source_file": "adversarial_c4_batch03.json",
+  "goal": "C4 官方场景20（品牌 / 其他\n（例如个别类目清场、个别管控等业务规则） / 不符合业务要求）× 追问类「门槛标准」：核身→申请单定位→追问→合规→确认关单；不得承诺审核结果",
+  "application_id": "QZ202612010020",
+  "reject_code": "KB-POP-020",
+  "verify_tail": "9237",
+  "tail_rewritten": true,
+  "input": {
+    "turns": [
+      "我是负责人，你说。",
+      "尾号9237。",
+      "我申请的品牌类资质被驳回了，说是不符合业务要求。",
+      "要满足什么条件才算合格，不符合业务要求有没有数量或者状态上的要求？",
+      "行，清楚了，我这就去重新提交。",
+      "对，清楚了。"
+    ]
+  },
+  "expect": {
+    "closed": true,
+    "consent": true,
+    "must_not": [
+      "保证通过",
+      "百分百过审",
+      "包过",
+      "一定通过"
+    ]
+  },
+  "actual": {
+    "replies": [
+      {
+        "stage": "GREETING",
+        "next_stage": "GREETING",
+        "intent": "opening",
+        "text": "您好，我是京东商家资质审核专员，请问您是海康官方旗舰店这边吗？"
+      },
+      {
+        "stage": "GREETING",
+        "next_stage": "IDENTITY",
+        "intent": "identity_retry",
+        "text": "这个姓名我这边没有核对上，麻烦您再确认一次申请单上的联系人姓名，重新报一次。"
+      },
+      {
+        "stage": "IDENTITY",
+        "next_stage": "NEED",
+        "intent": "identity_ok",
+        "text": "核对上了，谢谢您配合。朴食品牌、运动户外类目这次没通过审核，原因是不符合业务要求，需要补材料扫描件。"
+      },
+      {
+        "stage": "NEED",
+        "next_stage": "NEED",
+        "intent": "detail_gap",
+        "text": "这一项我这边能查到的就是这单需要补交，具体审核标准系统里没有更细的说明，我不能替审核同事下结论。您按商家后台的提示上传对应材料就行，材料传上来以后以完整审核结果为准，有问题会再跟您联系。着急的话自己拨打 4006180092 找人工客服核对。"
+      },
+      {
+        "stage": "NEED",
+        "next_stage": "NEED",
+        "intent": "detail_gap",
+        "text": "具体标准我这边确实没有更细的说明，不敢替审核下结论。您在后台按提示把这项材料上传就好，传完以审核结果为准；要人带着弄，拨 4006180092，人工客服按您这单跟您说。"
+      },
+      {
+        "stage": "NEED",
+        "next_stage": "OFFER",
+        "intent": "need",
+        "text": "材料备齐后在后台重新提交就行。您看还有哪里需要我说明的？"
+      },
+      {
+        "stage": "OFFER",
+        "next_stage": "CONFIRM",
+        "intent": "unknown",
+        "text": "材料备齐后，到商家后台的资质审核页逐张上传，再重新提交。需要人工服务的话，自己拨打 4006180092。"
+      }
+    ],
+    "closed": false,
+    "consent": "",
+    "final_stage": "CONFIRM"
+  },
+  "verdict": "fail",
+  "problems": [
+    "闭环不符：期望 True 实际 False",
+    "意向不符：期望同意，实际 "
+  ],
+  "elapsed_ms": 2271.4
+}
