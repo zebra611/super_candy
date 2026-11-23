@@ -129,8 +129,8 @@ def main():
     print("=" * 74)
     print("证据 2：契约里有哪些事件类型")
     print("=" * 74)
-    need = {"no_answer", "latency_report", "error"}
-    check("EVENT_TYPES 含 no_answer / latency_report / error",
+    need = {"no_answer", "latency_report", "error", "compliance_judge"}
+    check("EVENT_TYPES 含 no_answer / latency_report / error / compliance_judge",
           need <= set(contracts.EVENT_TYPES),
           ["实际共 %d 个：%s" % (len(contracts.EVENT_TYPES),
                              ", ".join(sorted(contracts.EVENT_TYPES)))])
