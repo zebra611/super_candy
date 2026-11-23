@@ -37,6 +37,14 @@
     z-index: 5;
   }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  /* 看板是独立页面，之前只能靠手敲 /dashboard 进来、进来后也回不去。
+     两边各放一个入口，评审在现场不会卡在地址栏。 */
+  header .back {
+    font-size: 12px; color: var(--sub); text-decoration: none;
+    border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px;
+    white-space: nowrap;
+  }
+  header .back:hover { color: var(--fg); border-color: #bfdbfe; }
   header .scene {
     font-size: 12px; color: var(--sub);
     border: 1px solid var(--line); border-radius: 999px;
@@ -132,9 +140,12 @@
 </head>
 <body>
 <header>
+  <a class="back" href="/" title="回到通话界面">← 返回通话</a>
   <h1>指标看板</h1>
   <span class="scene" id="scene">加载中…</span>
   <span class="source-badge" id="source-badge" title="当前数据来源：真实通话或演示种子库">数据源加载中…</span>
+  <a class="back" id="source-switch" href="/dashboard?db=demo"
+     title="演示种子库是 scripts/make_demo_db.py 生成的只读样本，不会写入真实通话">看演示数据</a>
   <span class="spacer"></span>
   <label style="font-size:12px;color:var(--sub)">窗口</label>
   <select id="days">
@@ -232,6 +243,17 @@ async function load() {
   // 地址栏上的 ?db=demo 一路带到接口：看的是演示种子库还是真实通话，
   // 由 URL 决定，页面上另有横幅明示，避免把演示数字当成真实统计看。
   const db = new URLSearchParams(location.search).get("db");
+  // 数据源切换做成一键：以前只能靠手敲 ?db=demo，演示时没人记得住。
+  const sw = $("source-switch");
+  if (sw) {
+    if (db === "demo") {
+      sw.textContent = "切到真实数据";
+      sw.href = "/dashboard";
+    } else {
+      sw.textContent = "看演示数据";
+      sw.href = "/dashboard?db=demo";
+    }
+  }
   const url = "/api/dashboard/summary?limit=10"
     + (days ? "&days=" + days : "")
     + (db ? "&db=" + encodeURIComponent(db) : "");
