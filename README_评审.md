@@ -75,13 +75,21 @@ cp config/secrets.example.json config/secrets.json
 方式 B —— 环境变量（临时试一次、或不想落文件）：
 
 ```bat
-:: Windows
+:: Windows cmd（只影响当前这个窗口）
 set DASHSCOPE_API_KEY=sk-xxxx
+```
+```powershell
+# Windows PowerShell（写法不一样，别用 cmd 的 set）
+$env:DASHSCOPE_API_KEY = "sk-xxxx"
 ```
 ```bash
 # macOS / Linux
 export DASHSCOPE_API_KEY=sk-xxxx
 ```
+
+> 想长期生效：Windows 用 `setx DASHSCOPE_API_KEY sk-xxxx`（新开窗口才读到），
+> macOS/Linux 把 `export` 那行写进 `~/.zshrc` 或 `~/.bashrc`。
+> 环境变量和 `secrets.json` 同时存在时**环境变量优先**——排查时记得两边都看一眼。
 
 **第 3 步：验一下（别跳过，30 秒分清是哪种问题）**
 
