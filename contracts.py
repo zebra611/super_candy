@@ -54,6 +54,10 @@ EVENT_TYPES = {
     # 先靠真机通话攒分布，再决定要不要拦。决策与理由都进 payload，便于复算。
     "speaker_gate",
     "call_ended",     # 通话结束
+    # 语义合规层（默认关）真的判出违规时写一条审计记录。
+    # 之前 app.py 已经在写，但这里没登记，events.write_event 的
+    # 白名单校验会抛「未登记的事件类型」，等于一开语义层就崩。
+    "compliance_judge",
 }
 
 # 首字响应时延门槛（赛题硬门槛，单位毫秒）。
