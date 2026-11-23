@@ -2794,15 +2794,80 @@ def _short_digit_run(text):
 #: 只裁「含补充/补齐/补交 且以重新提交收尾」的那一段：材料由 {materials} 单独给、
 #: 动作由模板说，信息不丢；「需先停用原品牌」这种必要动作不含这些词，原样保留。
 _REASON_TAIL = re.compile(
-    r"[，,][^，。；]*?(?:补充|补齐|补交)[^，。；]*?重新提交[。\s]*$")
+    r"[，,]\s*(?:需|需要|要)?\s*(?:补充|补齐|补交|提供)[^。；]{0,80}$")
+
+#: 超过 12 字的括号备注不念（短括号是限定词，保留）
+_REASON_PAREN = re.compile(r"[（(][^）)]{12,}[）)]")
 
 
 def _trim_reason(reason):
-    """去掉原因末尾与模板重复的「补X后重新提交」，只留原因本身。"""
+    """裁掉口播时不合适的两类内容：长括号备注、与模板重复的「补X后重新提交」。
+
+    括号在电话里没有层次：客户听到的是"特殊事业部不支持申请，达达事业部、
+    京喜通、京喜自营工厂店的不支持提交产品线"，像两句叠在一起。括号里的
+    长备注是给人看的，念出来只增加长度；真要补什么，后面的 {materials} 会说。
+    短括号（"（过期）"这种限定）保留，删了会改变意思。
+    """
     t = (reason or "").strip()
     if not t:
         return t
-    return _REASON_TAIL.sub("", t).strip() or t
+    cut = _REASON_PAREN.sub("", t)
+    cut = _REASON_TAIL.sub("", cut).strip("，,、 ")
+    return cut or t
+
+
+#: 材料字段里混进来的"条件句"。官方话术的占位符是整句话
+#: （「您选择法人证件类型是身份证，但您上传的是护照」），生成器把它当材料
+#: 塞进档案，直接 join 出来就是"需要补您选择…但您上传的是护照"——一句话里
+#: 既重复又念不通。这里统一抽回材料名：先取条件句前半段（"应上传"的那一项），
+#: 再按出现位置取最后一个材料名词。
+_MAT_NOUNS = ("营业执照", "身份证", "护照", "法人证件", "品牌授权书", "授权书",
+              "逐级授权链路证明", "授权方营业执照", "商标注册证", "质检报告",
+              "食品经营许可证", "生产许可证", "化妆品备案凭证", "3C 认证证书",
+              "药品经营许可证", "购货发票", "发票验真截图", "境外商标注册证",
+              "中文译本", "公证认证文件", "店铺名称变更截图", "品牌说明函",
+              "补充材料扫描件", "经营许可证", "注册证", "备案凭证", "回执",
+              "证明书", "证明", "证书", "报告", "发票")
+#: 切点只认**转折**：「您选择/您应上传/您填写」是描述（前半段才是对的那一项），
+#: 拿它们当切点会把句子切空、退回全文去找，最后取到"但"后面的错材料（护照）。
+_MAT_TURN = re.compile(r"但|，如果|如您|实际")
+
+
+def _material_name(item):
+    """把材料字段归一成材料名；是条件句就抽出真正要补的那一项。"""
+    s = str(item or "").strip()
+    if not s:
+        return ""
+    head = _MAT_TURN.split(s)[0] if _MAT_TURN.search(s) else s
+    if head != s and head.strip("，, "):
+        scope = head
+    else:
+        scope = s
+    hits = [n for n in _MAT_NOUNS if n in scope]
+    if hits:
+        # 先按"结束位置"取最靠后的那一项；结束位置相同（"品牌授权书"里的
+        # "授权书"）再取更长的，否则会把"品牌授权书"截成"授权书"。
+        hits.sort(key=lambda n: (scope.rfind(n) + len(n), len(n)))
+        return hits[-1]
+    return s if len(s) <= 12 else s[:12]
+
+
+def _materials_text(items):
+    """去重后的材料清单：最多列 3 项，多出来的说"等 N 项"。
+
+    为什么限 3 项：核身后这句是"结论 + 要补什么"的概览，客户还在消化驳回，
+    一口气念五项材料既记不住也拖时间；完整清单在 NEED 阶段单独给。
+    """
+    out = []
+    for x in items or []:
+        n = _material_name(x)
+        if n == "补充材料扫描件":      # 避免"需要补"+"补充材料"叠成"补补充"
+            n = "材料扫描件"
+        if n and n not in out:
+            out.append(n)
+    if len(out) > 3:
+        return "、".join(out[:3]) + "等 %d 项" % len(out)
+    return "、".join(out)
 
 
 def _fill_application(text, app):
@@ -2825,7 +2890,7 @@ def _fill_application(text, app):
         "{brand}": brand or "该品牌",
         "{category}": category or "对应类目",
         "{reason}": _trim_reason(str(app.get("reject_reason") or "材料问题")),
-        "{materials}": "、".join(app.get("required_materials") or []) or "对应材料",
+        "{materials}": _materials_text(app.get("required_materials")) or "对应材料",
         "{code}": str(app.get("reject_code") or ""),
         # 档案里的 recheck_deadline 是建库时写死的绝对日期（2026-09/10），
         # 到 11 月早已过期；官方 56 条话术也没给具体时限。11-12 用户明确
