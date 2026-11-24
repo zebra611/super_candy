@@ -27,6 +27,11 @@ https://voice-agent-skeleton.app.workbuddy.host/dashboard
 
 ## 二、本地跑起来（30 秒）
 
+Windows 用户可直接双击包里的 **`启动.bat`**：它会自动找 Python、启动服务并打开浏览器，
+不用敲命令。双击 `验证.bat` 可跑自检；`启动全部.bat` 会同时起 mock 业务服务和客服服务。
+
+命令行方式如下：
+
 ```bash
 # 1) 依赖：主服务是纯标准库，不需要装第三方包
 python --version          # ≥ 3.9（实测 3.11 / 3.13）

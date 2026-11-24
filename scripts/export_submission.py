@@ -52,6 +52,10 @@ INCLUDE_FILES = (
     "config/secrets.json", "config/secrets.example.json",
     "config/evolution/versions/v74/", "requirements.txt", "requirements-vad.txt",
     "README_评审.md", "启动.bat", "启动.command",
+    # 启动.bat/启动全部.bat/验证.bat 都会 call _pycheck.bat 做 Python 探测。
+    # 漏掉它时启动脚本拿到空结果，误报"No usable Python found"——
+    # 评委机器其实装了 Python，只是探测脚本不在包里。
+    "_pycheck.bat", "启动全部.bat", "验证.bat",
     "data/customer_cards.json", "data/demo_events.db",
 )
 EXCLUDE_DIRS = {"__pycache__", ".git", ".github", ".githooks", "node_modules",
