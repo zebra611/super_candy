@@ -38,16 +38,18 @@ OUT_DIR = os.path.join(ROOT, "results")
 DIST_DIR = os.path.join(ROOT, "dist")
 DEFAULT_CASES = sorted(glob.glob(os.path.join(ROOT, "eval", "adversarial_c4_batch*.json")))
 
-#: 交付包白名单（目录以 / 结尾表示整目录）。**config/secrets.json 永不入包。**
+#: 交付包白名单（目录以 / 结尾表示整目录）。
+#: 注意：config/secrets.json 现按用户要求随包发布（含真实 DashScope key），
+#: 评委解压后本地起服务即可直接走云端 ASR/TTS，无需自行配 key。
 INCLUDE_DIRS = ("modules/", "web/", "scripts/", "docs/", "mock_business/",
                 "config/mock/", "config/scenes/")
 INCLUDE_FILES = (
     "app.py", "contracts.py", "config_loader.py", "events.py", "dashboard.py",
     "cost_guard.py", "runtime_db_guard.py", "ws_channel.py",
     "config/scene.json", "config/kb_pop.json", "config/evolution/versions.json",
-    # 只发模板不发真 key：评委照 README 第二节复制成 secrets.json 再填自己的。
-    # 漏了这个文件，包里就没有密钥模板，README 那步"复制 example"会直接失败。
-    "config/secrets.example.json",
+    # 真 key 随包发布：本地起服务直接可用。secrets.example.json 仍保留，
+    # 供评委想换成自己 key 时参考格式。
+    "config/secrets.json", "config/secrets.example.json",
     "config/evolution/versions/v74/", "requirements.txt", "requirements-vad.txt",
     "README_评审.md", "启动.bat", "启动.command",
     "data/customer_cards.json", "data/demo_events.db",
@@ -57,7 +59,7 @@ EXCLUDE_DIRS = {"__pycache__", ".git", ".github", ".githooks", "node_modules",
                 "data/backup", "data/logs", "data/vad_corpus",
                 "data/vad_corpus_holdout", "data/vad_real", "data/vad_calib",
                 "data/speaker_corpus", "eval/reports", "eval/ui"}
-EXCLUDE_FILES = {"config/secrets.json"}
+EXCLUDE_FILES = set()
 
 
 def _run_eval(cases_files, limit):
